@@ -1,0 +1,84 @@
+NJTaxAssessment:
+
+PRIORITIES:
+
+17) Add logger messages to necessary parts of the NJTaxAssessment code
+20) Stream the zip file instead of downloading to reduce the built-in latency
+    - Use the Requests ans Session.Requests module to stream the files. (ie: Scraper class) (PARTIALLY DONE)
+    - Update the stream_zipfile function args to download_param= None, payload= None (is this still necessary?)
+        - do if statement blocks that are executed based on the arg provided to the function
+    - Needs to be implemented for the Essex County function (Update on next iteration)
+        - Figure out how to get the url and payload for POST Request
+        - *** May be too difficult to do at this moment. Need to deal with the reCaptcha
+        - Build a Selenium latency to wait for download to finish (DONE)
+        - Find a way to match the city with the downloaded file
+        **** Cookies wont let me download the file more than once
+            - The file is requested from a server which I cant create a post request for (reCaptcha/Javascript)
+            - Build in a timestamp method essex county scrape and timestamp= None arg into unzip and extract
+            If timestamp not None its automatically an Essex county file
+            If the delta between the timestamp and file download is less than X sec then name and move file, else continue
+            - Can Python show metadata of a file?
+7) Continue working on the Foreclosure script
+    *** I want to store this as a SQL DB. This script will automatically check the site every week to update the status of the properties in the
+    db. After X amount of time after the sale of the property, the SQL DB will delete that entry. And add new ones if they already dont exist
+16) Alter the NJTaxAssessment class for the nj_databases to find the db for one county and one city as well
+    - Create an arg entry for 'county' and 'city' in nj_databases
+    - Create an arg entry for 'county' and 'city' in all_county_scrape
+    - Create an arg entry for 'city' in essex_county_scrape
+    ****Allow for str or list objects in these functions and alter the logic based on the object
+    - Add 'if county is None, elif county is not None and city is None, elif county is not None and city is not None' in
+        - all_county_scrape
+        - nj_databases
+    - Add 'if city is None, elif city is not None
+18) Allow code to check what was downloaded already and start at new point
+8) Continue working on the auction_locations function
+    - Save this as a class variable
+5) Continue working on the long_lat function
+    - Change the filename variable syntax so the files can be found
+    - Change the sheet name during the db save to overwrite the first sheet
+    - Move the latitude and longitude columns up
+        - df.insert(3, 'Latitude', df.pop('Latitude'))
+        - df.insert(4, 'Longitude', df.pop('Longitude'))
+    - Find the addresses which have the latitude and longitude = 0
+    - Create a property address list that I can run through a for-loop
+    - for i in property_address_list:
+        city_db.at[i, 'Latitude'] =
+13) Start working on the GSMLS class
+    - Create a function which finds the recently downloaded file and move it to a specific folder, Use NJTaxAssessment function as a template
+    - For quarterly sales_res
+        Create function for:
+        - no county name(s) or city(s) provided (DONE)
+        - one county name no city name
+        - list of county names no city names
+        - list of county names and list of names
+    - Stream the xlsx file instead of downloading to reduce the built-in latency
+        - Use the Requests ans Session.Requests module to stream the files. (ie: Scraper class)
+        - On the final download page, use the Elements and Network tabs to fill out the payload to stream the file
+_______________________________________________________________________________________________________________________
+
+3) Continue working on the property_tax_legend function
+    - Create an excel sheet which will hold all the data
+    - Use Regex to read the values of the cell and produce the values for the new column
+9) Continue working on the haversine function
+10) This is a program which will require the use of an SQL database
+    Create a method which will transfer all of this data to PostgreSQL
+11) Create a function which accepts the county and city as args, finds the latest downloaded zip (DONE)
+    extracts the file and saves it as the city name in the county directory (DONE)
+    11a) This should be a threaded operation. Create an empty list at the top of nj_database to store threaded operations (DONE)
+14) Update waiting function
+15) Update run_main decorator
+
+Use when you want to implement threading
+ALL COUNTYS
+# download_link1 = driver_var.find_element(By.XPATH, "/html/body/form/b[2]/big/a")
+# download_link1.click()  # Step 5: Download the zip file
+# threadobj = threading.Thread(target=NJTaxAssessment.unzip_and_extract,
+#                              args=[counties[key], cities[k], download_link.split('/')[2]])  # Step 6: Unzip and save file
+# started_threads.append(threadobj)
+# threadobj.start()
+
+ESSEX COUNTY
+# threadobj = threading.Thread(target=NJTaxAssessment.unzip_and_extract,
+#                              args=['ESSEX', cities[k]])  # Step 6: Unzip and save file
+# started_threads.append(threadobj)
+# threadobj.start()
