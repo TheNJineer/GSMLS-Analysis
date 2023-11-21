@@ -1,7 +1,7 @@
 
 import GSMLS
 import MachineLearning
-import NJTaxAssessment
+from NJTaxAssessment_v2 import NJTaxAssessment
 import Foreclosures
 from math import radians, sin, asin, sqrt
 
