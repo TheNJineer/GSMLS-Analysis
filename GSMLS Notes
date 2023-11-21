@@ -1,6 +1,6 @@
 PRIORITIES:
 1) NJTaxAssessment
-- Complete the code to stream Essex County property dbs
+- Complete the code to stream Essex County property dbs (DONE)
 2) GSMLS
 - Complete the code to stream ALL property quarterly sales
 - Repeat code for MUL and LND
@@ -21,17 +21,21 @@ ________________________________________________________________________________
     - Use the Requests ans Session.Requests module to stream the files. (ie: Scraper class) (PARTIALLY DONE)
     - Update the stream_zipfile function args to download_param= None, payload= None (is this still necessary?)
         - do if statement blocks that are executed based on the arg provided to the function
-    - Needs to be implemented for the Essex County function (Update on next iteration)
-        - Figure out how to get the url and payload for POST Request
-        - *** May be too difficult to do at this moment. Need to deal with the reCaptcha
+    - Needs to be implemented for the Essex County function (STREAMING EACH FILE CURRENTLY CANT BE DONE)
+    *****There's a download limit on the website. Switch code to download all municipalities at one time
         - Build a Selenium latency to wait for download to finish (DONE)
-        - Find a way to match the city with the downloaded file
-        **** Cookies wont let me download the file more than once
-            - The file is requested from a server which I cant create a post request for (reCaptcha/Javascript)
-            - Build in a timestamp method essex county scrape and timestamp= None arg into unzip and extract
-            If timestamp not None its automatically an Essex county file
+        - Find a way to match the city with the downloaded file (NOT NECESSARY)
+        **** Cookies wont let me download the file more than once. Download limit
+            - Build in a timestamp method essex county scrape and timestamp= None arg into unzip and extract (DONE)
+            If timestamp not None its automatically an Essex county file (DONE)
             If the delta between the timestamp and file download is less than X sec then name and move file, else continue
-            - Can Python show metadata of a file?
+            - Can Python show metadata of a file? (DONE)
+21) Refactor city_database to open the "All Municipalities" xlsx for ESSEX county cities which dont have dbs
+    - This code could present future errors for counties which have duplicate city spellings. Fix this
+    - This file will only be used for cities which dont have DBs
+23) create decorator for nj_databases to create a time constraint for downloads (1 year)
+24) Refactor database_check for ESSEX County
+25) Start looking into using Proxies when using Selenium and Requests modules
 5) Continue working on the long_lat function
     - Change the filename variable syntax so the files can be found
     - Change the sheet name during the db save to overwrite the first sheet

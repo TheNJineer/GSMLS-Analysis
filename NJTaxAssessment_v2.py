@@ -7,6 +7,7 @@ import pandas as pd
 import send2trash
 import threading
 from datetime import datetime
+from datetime import timedelta
 from traceback import format_tb
 from bs4 import BeautifulSoup
 import logging
@@ -311,6 +312,7 @@ class NJTaxAssessment:
         target_path = os.path.join(base_path, county.upper())
         city_list = os.listdir(target_path)
         county = county.upper()
+        city = city.upper()
         try:
             if county == 'ESSEX':
 
@@ -323,11 +325,12 @@ class NJTaxAssessment:
                     else:
                         raise IndexError(f'{city} does not exist in {county} County')
             else:
-                for i in city_list:
-                    if city not in i:
+                for idx, municipality in enumerate(city_list):
+                    # This code could present future errors for counties which have duplicate city spellings. Fix this
+                    if city not in municipality:
                         continue
-                    elif city in i:
-                        filename = os.path.join(target_path, i + '.csv')
+                    elif city in municipality:
+                        filename = os.path.join(target_path, city_list[idx] + '.csv')
                         db = pd.read_csv(filename, header=0)
                     else:
                         raise IndexError(f'{city} does not exist in {county} County')
@@ -335,6 +338,23 @@ class NJTaxAssessment:
             print(f'{IE}')
         else:
             return db
+
+    @staticmethod
+    def creation_time_delta(file_name, time_stamp):
+        """
+        Function which checks the delta between the file creation time and the time stamp argument.
+        Used in conjuction with essex_county_scrape to match the file with the respective municipality
+        :param file_name:
+        :param time_stamp:
+        :return:
+        """
+        abs_path = os.path.abspath(file_name)
+        file_creation_timestamp = os.path.getctime(abs_path)
+        file_creation_time = time.ctime(file_creation_timestamp)  #File_creation_timestamp is returned in secs from UNIX Epoch
+        dt_object = datetime.strptime(file_creation_time, "%a %b %d %H:%M:%S %Y")
+        delta = time_stamp - dt_object
+
+        return delta
 
     @staticmethod
     def database_check(county, city, logger):
@@ -395,6 +415,7 @@ class NJTaxAssessment:
                             time.sleep(2)
                             download_link = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
                                                 (By.XPATH, "//a[normalize-space()='Download Excel']")))
+                            time.sleep(2)
                             download_link.click()
                             time.sleep(2)
                             accept_disclaimer = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
@@ -409,7 +430,7 @@ class NJTaxAssessment:
                                 if not download_done:
                                     continue
                                 else:
-                                    # NJTaxAssessment.unzip_and_extract('ESSEX', cities[k])
+                                    NJTaxAssessment.unzip_and_extract('ESSEX', cities[k], time_stamp=datetime.now())
                                     logger.info(f'The download for {cities[k]} has finished...')
                                     time.sleep(1)
                                     clear_filter = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
@@ -723,7 +744,7 @@ class NJTaxAssessment:
         return tax_lien_db
 
     @staticmethod
-    def unzip_and_extract(county, city, temp_file_name = None):
+    def unzip_and_extract(county, city, temp_file_name=None, time_stamp=None):
         """
         Will find the recently downloaded zip file of the city
         for which all the property information is located. This function will accept the
@@ -732,6 +753,7 @@ class NJTaxAssessment:
         :param county:
         :param city:
         :param temp_file_name:
+        :param time_stamp:
         :return:
         """
 
@@ -765,17 +787,21 @@ class NJTaxAssessment:
                             shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
                                                             + 'Database' + ' ' + str(datetime.today().date()) + '.csv'))
                             send2trash.send2trash(file)
-                elif file.startswith('TaxData'):
-                    target_file = file + '.xlsx'
-                    if os.path.exists(target_path):
-                        time.sleep(0.5)
-                        shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
-                                                        + 'Database' + ' ' + str(datetime.today().date()) + '.xlsx'))
+                elif time_stamp is not None:
+                    difference = NJTaxAssessment.creation_time_delta(file, time_stamp)
+                    if difference > timedelta(seconds=10):
+                        continue
                     else:
-                        os.makedirs(target_path)
-                        time.sleep(0.5)
-                        shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
+                        target_file = file + '.xlsx'
+                        if os.path.exists(target_path):
+                            time.sleep(0.5)
+                            shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
                                                             + 'Database' + ' ' + str(datetime.today().date()) + '.xlsx'))
+                        else:
+                            os.makedirs(target_path)
+                            time.sleep(0.5)
+                            shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
+                                                                + 'Database' + ' ' + str(datetime.today().date()) + '.xlsx'))
                 # else:
                 #     if temp_file_name is not None:
                 #         raise IndexError(f"File Does Not Exist: {temp_file_name}")
