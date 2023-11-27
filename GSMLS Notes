@@ -1,10 +1,22 @@
 PRIORITIES:
 1) NJTaxAssessment
+- Create a class called UniversalFunctions and add get_us_pw and buy_proxies and get_proxy to the list (DONE)
+***Figure out how to properly add a package to sys.path and use it. Currently copied class from parent folder
+- Download SeleniumWire
+    - https://pypi.org/project/selenium-wire/ (DONE)
+    - Add proxies to Selenium options (DONE)
+- Get free/premium proxies to use in functions (DONE)
+    - https://www.techradar.com/best/best-free-proxies (DONE)
+- Create get_proxy function and use in all_counties and essex_county scrape
+    - Create a decorator which extends its functionality to check if the proxies are still good. If not, buy new ones (DONE)
+- Update city_database function
 - Complete the code to stream Essex County property dbs (DONE)
+    - The download_link isnt present sometimes and presents an error
+    - Generate a different proxy then load webpage using city id (?town=0711), dont click the radio buttons anymore
 2) GSMLS
 - Complete the code to stream ALL property quarterly sales
 - Repeat code for MUL and LND
-- Run descriptive statistics for all cities: mean, median, mode, stddev and quartiles
+- Run descriptive statistics for all cities: max, min, mean, median, mode, stddev and quartiles
 3) Complete lat_long function in NJTaxAssessment
 4) Complete MachineLearning script
 5) Start the DealAnalysis script
@@ -30,12 +42,16 @@ ________________________________________________________________________________
             If timestamp not None its automatically an Essex county file (DONE)
             If the delta between the timestamp and file download is less than X sec then name and move file, else continue
             - Can Python show metadata of a file? (DONE)
-21) Refactor city_database to open the "All Municipalities" xlsx for ESSEX county cities which dont have dbs
+***21) Refactor city_database to open the "All Municipalities" xlsx for ESSEX county cities which dont have dbs
+    - HOLD OFF ON THIS AS LAST RESORT
     - This code could present future errors for counties which have duplicate city spellings. Fix this
     - This file will only be used for cities which dont have DBs
 23) create decorator for nj_databases to create a time constraint for downloads (1 year)
 24) Refactor database_check for ESSEX County
 25) Start looking into using Proxies when using Selenium and Requests modules
+    - Create function called get_proxy to return a random proxy to use with Selenium and Requests
+    - Use SeleniumWire to use proxies with Selenium
+    - from seleniumwire import webdriver as sw_webdriver
 5) Continue working on the long_lat function
     - Change the filename variable syntax so the files can be found
     - Change the sheet name during the db save to overwrite the first sheet
@@ -74,8 +90,10 @@ ________________________________________________________________________________
         - list of county names no city names
         - list of county names and list of names
     - Stream the xlsx file instead of downloading to reduce the built-in latency
-        - Use the Requests ans Session.Requests module to stream the files. (ie: Scraper class)
+        - Use the Requests an Session.Requests module to stream the files. (ie: Scraper class)
         - On the final download page, use the Elements and Network tabs to fill out the payload to stream the file
+    - Refactor the res_property_styles to property_styles
+        - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types
 _______________________________________________________________________________________________________________________
 Unassigned
 3) Continue working on the property_tax_legend function

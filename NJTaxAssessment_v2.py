@@ -1,18 +1,21 @@
 import os
+import sys
 import re
 import shutil
 import time
-from zipfile import ZipFile
 import pandas as pd
 import send2trash
 import threading
-from datetime import datetime
-from datetime import timedelta
-from traceback import format_tb
-from bs4 import BeautifulSoup
 import logging
 import requests
+from UniversalFunctions import UniversalFunctions
 import selenium
+from datetime import datetime
+from datetime import timedelta
+from zipfile import ZipFile
+from traceback import format_tb
+from bs4 import BeautifulSoup
+from seleniumwire import webdriver as sw_webdriver
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
@@ -28,8 +31,12 @@ from selenium.common.exceptions import NoSuchAttributeException
 from selenium.common.exceptions import NoSuchDriverException
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import WebDriverException
+# from importlib import reload
 # Allows for Selenium to click a button
 from selenium.webdriver.support.select import Select
+# sys.path.append('F:\\Python 2.0\\Projects\\Real Life Projects\\Universal_Functions')
+# UniversalFunctions = __import__("UniversalFunctions")
+# reload(UniversalFunctions)
 
 
 class NJTaxAssessment:
@@ -360,7 +367,16 @@ class NJTaxAssessment:
     def database_check(county, city, logger):
 
         base_path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Property Data'
-        target_path = os.path.join(base_path, county, city)
+        if county == 'ESSEX':
+            strip_list = [' Township', ' Borough', ' City']
+            for ending in strip_list:
+                if ending not in city:
+                    continue
+                else:
+                    city = city.rstrip(ending)
+                    target_path = os.path.join(base_path, county, city.upper())
+        else:
+            target_path = os.path.join(base_path, county, city)
 
         if os.path.exists(target_path):
             latest_file = os.listdir(target_path)[-1]
@@ -392,7 +408,6 @@ class NJTaxAssessment:
         driver_var.get(url)
 
         try:
-            driver_var.fullscreen_window()
             WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
                     (By.XPATH, "//*[@id='side-bar']/div[1]/h3")))
 
@@ -425,7 +440,7 @@ class NJTaxAssessment:
                             waiting_for_download = WebDriverWait(driver_var, 30).until(EC.visibility_of_element_located(
                                                 (By.XPATH, "//*[@id='search-bar']/div[2]/div[3]/div/button/span")))
                             while waiting_for_download:
-                                download_done = WebDriverWait(driver_var, 30).until(EC.visibility_of_element_located(
+                                download_done = WebDriverWait(driver_var, 60).until(EC.visibility_of_element_located(
                                                 (By.XPATH, "//a[normalize-space()='Download Excel']")))
                                 if not download_done:
                                     continue
@@ -438,9 +453,9 @@ class NJTaxAssessment:
                                     clear_filter.click()
                                     break
                     except ElementNotInteractableException as ENI:
-                        logger.exception(f'{ENI}')
+                        logger.exception(f'{"".join(format_tb(ENI.__traceback__))}')
                     except WebDriverException as WDE:
-                        logger.exception(f'{WDE}')
+                        logger.exception(f'{"".join(format_tb(WDE.__traceback__))}')
 
             elif city_name is not None:
                 pass
@@ -573,12 +588,6 @@ class NJTaxAssessment:
             print(f'{e}')
 
         return temp_name
-
-    # @staticmethod
-    # def foreclosure_listings(county):
-    #     # Uses https://salesweb.civilview.com/ and https://www.foreclosurelistings.com/list/NJ/
-    #     # to pull the latest pending foreclosures for a county and potential property buys
-    #     pass
 
     @logger_decorator
     def long_lat(self, driver_var, county, city, **kwargs):
@@ -765,7 +774,18 @@ class NJTaxAssessment:
 
         try:
             for file in filenames:
-                target_path = os.path.join(base_path, county, city)
+
+                if county == 'ESSEX':
+                    strip_list = [' Township', ' Borough', ' City']
+                    for ending in strip_list:
+                        if ending not in city:
+                            continue
+                        else:
+                            city = city.rstrip(ending)
+                            target_path = os.path.join(base_path, county, city.upper())
+                else:
+                    target_path = os.path.join(base_path, county, city)
+
                 if temp_file_name is not None:
                     if temp_file_name != file:
                         continue
@@ -859,17 +879,22 @@ class NJTaxAssessment:
 
     def main(self):
         try:
+            uv = UniversalFunctions
+            proxy_dict = uv.format_proxies('F:\\Python 2.0\\Projects\\Real Life Projects\\Universal_Functions\\Proxies\\11-25-2023 proxy-list.txt')
             save_location1 = 'C:\\Users\\jibreel.q.hameed\\Desktop\\Selenium Temp Folder'
             save_location2 = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'  # May need to be changed
             options = Options()
+            sw_options = {'proxy': {'https': uv.get_proxy(proxy_dict)}}
             # Change this directory to the new one: ('C:\\Users\\Omar\\Desktop\\Python Temp Folder')
             s = {"savefile.default_directory": save_location2,
                  "download.default_directory": save_location2,
                  "download.prompt_for_download": False}
             # options.add_experimental_option("detach", True)
             options.add_experimental_option("prefs", s)
-            # options.add_argument("--headless=new")
-            driver = webdriver.Edge(service=Service(), options=options)
+            options.add_argument("--start-maximized")
+            options.add_argument("--headless=new")
+
+            driver = sw_webdriver.Edge(service=Service(), options=options, seleniumwire_options=sw_options)
 
             NJTaxAssessment.nj_databases(driver)
 
@@ -881,3 +906,5 @@ if __name__ == '__main__':
 
     obj = NJTaxAssessment()
     obj.main()
+
+    # print(sys.path)

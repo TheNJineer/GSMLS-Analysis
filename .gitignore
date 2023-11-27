@@ -2,3 +2,4 @@
 *.log
 __pycache__/
 NJTaxAssessment.py
+UniversalFunctions.py
