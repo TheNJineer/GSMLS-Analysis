@@ -1,5 +1,6 @@
 import os
 import sys
+import shelve
 import re
 import shutil
 import time
@@ -47,6 +48,7 @@ class NJTaxAssessment:
 
     def __init__(self, city=None, county=None):
         # What information do I need to initialize an instance of this class?
+        NJTaxAssessment.load_state_dictionary()
         try:
 
             if (city and county) is not None:
@@ -316,10 +318,11 @@ class NJTaxAssessment:
         # produce the property database for the specified city
 
         base_path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Property Data'
-        target_path = os.path.join(base_path, county.upper())
-        city_list = os.listdir(target_path)
         county = county.upper()
         city = city.upper()
+        target_path = os.path.join(base_path, county, city)
+        city_list = os.listdir(target_path)
+
         try:
             if county == 'ESSEX':
 
@@ -337,7 +340,7 @@ class NJTaxAssessment:
                     if city not in municipality:
                         continue
                     elif city in municipality:
-                        filename = os.path.join(target_path, city_list[idx] + '.csv')
+                        filename = os.path.join(target_path, city_list[idx])
                         db = pd.read_csv(filename, header=0)
                     else:
                         raise IndexError(f'{city} does not exist in {county} County')
@@ -362,6 +365,71 @@ class NJTaxAssessment:
         delta = time_stamp - dt_object
 
         return delta
+
+    @classmethod
+    def create_state_dictionary(cls, driver_var):
+
+        state_dict = {}
+
+        try:
+
+            url = NJTaxAssessment.tax_assessment
+            url1 = 'https://www.taxdatahub.com/6229fbf0ce4aef911f9de7bc/Essex%20County'
+
+            driver_var.get(url)
+            results = driver_var.page_source
+            counties = NJTaxAssessment.find_counties(results)
+
+            for j in counties.keys():
+                if counties[j] == 'ESSEX':
+                    state_dict['ESSEX'] = []
+
+                    driver_var.get(url1)
+                    WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
+                        (By.XPATH, "//*[@id='side-bar']/div[1]/h3")))
+
+                    results1 = driver_var.page_source
+                    value_pattern = re.compile(r'\d{4}')
+                    soup = BeautifulSoup(results1, 'html.parser')
+                    target = soup.find('div', {"id": "town-filter-div"})
+                    target_contents = target.find_all('input', {'id': value_pattern})
+
+                    for i in target_contents:
+                        strip_list = [' Township', ' Borough', ' City']
+                        for ending in strip_list:
+                            if ending not in i['value']:
+                                continue
+                            else:
+                                city = i['value'].rstrip(ending)
+                                state_dict['ESSEX'].append(city.upper())
+
+                else:
+                    state_dict[counties[j]] = []
+                    county_option = WebDriverWait(driver_var, 5).until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, "//*[@id='normdiv']/form/table[1]/tbody/tr[3]/td[2]/select/option["
+                             + str(j) + "]")))  # Make sure the XPATH includes the variable j
+                    county_option.click()
+
+                    results1 = driver_var.page_source
+                    value_pattern = re.compile(r'\d{4}')
+                    soup = BeautifulSoup(results1, 'html.parser')
+                    target = soup.find('select', {"name": "district"})
+                    target_contents = target.find_all('option', {'value': value_pattern})
+
+                    for i in target_contents:
+                        if i.get_text() == 'ALL':
+                            break
+                        else:
+                            state_dict[counties[j]].append(i.get_text())
+
+        except Exception as E:
+            print(f'{E}')
+
+        else:
+            cls.state_county_dict = state_dict
+            with shelve.open('NJ Tax Assessment Dictionary', writeback=True) as saved_data_file:
+                saved_data_file['State Dictionary'] = cls.state_county_dict
 
     @staticmethod
     def database_check(county, city, logger):
@@ -401,6 +469,8 @@ class NJTaxAssessment:
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
 
+        proxies_dict = UniversalFunctions.format_proxies('F:\\Python 2.0\\Projects\\Real Life Projects\\Universal_Functions\\Proxies\\11-25-2023 proxy-list.txt')
+
         started_threads = []
 
         url = 'https://www.taxdatahub.com/6229fbf0ce4aef911f9de7bc/Essex%20County'
@@ -415,19 +485,22 @@ class NJTaxAssessment:
             cities = NJTaxAssessment.find_essex_cities(results)
 
             if city_name is None:
-                town_filter = WebDriverWait(driver_var, 5).until(EC.presence_of_element_located(
-                    (By.XPATH, "//*[@id='town-filter-el']/a/label")))
-                town_filter.click()
+                # town_filter = WebDriverWait(driver_var, 5).until(EC.presence_of_element_located(
+                #     (By.XPATH, "//*[@id='town-filter-el']/a/label")))
+                # town_filter.click()
                 for k in cities.keys():
                     try:
-                        city_option = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
-                                                (By.XPATH, "//*[@id=" + k + "]")))  # Make sure the XPATH includes the variable k
+
                         results = NJTaxAssessment.database_check('ESSEX', cities[k], logger)
                         if results == 'File Already Exists':
                             continue
                         else:
-                            city_option.click()
-                            time.sleep(2)
+                            driver_var.proxy = {'https': UniversalFunctions.get_proxy(proxies_dict)}
+                            driver_var.get(url + '?town=' + str(k))
+                            WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
+                                (By.XPATH, "//*[@id=" + k + "]")))  # Make sure the XPATH includes the variable k
+                            # city_option.click()
+                            # time.sleep(2)
                             download_link = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
                                                 (By.XPATH, "//a[normalize-space()='Download Excel']")))
                             time.sleep(2)
@@ -440,7 +513,7 @@ class NJTaxAssessment:
                             waiting_for_download = WebDriverWait(driver_var, 30).until(EC.visibility_of_element_located(
                                                 (By.XPATH, "//*[@id='search-bar']/div[2]/div[3]/div/button/span")))
                             while waiting_for_download:
-                                download_done = WebDriverWait(driver_var, 60).until(EC.visibility_of_element_located(
+                                download_done = WebDriverWait(driver_var, 90).until(EC.visibility_of_element_located(
                                                 (By.XPATH, "//a[normalize-space()='Download Excel']")))
                                 if not download_done:
                                     continue
@@ -448,10 +521,10 @@ class NJTaxAssessment:
                                     NJTaxAssessment.unzip_and_extract('ESSEX', cities[k], time_stamp=datetime.now())
                                     logger.info(f'The download for {cities[k]} has finished...')
                                     time.sleep(1)
-                                    clear_filter = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
-                                        (By.XPATH, "//*[@id='town-filter-div']/label[1]")))
-                                    clear_filter.click()
-                                    break
+                                    # clear_filter = WebDriverWait(driver_var, 10).until(EC.presence_of_element_located(
+                                    #     (By.XPATH, "//*[@id='town-filter-div']/label[1]")))
+                                    # clear_filter.click()
+                                    # break
                     except ElementNotInteractableException as ENI:
                         logger.exception(f'{"".join(format_tb(ENI.__traceback__))}')
                     except WebDriverException as WDE:
@@ -525,7 +598,7 @@ class NJTaxAssessment:
 
         counties[keys[-1] + 1] = "ESSEX"  # Manually add ESSEX county to the dictionary because it's not in page source
 
-        NJTaxAssessment.state_county_dictionary(counties)
+        # NJTaxAssessment.state_county_dictionary(counties)
 
         return counties
 
@@ -589,13 +662,24 @@ class NJTaxAssessment:
 
         return temp_name
 
+    @classmethod
+    def load_state_dictionary(cls):
+
+        save_path = 'F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\NJ Tax Assessment Dictionary.dat'
+        if os.path.exists(save_path):
+            try:
+                with shelve.open('NJ Tax Assessment Dictionary', writeback=True) as saved_data_file:
+                    if saved_data_file['State Dictionary']:
+                        cls.state_county_dict = saved_data_file['State Dictionary']
+            except KeyError:
+                print('A previously created State Dictionary does not exist. '
+                      'Please execute NJTaxAssessment.create_state_dictionary to create one')
+
     @logger_decorator
-    def long_lat(self, driver_var, county, city, **kwargs):
+    def long_lat(self, driver_var, **kwargs):
         """
 
         :param driver_var:
-        :param county:
-        :param city:
         :param kwargs:
         :return:
         """
@@ -607,67 +691,79 @@ class NJTaxAssessment:
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
 
-        city_db = NJTaxAssessment.city_database(county, city)
+        counties = NJTaxAssessment.state_county_dictionary()
         good_property_pattern = re.compile(r'(\d{1,5}?-\d{1,5}?|\d{1,5}?)\s(.*)')
-        bad_property_pattern = re.compile(r'(\w+\s){0,10}?')
-        url = NJTaxAssessment.coordinates
-        filename = city + ' Database ' + datetime.now().year
-        driver_var.get(url)
+        bad_property_pattern = re.compile(r'^[a-zA-Z]')
+        url = 'https://geocode.maps.co/search?q='
 
-        try:
-            property_address_list = city_db['Property Location'].to_list()
-            city_db = city_db.set_index('Property Location')
-            for i in property_address_list:
-                if bad_property_pattern.search(i) is not None:
-                    continue
-                elif good_property_pattern.search(i) is not None:
-                    address = ', '.join([good_property_pattern.search(i).group(), city, 'NJ'])
-                    place_name = WebDriverWait(driver_var, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//*[@id='place']")))
-                    place_name.click()
-                    place_name.send_keys(address)
-                    search = driver_var.find_element(By.XPATH, "//*[@id='btnfind']")
-                    search.click()
-                    value = WebDriverWait(driver_var, 5).until(
-                        EC.presence_of_element_located((By.XPATH, "//*[@id='latlngspan']")))
-                    lat_long = value.get_text().lstrip('(').rstrip(')').split(',')
-                    latitude = float(lat_long[0].strip(''))
-                    longitude = float(lat_long[1].strip(''))
-                    if city_db.loc[i, 'Latitude'] == 0 or city_db.loc[i, 'Latitude'] == '0':
-                        city_db.at[i, 'Latitude'] = latitude
-                    if city_db.loc[i, 'Longitude'] == 0 or city_db.loc[i, 'Longitude'] == '0':
-                        city_db.at[i, 'Longitude'] = longitude
+        for key in counties.keys():
+            municipalities = counties[key]
 
-        except ElementNotVisibleException as ENV:  # Make more specific exception handling blocks later
-            logger.exception(f'{ENV}')
+            for val in municipalities:
 
-        except ElementNotSelectableException as ENS:
-            logger.exception(f'{ENS}')
+                city_db = NJTaxAssessment.city_database(key, val)
+                filename = val + ' Database ' + str(datetime.now().year) + ' with Coordinates'  # Should I save as a csv?
 
-        except InvalidArgumentException as IAE:
-            logger.exception(f'{IAE}')
+                try:
+                    property_address_list = city_db['Property Location'].to_list()
+                    city_db = city_db.set_index('Property Location')
+                    for i in property_address_list:
+                        if bad_property_pattern.search(i):
+                            continue
+                        elif good_property_pattern.search(i):
+                            address = ', '.join([good_property_pattern.search(i).group(), val.title(), 'NJ'])
+                            place_name = WebDriverWait(driver_var, 5).until(
+                                EC.presence_of_element_located((By.XPATH, "//*[@id='place']")))
+                            place_name.click()
+                            place_name.send_keys(address)
+                            search = driver_var.find_element(By.XPATH, "//*[@id='btnfind']")
+                            search.click()
+                            WebDriverWait(driver_var, 30).until(
+                                EC.presence_of_element_located((By.XPATH, "//*[@id='latlngspan']")))
+                            results = driver_var.page_source
+                            soup = BeautifulSoup(results, 'html.parser')
+                            value_text = soup.find('span', {'id': 'latlngspan', 'class': 'coordinatetxt'}).text
+                            lat_long = value_text.lstrip('(').rstrip(')').split(',')
+                            latitude = float(lat_long[0].strip())
+                            longitude = float(lat_long[1].strip())
+                            if city_db.loc[i, 'Latitude'] == 0 or city_db.loc[i, 'Latitude'] == '0':
+                                city_db.at[i, 'Latitude'] = latitude
+                            if city_db.loc[i, 'Longitude'] == 0 or city_db.loc[i, 'Longitude'] == '0':
+                                city_db.at[i, 'Longitude'] = longitude
 
-        except NoSuchAttributeException as NSAE:
-            logger.exception(f'{NSAE}')
+                except ElementNotVisibleException as ENV:  # Make more specific exception handling blocks later
+                    logger.exception(f'{ENV}')
 
-        except NoSuchDriverException as NSDE:
-            logger.exception(f'{NSDE}')
+                except ElementNotSelectableException as ENS:
+                    logger.exception(f'{ENS}')
 
-        except NoSuchElementException as NSEE:
-            logger.exception(f'{NSEE}')
+                except InvalidArgumentException as IAE:
+                    logger.exception(f'{IAE}')
 
-        except WebDriverException as WDE:
-            logger.exception(f'{WDE}')
+                except NoSuchAttributeException as NSAE:
+                    logger.exception(f'{NSAE}')
 
-        finally:
-            with pd.ExcelWriter(filename) as writer:
-                # Switch to new directory
-                city_db.to_excel(writer, sheet_name=city + ' Properties')
-                # Switch to old directory
+                except NoSuchDriverException as NSDE:
+                    logger.exception(f'{NSDE}')
 
-            logger.removeHandler(f_handler)
-            logger.removeHandler(c_handler)
-            logging.shutdown()
+                except NoSuchElementException as NSEE:
+                    logger.exception(f'{NSEE}')
+
+                except WebDriverException as WDE:
+                    logger.exception(f'{WDE}')
+
+                except Exception as e:
+                    print(e)
+
+                finally:
+                    with pd.ExcelWriter(filename) as writer:
+                        # Switch to new directory
+                        city_db.to_excel(writer, sheet_name=val + ' Properties')
+                        # Switch to old directory
+
+                    logger.removeHandler(f_handler)
+                    logger.removeHandler(c_handler)
+                    logging.shutdown()
 
     @staticmethod
     @logger_decorator
@@ -707,13 +803,12 @@ class NJTaxAssessment:
             print(f'{E}')
 
     @classmethod
-    def state_county_dictionary(cls, counties):
+    def state_county_dictionary(cls):
         """
 
-        :param counties:
         :return:
         """
-        cls.state_county_dict = counties
+        return cls.state_county_dict
 
     @staticmethod
     def stream_zipfile(base_url, download_param, session_var):
@@ -859,32 +954,14 @@ class NJTaxAssessment:
 
         return vacant_land_db
 
-    @staticmethod
-    def waiting(sleep_time):
-        """
-
-        :param sleep_time:
-        :return:
-        """
-        sleep_time2 = str(sleep_time.days)
-        sleep_time3 = int(sleep_time2) * 86400  # 86,400 seconds in a day
-        if sleep_time3 > 86400:
-            # message_body = f'There is currently no new data available. NJRScrapper will check again in {sleep_time.days} days...'
-            # Scraper.text_message(message_body)
-            time.sleep(sleep_time3)
-        else:
-            # message_body = f"There is currently no new data available. Will check again tomorrow..."
-            # Scraper.text_message(message_body)
-            time.sleep(86400)
-
     def main(self):
         try:
-            uv = UniversalFunctions
-            proxy_dict = uv.format_proxies('F:\\Python 2.0\\Projects\\Real Life Projects\\Universal_Functions\\Proxies\\11-25-2023 proxy-list.txt')
+            # uv = UniversalFunctions
+            proxy_dict = UniversalFunctions.format_proxies('F:\\Python 2.0\\Projects\\Real Life Projects\\Universal_Functions\\Proxies\\11-25-2023 proxy-list.txt')
             save_location1 = 'C:\\Users\\jibreel.q.hameed\\Desktop\\Selenium Temp Folder'
             save_location2 = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'  # May need to be changed
             options = Options()
-            sw_options = {'proxy': {'https': uv.get_proxy(proxy_dict)}}
+            sw_options = {'proxy': {'https': UniversalFunctions.get_proxy(proxy_dict)}}
             # Change this directory to the new one: ('C:\\Users\\Omar\\Desktop\\Python Temp Folder')
             s = {"savefile.default_directory": save_location2,
                  "download.default_directory": save_location2,
@@ -896,7 +973,9 @@ class NJTaxAssessment:
 
             driver = sw_webdriver.Edge(service=Service(), options=options, seleniumwire_options=sw_options)
 
-            NJTaxAssessment.nj_databases(driver)
+            # NJTaxAssessment.create_state_dictionary(driver)
+            # NJTaxAssessment.nj_databases(driver)
+            # NJTaxAssessment.long_lat(self, driver, 'Union', 'Linden')
 
         except Exception as e:
             print(e)
@@ -907,4 +986,5 @@ if __name__ == '__main__':
     obj = NJTaxAssessment()
     obj.main()
 
+    # print(os.getcwd())
     # print(sys.path)

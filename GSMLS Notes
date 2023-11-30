@@ -1,23 +1,34 @@
 PRIORITIES:
 1) NJTaxAssessment
-- Create a class called UniversalFunctions and add get_us_pw and buy_proxies and get_proxy to the list (DONE)
+- Create a class variable which will be a database of the cities and counties in NJ (DONE)
 ***Figure out how to properly add a package to sys.path and use it. Currently copied class from parent folder
-- Download SeleniumWire
-    - https://pypi.org/project/selenium-wire/ (DONE)
-    - Add proxies to Selenium options (DONE)
-- Get free/premium proxies to use in functions (DONE)
-    - https://www.techradar.com/best/best-free-proxies (DONE)
-- Create get_proxy function and use in all_counties and essex_county scrape
-    - Create a decorator which extends its functionality to check if the proxies are still good. If not, buy new ones (DONE)
+***The url's arent https even though thats what I'm labeling them as. Figure this out. I think I need to add verifyssl=False
 - Update city_database function
 - Complete the code to stream Essex County property dbs (DONE)
     - The download_link isnt present sometimes and presents an error
     - Generate a different proxy then load webpage using city id (?town=0711), dont click the radio buttons anymore
+    - Be sure to update the format_proxies function when done in the main file
+    - May need to create a function loop to try different proxies until the download initiates
+23) create decorator for nj_databases to create a time constraint for downloads (1 year)
 2) GSMLS
 - Complete the code to stream ALL property quarterly sales
 - Repeat code for MUL and LND
 - Run descriptive statistics for all cities: max, min, mean, median, mode, stddev and quartiles
 3) Complete lat_long function in NJTaxAssessment
+    - Use the class db to cycle through the counties and cities in NJ
+    - Be sure to clean the db before uploading
+    - Webpage runs extremely slow, why?
+    - Bots can be detected and stall the program
+    - https://geocode.maps.co/search?q={address} is the new link to be used to get lat and long data
+    - Be sure to throttle the program by 1 sec after every request
+        - Build in a function to detect 400 level responses and adjust after
+    - Delete all of the Selenium code and replace with Request and BS4 module syntax
+    - Track the 'importance' key of the JSON file. May depict the accuracy of the location
+    - Learn how to parse JSON files
+    - Move the latitude and longitude columns up
+        - df.insert(3, 'Latitude', df.pop('Latitude'))
+        - df.insert(4, 'Longitude', df.pop('Longitude'))
+        - Create Lat and Long Columns in Essex County dbs
 4) Complete MachineLearning script
 5) Start the DealAnalysis script
 - Continually check if MLS deals are still available. Notice status changes
@@ -26,6 +37,7 @@ PRIORITIES:
 7) Complete Foreclosures script
 8) NJ Planning Board Scraper
 - Can I set up a REST API to check when each board is updated to then scrape?
+
 NJTaxAssessment
 ________________________________________________________________________________
 17) Add logger messages to necessary parts of the NJTaxAssessment code
@@ -46,18 +58,9 @@ ________________________________________________________________________________
     - HOLD OFF ON THIS AS LAST RESORT
     - This code could present future errors for counties which have duplicate city spellings. Fix this
     - This file will only be used for cities which dont have DBs
-23) create decorator for nj_databases to create a time constraint for downloads (1 year)
-24) Refactor database_check for ESSEX County
-25) Start looking into using Proxies when using Selenium and Requests modules
-    - Create function called get_proxy to return a random proxy to use with Selenium and Requests
-    - Use SeleniumWire to use proxies with Selenium
-    - from seleniumwire import webdriver as sw_webdriver
 5) Continue working on the long_lat function
     - Change the filename variable syntax so the files can be found
     - Change the sheet name during the db save to overwrite the first sheet
-    - Move the latitude and longitude columns up
-        - df.insert(3, 'Latitude', df.pop('Latitude'))
-        - df.insert(4, 'Longitude', df.pop('Longitude'))
     - Find the addresses which have the latitude and longitude = 0
     - Create a property address list that I can run through a for-loop
     - for i in property_address_list:
