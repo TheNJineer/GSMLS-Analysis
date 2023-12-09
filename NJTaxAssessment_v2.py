@@ -675,96 +675,6 @@ class NJTaxAssessment:
                 print('A previously created State Dictionary does not exist. '
                       'Please execute NJTaxAssessment.create_state_dictionary to create one')
 
-    @logger_decorator
-    def long_lat(self, driver_var, **kwargs):
-        """
-
-        :param driver_var:
-        :param kwargs:
-        :return:
-        """
-        # Fortifies a current df of properties with the longitude and latitude info
-        # to be used to calculate the distance between a target property and the comp
-        # Use https://www.latlong.net/
-
-        logger = kwargs['logger']
-        f_handler = kwargs['f_handler']
-        c_handler = kwargs['c_handler']
-
-        counties = NJTaxAssessment.state_county_dictionary()
-        good_property_pattern = re.compile(r'(\d{1,5}?-\d{1,5}?|\d{1,5}?)\s(.*)')
-        bad_property_pattern = re.compile(r'^[a-zA-Z]')
-        url = 'https://geocode.maps.co/search?q='
-
-        for key in counties.keys():
-            municipalities = counties[key]
-
-            for val in municipalities:
-
-                city_db = NJTaxAssessment.city_database(key, val)
-                filename = val + ' Database ' + str(datetime.now().year) + ' with Coordinates'  # Should I save as a csv?
-
-                try:
-                    property_address_list = city_db['Property Location'].to_list()
-                    city_db = city_db.set_index('Property Location')
-                    for i in property_address_list:
-                        if bad_property_pattern.search(i):
-                            continue
-                        elif good_property_pattern.search(i):
-                            address = ', '.join([good_property_pattern.search(i).group(), val.title(), 'NJ'])
-                            place_name = WebDriverWait(driver_var, 5).until(
-                                EC.presence_of_element_located((By.XPATH, "//*[@id='place']")))
-                            place_name.click()
-                            place_name.send_keys(address)
-                            search = driver_var.find_element(By.XPATH, "//*[@id='btnfind']")
-                            search.click()
-                            WebDriverWait(driver_var, 30).until(
-                                EC.presence_of_element_located((By.XPATH, "//*[@id='latlngspan']")))
-                            results = driver_var.page_source
-                            soup = BeautifulSoup(results, 'html.parser')
-                            value_text = soup.find('span', {'id': 'latlngspan', 'class': 'coordinatetxt'}).text
-                            lat_long = value_text.lstrip('(').rstrip(')').split(',')
-                            latitude = float(lat_long[0].strip())
-                            longitude = float(lat_long[1].strip())
-                            if city_db.loc[i, 'Latitude'] == 0 or city_db.loc[i, 'Latitude'] == '0':
-                                city_db.at[i, 'Latitude'] = latitude
-                            if city_db.loc[i, 'Longitude'] == 0 or city_db.loc[i, 'Longitude'] == '0':
-                                city_db.at[i, 'Longitude'] = longitude
-
-                except ElementNotVisibleException as ENV:  # Make more specific exception handling blocks later
-                    logger.exception(f'{ENV}')
-
-                except ElementNotSelectableException as ENS:
-                    logger.exception(f'{ENS}')
-
-                except InvalidArgumentException as IAE:
-                    logger.exception(f'{IAE}')
-
-                except NoSuchAttributeException as NSAE:
-                    logger.exception(f'{NSAE}')
-
-                except NoSuchDriverException as NSDE:
-                    logger.exception(f'{NSDE}')
-
-                except NoSuchElementException as NSEE:
-                    logger.exception(f'{NSEE}')
-
-                except WebDriverException as WDE:
-                    logger.exception(f'{WDE}')
-
-                except Exception as e:
-                    print(e)
-
-                finally:
-                    with pd.ExcelWriter(filename) as writer:
-                        # Switch to new directory
-                        city_db.to_excel(writer, sheet_name=val + ' Properties')
-                        # Switch to old directory
-
-                    logger.removeHandler(f_handler)
-                    logger.removeHandler(c_handler)
-                    logging.shutdown()
-
     @staticmethod
     @logger_decorator
     def nj_databases(driver_var, county_name=None, city_name=None, **kwargs):
@@ -975,7 +885,6 @@ class NJTaxAssessment:
 
             # NJTaxAssessment.create_state_dictionary(driver)
             # NJTaxAssessment.nj_databases(driver)
-            # NJTaxAssessment.long_lat(self, driver, 'Union', 'Linden')
 
         except Exception as e:
             print(e)
