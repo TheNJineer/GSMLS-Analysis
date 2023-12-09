@@ -378,8 +378,6 @@ class GSMLS:
 
             return db
 
-
-
     @staticmethod
     def login(driver_var):
         """
