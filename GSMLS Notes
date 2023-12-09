@@ -12,23 +12,34 @@ PRIORITIES:
 23) create decorator for nj_databases to create a time constraint for downloads (1 year)
 2) GSMLS
 - Complete the code to stream ALL property quarterly sales
-- Repeat code for MUL and LND
+    - Find the correct XPATH to select the target county. All XPATHs that I've tried thus far haven't works (DONE)
+    - Make sure that WHILE loops has the correct exceptions to continue when needed (DONE)
+    - Find the right action chains to insert the right file names (DONE)
+    - Insert logger messages for what county is being run and when the downloads are completed (DONE)
+    - Repeat code for MUL and LND (DONE)
+- Refactor the clean_db function to adjust for RES, MUL and LND dbs
+        - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types
+        - See if there are common columns between all dbs and use if statement blocks to add columns if necessary
+        - Make sub-functions which will do the actual cleaning. Clean_db will be the main function
 - Run descriptive statistics for all cities: max, min, mean, median, mode, stddev and quartiles
-3) Complete lat_long function in NJTaxAssessment
-    - Use the class db to cycle through the counties and cities in NJ
-    - Be sure to clean the db before uploading
-    - Webpage runs extremely slow, why?
-    - Bots can be detected and stall the program
-    - https://geocode.maps.co/search?q={address} is the new link to be used to get lat and long data
-    - Be sure to throttle the program by 1 sec after every request
-        - Build in a function to detect 400 level responses and adjust after
-    - Delete all of the Selenium code and replace with Request and BS4 module syntax
-    - Track the 'importance' key of the JSON file. May depict the accuracy of the location
-    - Learn how to parse JSON files
-    - Move the latitude and longitude columns up
-        - df.insert(3, 'Latitude', df.pop('Latitude'))
-        - df.insert(4, 'Longitude', df.pop('Longitude'))
-        - Create Lat and Long Columns in Essex County dbs
+- Create function which creates email campaigns for specific counties and cities based on analysis results (adjusted every qtr)
+- *** Create function to store all qtrly results in SQL after cleaning the data
+- *** Create a script that is solely run to download the quarterly sales results for RES, MUL, and LND properties
+- *** Create a script that is solely run to clean and transform the data to be stored in SQL databases
+3) Complete lat_long function in GSMLS
+    ****** Maybe shift to the GSMLS to use inside DealAnalyzer modules.
+    Only run function when analyzing distance instead of running the risk of getting banded for webscrapping
+    ***The new db should be immediately put back into SQL not another csv/xslx
+    - The function will take the file as an arg and convert into Pandas db
+    - Add Request module exceptions to the function
+    - add logic for if county and or city vars arent None. Could be str or list types
+    - Be sure to throttle the program by 1 sec after every request (DONE)
+        - Build in a function to detect 400 and 500 level responses and adjust after
+            - Use a While loop to continue running that address if 400 or 500 level responses are given
+    - Delete all of the Selenium code and replace with Request and BS4 module syntax (DONE)
+    - Track the 'importance' key of the JSON file. May depict the accuracy of the location (DONE)
+
+
 4) Complete MachineLearning script
 5) Start the DealAnalysis script
 - Continually check if MLS deals are still available. Notice status changes
@@ -60,11 +71,8 @@ ________________________________________________________________________________
     - This file will only be used for cities which dont have DBs
 5) Continue working on the long_lat function
     - Change the filename variable syntax so the files can be found
+    - Create a db cleaning function to use inside lat_long
     - Change the sheet name during the db save to overwrite the first sheet
-    - Find the addresses which have the latitude and longitude = 0
-    - Create a property address list that I can run through a for-loop
-    - for i in property_address_list:
-        city_db.at[i, 'Latitude'] =
 
 7)Foreclosure
 ____________________________________________________________________________________________________
@@ -85,9 +93,12 @@ ________________________________________________________________________________
 
 GSMLS class
 ________________________________________________________________________________________________________________________
+    - Break quarterly_sales_res down into smaller/modular functions
     - Create a function which finds the recently downloaded file and move it to a specific folder, Use NJTaxAssessment function as a template
     - For quarterly sales_res
         Create function for:
+        Create a function that asks the user which counties and cities they want to download for to
+        account for cities and counties values as NONE
         - no county name(s) or city(s) provided (DONE)
         - one county name no city name
         - list of county names no city names
@@ -95,8 +106,7 @@ ________________________________________________________________________________
     - Stream the xlsx file instead of downloading to reduce the built-in latency
         - Use the Requests an Session.Requests module to stream the files. (ie: Scraper class)
         - On the final download page, use the Elements and Network tabs to fill out the payload to stream the file
-    - Refactor the res_property_styles to property_styles
-        - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types
+
 _______________________________________________________________________________________________________________________
 Unassigned
 3) Continue working on the property_tax_legend function
@@ -125,3 +135,20 @@ ESSEX COUNTY
 #                              args=['ESSEX', cities[k]])  # Step 6: Unzip and save file
 # started_threads.append(threadobj)
 # threadobj.start()
+
+except ElementNotVisibleException as ENV:  # Make more specific exception handling blocks later
+    logger.exception(f'{ENV}')
+
+except ElementNotSelectableException as ENS:
+    logger.exception(f'{ENS}')
+
+except NoSuchElementException as NSEE:
+    logger.exception(f'{NSEE}')
+
+except WebDriverException as WDE:
+    logger.exception(f'{traceback.format_tb(WDE.__traceback__)}')
+    GSMLS.sign_out(driver_var)
+
+else:
+
+label[title='10 - Atlantic']
