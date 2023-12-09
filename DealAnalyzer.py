@@ -1,8 +1,8 @@
 
-import GSMLS
-import MachineLearning
+from GSMLS import GSMLS
+from MachineLearning import MachineLearning
 from NJTaxAssessment_v2 import NJTaxAssessment
-import Foreclosures
+from Foreclosures import Foreclosures
 from math import radians, sin, asin, sqrt
 
 
@@ -11,7 +11,7 @@ class DealAnalyzer(GSMLS):
     def __init__(self, address, offer_price= None, br= None, bath= None, sq_ft= None, home_type= None):
         # What information do I need to initialize an instance of this class?
         # Use RehabValuator.com as your goalpost. Very good website
-        super.__init__(self)
+        GSMLS.__init__(self)
         self._address = address
         self._offer_price = offer_price
         self._bathrooms = bath
@@ -30,28 +30,6 @@ class DealAnalyzer(GSMLS):
     def target_property(cls, address, offer_price, br, bath, sq_ft, home_type):
         # Alt constructor for a prospective rehab property
         # Make sure to fortify the target property with the latitude and longitude
-        pass
-
-    def comps(self, property_address, br=None, bth=None, sq_ft=None, home_type=None):
-        """
-        Method which accepts a property address as an expected argument. Other expected agruments with a default
-        value of None but if given, can help better narrow the comps.
-        I need to be able to animate the GSMLS map tool so I can find all comps within a mile
-        Follow the NABPOPs Guidelines for Comparables to ensure the model gives the best comps.
-        The following ideas need to be included:
-        - Guidelines for comps
-        - Lack of comps
-        - Market Considerations
-        - Rating Property/Amenities
-        - Adjustment features
-        - Land Value
-        :param property_address:
-        :param br:
-        :param bth:
-        :param sq_ft:
-        :param home_type:
-        :return:
-        """
         pass
 
     def haversine(self, latitude, longitude,  comp_db):
