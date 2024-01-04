@@ -2,6 +2,8 @@ import re
 import time
 import os
 import requests
+import shelve
+import datetime
 import traceback
 import pandas as pd
 from NJTaxAssessment_v2 import NJTaxAssessment
@@ -76,6 +78,45 @@ class GSMLS:
         return wrapper
 
     @staticmethod
+    def quarterly_sales(original_function):
+        def wrapper(*args, **kwargs):
+
+            property_type = str(original_function.__name__)[-3:].upper()
+
+            time_periods = {
+                'Q1': ['01/01/' + str(datetime.today().year), '03/31/' + str(datetime.today().year)],
+                'Q2': ['04/01/' + str(datetime.today().year), '06/30/' + str(datetime.today().year)],
+                'Q3': ['07/01/' + str(datetime.today().year), '09/30/' + str(datetime.today().year)],
+                'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)]
+            }
+
+            run_log = GSMLS.open_run_log()
+            kwargs['Run Log'] = run_log
+
+            for qtr, date_range in time_periods.items():
+                if datetime.today() >= datetime.datetime.strptime(date_range[1], '%m/%d/%Y'):
+                    if run_log[property_type][qtr] == 'READY':
+                        original_function(*args, **kwargs)
+
+                    elif run_log[property_type][qtr] == 'IN PROCESS':
+                        # run modified_quarterly_download
+                        latest_file = os.listdir('C:\\Users\\Omar\\Desktop\\Selenium Temp Folder')[-1]
+                        db = pd.read_excel(latest_file)
+                        kwargs['city_name'] = db.loc[1, 'TOWN']  # Result needs to be cleaned before used
+                        kwargs['county_name'] = db.loc[1, 'COUNTY']  # Result needs to be cleaned before used
+                        original_function(*args, **kwargs)
+
+                    elif run_log[property_type][qtr] == 'DOWNLOADED':
+                        pass
+
+                    elif run_log[property_type][qtr] == 'D.N.A':
+                        # this block may not be needed
+                        pass
+                else:
+                    # may need to put a logger msg here
+                    continue
+
+    @staticmethod
     def run_main(original_function):
         def wrapper(*args, **kwargs):
             pass
@@ -135,6 +176,10 @@ class GSMLS:
     ______________________________________________________________________________________________________________
     """
 
+    @staticmethod
+    def acres_to_sqft(search_string):
+        return str(float(search_string.group(1)) * 43560)
+
     def area_demographics(self, city):
         # Create a method that generates a report on the stores in or near a city,
         # school rankings, walk score, public transportation
@@ -155,16 +200,7 @@ class GSMLS:
         pass
 
     @staticmethod
-    def clean_db(db, county, city, property_type):
-        """
-        This function accepts an Excel document or Pandas database to clean and transform all data into uniform
-        datatypes before being transferred into a SQL database
-        :param db:
-        :param county:
-        :param city:
-        :param property_type:
-        :return:
-        """
+    def clean_and_transform_data(pandas_db):
         """
         Cleaning that needs to be done
         1. Filter for columns that I want displayed
@@ -175,12 +211,63 @@ class GSMLS:
         5. If no POOL, fillna with 'N' and POOLDESC with 'N'
         6. Create ADDRESS column by combining the 'STREETNUMDISPLAY' and 'STREETNAME' columns
         7. Create 'LATITUDE' AND 'LONGITUTDE' columns and fill with 'N/A'. Move columns right before ADDRESS column
-        8. Convert all the values in the LOTSIZE column to sqft. Use Pandas str methods
-        9. Fill the SQFT column using sq_ft_finder method
-        10. Add a column named "UC-Days" which calculates the total days between going under contract and closing
+        8. Add a column named "UC-Days" which calculates the total days between going under contract and closing
             # Can be vectorized by doing db['UC-Days'] = db['Closing Date'] - db['Under Contract']
-        
+        9. Convert all the values in the LOTSIZE column to sqft. Use Pandas str methods
+        :param pandas_db:
+        :return:
         """
+        # List item 2
+        pandas_db.insert(0, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
+        pandas_db.insert(2, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
+        pandas_db.insert(4, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
+        pandas_db.insert(6, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
+        pandas_db.insert(11, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        # List item 3
+        pandas_db.insert(5, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
+        # List item 4 and 8
+        pandas_db.insert(26, 'LISTDATE', pd.to_datetime(pandas_db.pop('LISTDATE')))
+        pandas_db.insert(27, 'PENDINGDATE', pd.to_datetime(pandas_db.pop('PENDINGDATE')))
+        pandas_db.insert(28, 'CLOSEDDATE', pd.to_datetime(pandas_db.pop('CLOSEDDATE')))
+        pandas_db.insert(9, 'UNDER CONTRACT LENGTH', pandas_db['CLOSEDDATE'] - pandas_db['PENDINGDATE'])
+        # List item 5
+        pandas_db["POOL"].fillna('N')
+        pandas_db["POOLDESC"].fillna('N')
+        # List item 6
+        pandas_db = pandas_db.astype({'STREETNUMDISPLAY': 'string', 'STREETNAME': 'string'})
+        street_num = pandas_db.pop('STREETNUMDISPLAY')
+        street_add = pandas_db.pop('STREETNAME')
+        pandas_db.insert(3, 'ADDRESS', street_num.str.cat(street_add, join='left', sep=' ')
+                         .str.replace(r'Rd', 'Road', regex=True)
+                         .str.replace(r'Ct', 'Court', regex=True)
+                         .str.replace(r'St', 'Street', regex=True)
+                         .str.replace(r'Ave', 'Avenue', regex=True)
+                         .str.replace(r'Ave', 'Avenue', regex=True)
+                         .str.replace(r'Ln', 'Lane', regex=True)
+                         .str.replace(r'Pl', 'Place', regex=True)
+                         .str.replace(r'Ter', 'Terrace', regex=True)
+                         .str.replace(r'Hwy', 'Highway', regex=True)
+                         .str.replace(r'Pkwy', 'Parkway', regex=True))
+        # List item 7
+        pandas_db.insert(3, 'LATITUDE', 0)
+        pandas_db.insert(4, 'LONGITUDE', 0)
+
+        return pandas_db
+
+    @staticmethod
+    def clean_db(db, county, city, property_type):
+        """
+        This function accepts an Excel document or Pandas database to clean and transform all data into uniform
+        datatypes before being transferred into a SQL database. This also fortifies the data with all the proper
+        living space sq_ft and converts all lot size values to sq_ft
+        - Fill the SQFT column using sq_ft_finder method
+        :param db:
+        :param county:
+        :param city:
+        :param property_type:
+        :return:
+        """
+
         target_columns = ['MLSNUM', 'BLOCKID', 'LOTID', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'TAXID',
                           'ROOMS', 'BEDS', 'BATHSTOTAL', 'LOTSIZE', 'LOTDESC', 'SQFTAPPROX', 'YEARBUILT',
                           'YEARBUILTDESC', 'STYLEPRIMARY', 'PROPCOLOR', 'RENOVATED', 'ORIGLISTPRICE', 'LISTPRICE',
@@ -193,14 +280,9 @@ class GSMLS:
 
         if property_type == 'RES':
             db1 = db[target_columns].fillna('N/A')
-            db1['ADDRESS'] = db1['STREETNUMDISPLAY'] + db1[
-                'STREETNAME']  # Use a string method on this column to get the right format and delete the 2 other columns
+            # db1.pipe(GSMLS.clean_and_transform_data).pipe(GSMLS.sq_ft_finder).pipe(GSMLS.convert_lot_size)
             #  Set index to db1['ADDRESS']
-            #  Create a Lat and Long column
             #  Make sure all columns have the same data type
-            #  Use a string method to strip the (*) off of the address name
-
-            GSMLS.sq_ft_finder(county, city, db1)
 
         elif property_type == 'MUL':
             # Use the list.insert() method to put in unit columns in the target columns list
@@ -236,6 +318,18 @@ class GSMLS:
 
         pass
 
+    @staticmethod
+    def convert_lot_size(db):
+
+        acres_pattern = r'(\.\d{2,3}|\d{1,2}\.{2,3})\sAC'
+        by_pattern = r'(\d{1,5})X(\d{1,5})'
+        db1 = db.astype({'LOTSIZE': 'string'})
+        lotsize_sqft = db1['LOTSIZE']
+        db.insert(12, 'LOTSIZE (SQFT)', lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
+                  .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True))
+
+        return db1
+
     def descriptive_stats_state(self):
         # Run descriptive analysis on all the homes for the state for the quarter
         pass
@@ -265,7 +359,7 @@ class GSMLS:
         cities = {}
 
         for i in target_contents:
-            main_contents = str(i)# Strips the contents of the target counties (ie: 10 Atlantic ---> [10, Atlantic])
+            main_contents = str(i)  # Strips the contents of the target counties (ie: 10 Atlantic ---> [10, Atlantic])
             target_search = value_pattern.search(main_contents)
             cities[target_search[1]] = target_search[2]
 
@@ -316,11 +410,11 @@ class GSMLS:
         pass
 
     @logger_decorator
-    def long_lat(self, db, county=None, city=None, **kwargs):
+    def lat_long(self, db, county=None, city=None, **kwargs):
         """
         Function used to find a property's latitude and longitude values to calculate the distance from the target
         property
-        :param driver_var:
+        :param db:
         :param county:
         :param city:
         :param kwargs:
@@ -379,6 +473,10 @@ class GSMLS:
             return db
 
     @staticmethod
+    def length_and_width_to_sqft(search_string):
+        return str(float(search_string.group(1) * float(search_string.group(2))))
+
+    @staticmethod
     def login(driver_var):
         """
 
@@ -404,14 +502,47 @@ class GSMLS:
         else:
             pass
 
+    @staticmethod
+    def no_results(city_id_var, driver_var):
+
+        no_results_found = WebDriverWait(driver_var, 30).until(
+            EC.presence_of_element_located((By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
+        no_results_found.click()
+        GSMLS.set_city(city_id_var, driver_var)
+
+    @staticmethod
+    def open_run_log():
+
+        previous_dir = os.getcwd()
+        os.chdir('F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Saved Data')
+        with shelve.open('GSMLS Run Dictionary', writeback=True) as saved_data_file:
+            run_log: dict = saved_data_file['Run Log']
+
+        os.chdir(previous_dir)
+
+        return run_log
+
+    @staticmethod
+    def paige_criteria(driver_var):
+
+        uncheck_all = driver_var.find_element(By.ID, "uncheck-all")
+        uncheck_all.click()  # Step 2: Uncheck unwanted statuses
+        sold_status = driver_var.find_element(By.ID, "S")
+        sold_status.click()  # Step 3: Check the sold status
+
     def paired_sales_analysis(self, city):
 
         """
         Run a feature valuation or paired sales analysis for features of homes to know what adjustments to make
-        when running comparables
+        when running comparibles
         :param city:
         :return:
         """
+        pass
+
+    @staticmethod
+    @logger_decorator
+    def pandas2sql(**kwargs):
         pass
 
     def population(self, city):
@@ -434,6 +565,8 @@ class GSMLS:
         This initial dataframe will be dirty and have unnecessary information.
         Will be saved to Selenium Temp folder to be cleaned for future use by other methods.
 
+        Will cause ElementClickIntercepted errors if not run on full screen
+
         :param driver_var:
         :param county_name:
         :param city_name:
@@ -444,89 +577,79 @@ class GSMLS:
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
+        run_log: dict = kwargs['Run Log']
 
+        # Uncomment all time periods after the first run
         time_periods = {
             'Q1': ['01/01/' + str(datetime.today().year), '03/31/' + str(datetime.today().year)],
             'Q2': ['04/01/' + str(datetime.today().year), '06/30/' + str(datetime.today().year)],
             'Q3': ['07/01/' + str(datetime.today().year), '09/30/' + str(datetime.today().year)],
-            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)],
+            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)]
         }
 
         page_results = driver_var.page_source
         GSMLS.quicksearch(page_results, 'RES', driver_var)
-        page_check = WebDriverWait(driver_var, 5).until(
+        page_check = WebDriverWait(driver_var, 10).until(
                         EC.presence_of_element_located((By.CLASS_NAME, 'required')))
         if page_check:
             results = driver_var.page_source
-            counties = GSMLS.find_counties(results)  # Step 1: Find all the counties available
-            uncheck_all = driver_var.find_element(By.ID, "uncheck-all")
-            uncheck_all.click()  # Step 2: Uncheck unwanted statuses
-            sold_status = driver_var.find_element(By.ID, "S")
-            sold_status.click()  # Step 3: Check the sold status
+            GSMLS.paige_criteria(driver_var)
             GSMLS.res_property_styles(driver_var, results)  # Step 4: Choose target home types
 
             for qtr, date_range in time_periods.items():
-                starting_close_date = driver_var.find_element(By.ID, 'closedatemin')
-                starting_close_date.click()  # Step 5: Choose start date
-                starting_close_date.send_keys(date_range[0])
-                ending_close_date = driver_var.find_element(By.ID, 'closedatemax')
-                ending_close_date.click()  # Step 6: Choose end date
-                ending_close_date.send_keys(date_range[1])
+                counties = GSMLS.find_counties(results)  # Step 1: Find all the counties available
+                GSMLS.set_dates(date_range, driver_var)
+                logger.info(f'Results for {qtr} ({date_range[0]} - {date_range[1]}) will now be extracted.')
+                run_log = GSMLS.save_run_log(run_log, qtr, 'RES', 'IN PROGRESS', logger)
 
                 if (county_name and city_name) is None:
 
                     for county_id in counties.keys():
-                        try:
-                            # Step 7: Loop through the counties to get list of cities in that county
-                            """Will cause ElementClickIntercepted errors if not run on full screen"""
-                            click_county = WebDriverWait(driver_var, 5).until(
-                                            EC.presence_of_element_located((By.ID, county_id)))
-                            click_county.click()
-                            logger.info(f'Sales data for municipalities located in {counties[county_id]} County will now be downloaded')
-                            time.sleep(1)  # Latency period added in order to load and scrape city names
-                            results1 = driver_var.page_source
-                            cities = GSMLS.find_cities(results1)
-                        except ElementClickInterceptedException:
-                            element_not_found = True
-                            while element_not_found:
-                                try:
-                                    click_county.click()
-                                    results1 = driver_var.page_source
-                                    cities = GSMLS.find_cities(results1)
-                                    element_not_found = False
-                                except ElementClickInterceptedException as ECIE:
-                                    logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
-                                # else:
-                                #     break
-                        finally:
-                            # Step 8: Loop through the cities to get results
-                            for city_id in cities:
-                                click_city = WebDriverWait(driver_var, 5).until(
-                                                EC.presence_of_element_located((By.ID, city_id)))
-                                click_city.click()
-                                show_results = WebDriverWait(driver_var, 5).until(
-                                                EC.presence_of_element_located((By.CLASS_NAME, 'show')))
-                                show_results.click()
-                                time.sleep(2)
-                                page_results1 = driver_var.page_source
-                                if "close_generated_popup('alert_popup')" in str(page_results1):
-                                    # No results found
-                                    no_results_found = WebDriverWait(driver_var, 5).until(
-                                                EC.presence_of_element_located((By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
-                                    no_results_found.click()
-                                    click_city.click()
-                                    logger.info(f'There is no GSMLS RES sales data available for {cities[city_id]}')
+                        if counties[county_id] == 'Other':
+                            continue
+                        else:
+                            try:
+                                # Step 7: Loop through the counties to get list of cities in that county
+                                GSMLS.set_county(county_id, driver_var)
+                                logger.info(f'Sales data for municipalities located in {counties[county_id]} '
+                                            f'County will now be downloaded')
+                                time.sleep(1)  # Latency period added in order to load and scrape city names
+                                results1 = driver_var.page_source
+                                cities = GSMLS.find_cities(results1)
+                            except ElementClickInterceptedException:
+                                element_not_found = True
+                                while element_not_found:
+                                    try:
+                                        GSMLS.set_county(county_id, driver_var)
+                                        results1 = driver_var.page_source
+                                        cities = GSMLS.find_cities(results1)
+                                        element_not_found = False
+                                    except ElementClickInterceptedException as ECIE:
+                                        logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
+                                    # else:
+                                    #     break
+                            finally:
+                                # Step 8: Loop through the cities to get results
+                                for city_id in cities:
+                                    GSMLS.set_city(city_id, driver_var)
+                                    GSMLS.show_results(driver_var)
+                                    time.sleep(2)
+                                    page_results1 = driver_var.page_source
+                                    if "close_generated_popup('alert_popup')" in str(page_results1):
+                                        # No results found
+                                        GSMLS.no_results(city_id, driver_var)
+                                        logger.info(f'There is no GSMLS RES sales data available for {cities[city_id]}')
 
-                                else:
-                                    # Results were found
-                                    GSMLS.results_found_res(driver_var, cities[city_id], qtr, 'RES')
-                                    click_city = WebDriverWait(driver_var, 5).until(
-                                        EC.presence_of_element_located((By.ID, city_id)))
-                                    click_city.click()
-                                    logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+                                    else:
+                                        # Results were found
+                                        GSMLS.results_found(driver_var, cities[city_id], qtr, 'RES')
+                                        GSMLS.set_city(city_id, driver_var)
+                                        logger.info(f'Sales data for {cities[city_id]} has been downloaded')
 
-                            logger.info(f'Sales data for municipalities located in {counties[county_id]} County is now complete')
-                            click_county.click()
+                                logger.info(f'Sales data for municipalities located in {counties[county_id]} County is now complete')
+                                GSMLS.set_county(county_id, driver_var)
+
+                    run_log = GSMLS.save_run_log(run_log, qtr, 'RES', 'DOWNLOADED', logger)
 
                 elif type(county_name) is dict:
                     pass
@@ -561,12 +684,12 @@ class GSMLS:
             'Q1': ['01/01/' + str(datetime.today().year), '03/31/' + str(datetime.today().year)],
             'Q2': ['04/01/' + str(datetime.today().year), '06/30/' + str(datetime.today().year)],
             'Q3': ['07/01/' + str(datetime.today().year), '09/30/' + str(datetime.today().year)],
-            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)],
+            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)]
         }
 
         page_results = driver_var.page_source
         GSMLS.quicksearch(page_results, 'MUL', driver_var)
-        page_check = WebDriverWait(driver_var, 5).until(
+        page_check = WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.CLASS_NAME, 'required')))
         if page_check:
             results = driver_var.page_source
@@ -577,70 +700,79 @@ class GSMLS:
             sold_status.click()  # Step 3: Check the sold status
 
             for qtr, date_range in time_periods.items():
-                starting_close_date = driver_var.find_element(By.ID, 'closedatemin')
-                starting_close_date.click()  # Step 4: Choose start date
-                starting_close_date.send_keys(date_range[0])
-                ending_close_date = driver_var.find_element(By.ID, 'closedatemax')
-                ending_close_date.click()  # Step 5: Choose end date
-                ending_close_date.send_keys(date_range[1])
+                starting_close_date = WebDriverWait(driver_var, 10).until(
+                    EC.presence_of_element_located((By.ID, 'closedatemin')))
+                starting_close_date.click()  # Step 5: Choose start date
+                AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
+                    date_range[0]).perform()
+                ending_close_date = WebDriverWait(driver_var, 10).until(
+                    EC.presence_of_element_located((By.ID, 'closedatemax')))
+                ending_close_date.click()  # Step 6: Choose end date
+                AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
+                    date_range[1]).perform()
 
                 if (county_name and city_name) is None:
 
                     for county_id in counties.keys():
-                        try:
-                            # Step 6: Loop through the counties to get list of cities in that county
-                            """Will cause ElementClickIntercepted errors if not run on full screen"""
-                            click_county = WebDriverWait(driver_var, 5).until(
-                                EC.presence_of_element_located((By.ID, county_id)))
-                            click_county.click()
-                            logger.info(
-                                f'Sales data for municipalities located in {counties[county_id]} County will now be downloaded')
-                            time.sleep(1)  # Latency period added in order to load and scrape city names
-                            results1 = driver_var.page_source
-                            cities = GSMLS.find_cities(results1)
-                        except ElementClickInterceptedException:
-                            element_not_found = True
-                            while element_not_found:
-                                try:
-                                    click_county.click()
-                                    results1 = driver_var.page_source
-                                    cities = GSMLS.find_cities(results1)
-                                    element_not_found = False
-                                except ElementClickInterceptedException as ECIE:
-                                    logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
-                                # else:
-                                #     break
-                        finally:
-                            # Step 7: Loop through the cities to get results
-                            for city_id in cities:
-                                click_city = WebDriverWait(driver_var, 5).until(
-                                    EC.presence_of_element_located((By.ID, city_id)))
-                                click_city.click()
-                                show_results = WebDriverWait(driver_var, 5).until(
-                                    EC.presence_of_element_located((By.CLASS_NAME, 'show')))
-                                show_results.click()
-                                time.sleep(2)
-                                page_results1 = driver_var.page_source
-                                if "close_generated_popup('alert_popup')" in str(page_results1):
-                                    # No results found
-                                    no_results_found = WebDriverWait(driver_var, 5).until(
-                                        EC.presence_of_element_located(
-                                            (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
-                                    no_results_found.click()
-                                    click_city.click()
-                                    logger.info(f'There is no GSMLS MUL sales data available for {cities[city_id]}')
-
-                                else:
-                                    # Results were found
-                                    GSMLS.results_found_res(driver_var, cities[city_id], qtr, 'MUL')
-                                    click_city = WebDriverWait(driver_var, 5).until(
+                        if counties[county_id] == 'Other':
+                            continue
+                        else:
+                            try:
+                                # Step 6: Loop through the counties to get list of cities in that county
+                                """Will cause ElementClickIntercepted errors if not run on full screen"""
+                                click_county = WebDriverWait(driver_var, 10).until(
+                                    EC.presence_of_element_located((By.ID, county_id)))
+                                click_county.click()
+                                logger.info(
+                                    f'Sales data for municipalities located in {counties[county_id]} County will now be downloaded')
+                                time.sleep(1)  # Latency period added in order to load and scrape city names
+                                results1 = driver_var.page_source
+                                cities = GSMLS.find_cities(results1)
+                            except ElementClickInterceptedException:
+                                element_not_found = True
+                                while element_not_found:
+                                    try:
+                                        click_county.click()
+                                        results1 = driver_var.page_source
+                                        cities = GSMLS.find_cities(results1)
+                                        element_not_found = False
+                                    except ElementClickInterceptedException as ECIE:
+                                        logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
+                                    # else:
+                                    #     break
+                            finally:
+                                # Step 7: Loop through the cities to get results
+                                for city_id in cities:
+                                    click_city = WebDriverWait(driver_var, 10).until(
                                         EC.presence_of_element_located((By.ID, city_id)))
                                     click_city.click()
-                                    logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+                                    show_results = WebDriverWait(driver_var, 10).until(
+                                        EC.presence_of_element_located((By.CLASS_NAME, 'show')))
+                                    show_results.click()
+                                    time.sleep(2)
+                                    page_results1 = driver_var.page_source
+                                    if "close_generated_popup('alert_popup')" in str(page_results1):
+                                        # No results found
+                                        no_results_found = WebDriverWait(driver_var, 30).until(
+                                            EC.presence_of_element_located(
+                                                (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
+                                        no_results_found.click()
+                                        click_city.click()
+                                        logger.info(f'There is no GSMLS MUL sales data available for {cities[city_id]}')
 
-                            logger.info(
-                                f'Sales data for municipalities located in {counties[county_id]} County is now complete')
-                            click_county.click()
+                                    else:
+                                        # Results were found
+                                        GSMLS.results_found(driver_var, cities[city_id], qtr, 'MUL')
+                                        click_city = WebDriverWait(driver_var, 10).until(
+                                            EC.presence_of_element_located((By.ID, city_id)))
+                                        click_city.click()
+                                        logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+
+                                logger.info(
+                                    f'Sales data for municipalities located in {counties[county_id]} County is now complete')
+                                click_county = WebDriverWait(driver_var, 10).until(
+                                    EC.presence_of_element_located((By.ID, county_id)))
+                                click_county.click()
 
                 elif type(county_name) is dict:
                     pass
@@ -651,7 +783,7 @@ class GSMLS:
 
     @staticmethod
     @logger_decorator
-    def quarterly_sales_land(driver_var, county_name=None, city_name=None, **kwargs):
+    def quarterly_sales_lnd(driver_var, county_name=None, city_name=None, **kwargs):
         """
         Method that downloads all the sold land plots for each city after each quarter.
         This will help me build a database for all previously
@@ -672,15 +804,15 @@ class GSMLS:
         c_handler = kwargs['c_handler']
 
         time_periods = {
-            'Q1': ['01/01/' + str(datetime.today().year), '03/31/' + str(datetime.today().year)],
+            # 'Q1': ['01/01/' + str(datetime.today().year), '03/31/' + str(datetime.today().year)],
             'Q2': ['04/01/' + str(datetime.today().year), '06/30/' + str(datetime.today().year)],
             'Q3': ['07/01/' + str(datetime.today().year), '09/30/' + str(datetime.today().year)],
-            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)],
+            'Q4': ['10/01/' + str(datetime.today().year), '12/31/' + str(datetime.today().year)]
         }
 
         page_results = driver_var.page_source
         GSMLS.quicksearch(page_results, 'LND', driver_var)
-        page_check = WebDriverWait(driver_var, 5).until(
+        page_check = WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.CLASS_NAME, 'required')))
         if page_check:
             results = driver_var.page_source
@@ -691,70 +823,79 @@ class GSMLS:
             sold_status.click()  # Step 3: Check the sold status
 
             for qtr, date_range in time_periods.items():
-                starting_close_date = driver_var.find_element(By.ID, 'closedatemin')
-                starting_close_date.click()  # Step 4: Choose start date
-                starting_close_date.send_keys(date_range[0])
-                ending_close_date = driver_var.find_element(By.ID, 'closedatemax')
-                ending_close_date.click()  # Step 5: Choose end date
-                ending_close_date.send_keys(date_range[1])
+                starting_close_date = WebDriverWait(driver_var, 10).until(
+                    EC.presence_of_element_located((By.ID, 'closedatemin')))
+                starting_close_date.click()  # Step 5: Choose start date
+                AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
+                    date_range[0]).perform()
+                ending_close_date = WebDriverWait(driver_var, 10).until(
+                    EC.presence_of_element_located((By.ID, 'closedatemax')))
+                ending_close_date.click()  # Step 6: Choose end date
+                AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
+                    date_range[1]).perform()
 
                 if (county_name and city_name) is None:
 
                     for county_id in counties.keys():
-                        try:
-                            # Step 6: Loop through the counties to get list of cities in that county
-                            """Will cause ElementClickIntercepted errors if not run on full screen"""
-                            click_county = WebDriverWait(driver_var, 5).until(
-                                EC.presence_of_element_located((By.ID, county_id)))
-                            click_county.click()
-                            logger.info(
-                                f'Sales data for municipalities located in {counties[county_id]} County will now be downloaded')
-                            time.sleep(1)  # Latency period added in order to load and scrape city names
-                            results1 = driver_var.page_source
-                            cities = GSMLS.find_cities(results1)
-                        except ElementClickInterceptedException:
-                            element_not_found = True
-                            while element_not_found:
-                                try:
-                                    click_county.click()
-                                    results1 = driver_var.page_source
-                                    cities = GSMLS.find_cities(results1)
-                                    element_not_found = False
-                                except ElementClickInterceptedException as ECIE:
-                                    logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
-                                # else:
-                                #     break
-                        finally:
-                            # Step 7: Loop through the cities to get results
-                            for city_id in cities:
-                                click_city = WebDriverWait(driver_var, 5).until(
-                                    EC.presence_of_element_located((By.ID, city_id)))
-                                click_city.click()
-                                show_results = WebDriverWait(driver_var, 5).until(
-                                    EC.presence_of_element_located((By.CLASS_NAME, 'show')))
-                                show_results.click()
-                                time.sleep(2)
-                                page_results1 = driver_var.page_source
-                                if "close_generated_popup('alert_popup')" in str(page_results1):
-                                    # No results found
-                                    no_results_found = WebDriverWait(driver_var, 5).until(
-                                        EC.presence_of_element_located(
-                                            (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
-                                    no_results_found.click()
-                                    click_city.click()
-                                    logger.info(f'There is no GSMLS LND sales data available for {cities[city_id]}')
-
-                                else:
-                                    # Results were found
-                                    GSMLS.results_found_res(driver_var, cities[city_id], qtr, 'LND')
-                                    click_city = WebDriverWait(driver_var, 5).until(
+                        if counties[county_id] == 'Other':
+                            continue
+                        else:
+                            try:
+                                # Step 6: Loop through the counties to get list of cities in that county
+                                """Will cause ElementClickIntercepted errors if not run on full screen"""
+                                click_county = WebDriverWait(driver_var, 10).until(
+                                    EC.presence_of_element_located((By.ID, county_id)))
+                                click_county.click()
+                                logger.info(
+                                    f'Sales data for municipalities located in {counties[county_id]} County will now be downloaded')
+                                time.sleep(1)  # Latency period added in order to load and scrape city names
+                                results1 = driver_var.page_source
+                                cities = GSMLS.find_cities(results1)
+                            except ElementClickInterceptedException:
+                                element_not_found = True
+                                while element_not_found:
+                                    try:
+                                        click_county.click()
+                                        results1 = driver_var.page_source
+                                        cities = GSMLS.find_cities(results1)
+                                        element_not_found = False
+                                    except ElementClickInterceptedException as ECIE:
+                                        logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
+                                    # else:
+                                    #     break
+                            finally:
+                                # Step 7: Loop through the cities to get results
+                                for city_id in cities:
+                                    click_city = WebDriverWait(driver_var, 10).until(
                                         EC.presence_of_element_located((By.ID, city_id)))
                                     click_city.click()
-                                    logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+                                    show_results = WebDriverWait(driver_var, 10).until(
+                                        EC.presence_of_element_located((By.CLASS_NAME, 'show')))
+                                    show_results.click()
+                                    time.sleep(2)
+                                    page_results1 = driver_var.page_source
+                                    if "close_generated_popup('alert_popup')" in str(page_results1):
+                                        # No results found
+                                        no_results_found = WebDriverWait(driver_var, 30).until(
+                                            EC.presence_of_element_located(
+                                                (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input')))
+                                        no_results_found.click()
+                                        click_city.click()
+                                        logger.info(f'There is no GSMLS LND sales data available for {cities[city_id]}')
 
-                            logger.info(
-                                f'Sales data for municipalities located in {counties[county_id]} County is now complete')
-                            click_county.click()
+                                    else:
+                                        # Results were found
+                                        GSMLS.results_found(driver_var, cities[city_id], qtr, 'LND')
+                                        click_city = WebDriverWait(driver_var, 10).until(
+                                            EC.presence_of_element_located((By.ID, city_id)))
+                                        click_city.click()
+                                        logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+
+                                logger.info(
+                                    f'Sales data for municipalities located in {counties[county_id]} County is now complete')
+                                click_county = WebDriverWait(driver_var, 10).until(
+                                    EC.presence_of_element_located((By.ID, county_id)))
+                                click_county.click()
 
                 elif type(county_name) is dict:
                     pass
@@ -856,8 +997,8 @@ class GSMLS:
                 selection.click()
 
     @staticmethod
-    def results_found_res(driver_var, city_var, qtr_var, property_type):
-        check_all_results = WebDriverWait(driver_var, 5).until(
+    def results_found(driver_var, city_var, qtr_var, property_type):
+        check_all_results = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, 'checkall')))
         check_all_results.click()
         download_results = driver_var.find_element(By.XPATH, '//*[@id="sub-navigation-container"]/div/nav[1]/a[12]')
@@ -869,7 +1010,7 @@ class GSMLS:
         filename_input = driver_var.find_element(By.ID, 'filename')
         filename_input.click()
         AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
-            city_var + ' ' + qtr_var + str(datetime.today().year) + ' ' + property_type + ' Sales.xls').perform()
+            city_var + ' ' + qtr_var + str(datetime.today().year) + ' ' + property_type + ' Sales GSMLS.xls').perform()
         download_button.click()
         # GSMLS.sort_file()
         close_page = driver_var.find_element(By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")
@@ -877,6 +1018,55 @@ class GSMLS:
         close_form = WebDriverWait(driver_var, 5).until(
             EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
         close_form.click()
+
+    @staticmethod
+    def save_run_log(run_log_object, quarter, property_type, status_type, logger):
+
+        previous_dir = os.getcwd()
+        old_status = run_log_object[property_type][quarter]
+        run_log_object[property_type][quarter] = status_type
+        os.chdir('F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Saved Data')
+        with shelve.open('GSMLS Run Dictionary', writeback=True) as saved_data_file:
+            saved_data_file['Run Log'] = run_log_object
+
+        os.chdir(previous_dir)
+        logger.info(f'{property_type} {quarter}  status has been changed from {old_status} to {status_type}.'
+                    f'Run log has been saved.')
+
+        return run_log_object
+
+    @staticmethod
+    def set_city(city_id_var, driver_var):
+
+        click_city = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, city_id_var)))
+        click_city.click()
+
+    @staticmethod
+    def set_county(county_id_var, driver_var):
+
+        click_county = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, county_id_var)))
+        click_county.click()
+
+    @staticmethod
+    def set_dates(date_range, driver_var):
+
+        starting_close_date = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, 'closedatemin')))
+        starting_close_date.click()  # Step 5: Choose start date
+        AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(date_range[0]).perform()
+        ending_close_date = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, 'closedatemax')))
+        ending_close_date.click()  # Step 6: Choose end date
+        AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(date_range[1]).perform()
+
+    @staticmethod
+    def show_results(driver_var):
+
+        show_results = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, 'show')))
+        show_results.click()
 
     @staticmethod
     def sign_out(driver_var):
@@ -960,27 +1150,32 @@ class GSMLS:
     #         os.chdir(previous_dir)
 
     @staticmethod
-    def sq_ft_finder(county, city, quarterlydb):
+    def sq_ft_finder(county, city, db):
         """
 
         :param county:
         :param city:
-        :param quarterlydb:
+        :param db:
         :return:
         """
-        address_list = quarterlydb['ADDRESS'].to_list()
+
+        # I actually may not have to download the whole db. Set index to Property Location and Just get the SQFT column
+        address_list = db['ADDRESS'].to_list()
 
         citydb = NJTaxAssessment.city_database(county, city)
+        citydb.set_index('Property Location')
         #  Set index to db2['PROPERTY ADDRESS']
 
         for address in address_list:
-            if quarterlydb.loc[address, 'SQFTAPPROX'] == 'N/A':
-                quarterlydb.at[address, 'SQFTAPPROX'] = citydb[address.title(), 'SQFT']
-            elif quarterlydb.loc[address, 'SQFTAPPROX'] != 'N/A':
-                if quarterlydb.loc[address, 'SQFTAPPROX'] == citydb[address.title(), 'SQFT']:
+            if db.loc[address, 'SQFTAPPROX'] == 'N/A':
+                db.at[address, 'SQFTAPPROX'] = citydb.loc[address.upper(), 'Sq. Ft']
+            elif db.loc[address, 'SQFTAPPROX'] != 'N/A':
+                if db.loc[address, 'SQFTAPPROX'] == citydb.loc[address.upper(), 'Sq. Ft']:
+                    continue
+                elif (citydb.loc[address.upper(), 'Sq. Ft'] == (0 or '0')) and int(db.loc[address, 'SQFTAPPROX']) > 0:
                     continue
                 else:
-                    quarterlydb.at[address, 'SQFTAPPROX'] = citydb[address.title(), 'SQFT']
+                    db.at[address, 'SQFTAPPROX'] = citydb[address.upper(), 'Sq. Ft']
 
     def under_contract(self, city=None):
         """
@@ -1010,7 +1205,10 @@ class GSMLS:
         # results = driver.page_source
 
         GSMLS.login(driver)
-        GSMLS.quarterly_sales_mul(driver)
+        # GSMLS.quarterly_sales_res(driver)
+        # GSMLS.quarterly_sales_mul(driver)
+        GSMLS.quarterly_sales_lnd(driver)
+        GSMLS.sign_out(driver)
 
 
 if __name__ == '__main__':

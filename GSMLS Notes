@@ -1,6 +1,5 @@
 PRIORITIES:
 1) NJTaxAssessment
-- Create a class variable which will be a database of the cities and counties in NJ (DONE)
 ***Figure out how to properly add a package to sys.path and use it. Currently copied class from parent folder
 ***The url's arent https even though thats what I'm labeling them as. Figure this out. I think I need to add verifyssl=False
 - Update city_database function
@@ -9,27 +8,56 @@ PRIORITIES:
     - Generate a different proxy then load webpage using city id (?town=0711), dont click the radio buttons anymore
     - Be sure to update the format_proxies function when done in the main file
     - May need to create a function loop to try different proxies until the download initiates
+    - Use SeleniumWire to intercept some of the driver requests to read/change the payloads to get the dbs I need
+- Clean the municipality databases
+    -Create uniformity in the 'Property Location' column by changing all abbreviated street names to the full endings
 23) create decorator for nj_databases to create a time constraint for downloads (1 year)
+
 2) GSMLS
-- Complete the code to stream ALL property quarterly sales
-    - Find the correct XPATH to select the target county. All XPATHs that I've tried thus far haven't works (DONE)
-    - Make sure that WHILE loops has the correct exceptions to continue when needed (DONE)
-    - Find the right action chains to insert the right file names (DONE)
-    - Insert logger messages for what county is being run and when the downloads are completed (DONE)
-    - Repeat code for MUL and LND (DONE)
-- Refactor the clean_db function to adjust for RES, MUL and LND dbs
-        - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types
+***LND stopped in 3rd Qtr. Last files came from Morris County
+- Create a status checker for the run log that states, if all property types and quarters are downloaded, RESET the dictionary and save it
+- Complete the quarterly_sales decorator
+    - create open_run_log function (DONE)
+    - create save_run_log function (DONE)
+    - Remove the time periods dict and qtr, date loop from the quarterly_res function
+        - The qtr var and date_range var need to be added to the kwargs dict in the decorator
+    - create these variables to be used in the inside of the function for switch cases:
+        - run_status:
+            - starts as 'IN PROGRESS' and the value is saved into the shelve immediately (DONE)
+            - if the end of the program is reached, it is saved as 'DOWNLOADED' (DONE)
+        - counties_ids_list
+        - cities_ids_list:
+            - These variables will be stored outside of the main loops
+            - If the program isn't completed these will be activated once a county_name and city_name are supplied to the function
+            - Initial values are NONE
+            - The cities_ids_list should be dynamically changed as the program continues
+
+    - Add functionality to the end of the decorator to save the the run log
+- Add the MLS name to the file name for later processing into SQL (create a function) (NOT NEEDED)
+    - Add this into the original functions afterwards (DONE)
+- Create these sub-functions to make the main functions much cleaner:
+    - page_criteria(driver_var) (DONE)
+    - set_dates(qtr, date_range, driver_var, logger) (DONE)
+    - set_county(county_ID, driver_var, logger) (DONE)
+    - set_city(city_ID, driver_var) (DONE)
+    - no_results(city_name, driver_var, logger) (DONE)
+- A selenium TimeoutError can occur if a page element isnt found. How to I get around this to continue the program?
+_ Refactor the run_main decorator to run on a quarterly basis
+    - uses a shelve file to know which dates to download for
+- Refactor the clean_db function to adjust for RES, MUL and LND dbs (DONE)
+        - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types (DONE)
         - See if there are common columns between all dbs and use if statement blocks to add columns if necessary
-        - Make sub-functions which will do the actual cleaning. Clean_db will be the main function
-- Run descriptive statistics for all cities: max, min, mean, median, mode, stddev and quartiles
-- Create function which creates email campaigns for specific counties and cities based on analysis results (adjusted every qtr)
-- *** Create function to store all qtrly results in SQL after cleaning the data
-- *** Create a script that is solely run to download the quarterly sales results for RES, MUL, and LND properties
-- *** Create a script that is solely run to clean and transform the data to be stored in SQL databases
+        - Make sub-functions which will do the actual cleaning. Clean_db will be the main function (DONE)
+        - Is the county and city necessary input args???
+        *** The 'Property Location column list all addresses in all caps and uses AVE, LANE, ROAD, DRIVE (DONE)
+        - *** Create function to store all qtrly results in SQL after cleaning the data
+            - Use the clean_db() and new pandas2sql()
+- Track rental prices as well
+
 3) Complete lat_long function in GSMLS
-    ****** Maybe shift to the GSMLS to use inside DealAnalyzer modules.
+    ****** Maybe shift to the GSMLS to use inside DealAnalyzer modules. (DONE)
     Only run function when analyzing distance instead of running the risk of getting banded for webscrapping
-    ***The new db should be immediately put back into SQL not another csv/xslx
+    ***The lat_long results should be immediately put back into SQL as a table update
     - The function will take the file as an arg and convert into Pandas db
     - Add Request module exceptions to the function
     - add logic for if county and or city vars arent None. Could be str or list types
@@ -38,7 +66,10 @@ PRIORITIES:
             - Use a While loop to continue running that address if 400 or 500 level responses are given
     - Delete all of the Selenium code and replace with Request and BS4 module syntax (DONE)
     - Track the 'importance' key of the JSON file. May depict the accuracy of the location (DONE)
-
+- Run descriptive statistics for all cities: max, min, mean, median, mode, stddev and quartiles
+- Create function which creates email campaigns for specific counties and cities based on analysis results (adjusted every qtr)
+- *** Create a script that is solely run to download the quarterly sales results for RES, MUL, and LND properties
+- *** Create a script that is solely run to clean and transform the data to be stored in SQL databases
 
 4) Complete MachineLearning script
 5) Start the DealAnalysis script
@@ -152,3 +183,25 @@ except WebDriverException as WDE:
 else:
 
 label[title='10 - Atlantic']
+
+Traceback (most recent call last):
+  File "F:\Python 2.0\PyCharm Community Edition 2022.2.1\plugins\python-ce\helpers\pydev\pydevd.py", line 1496, in _exec
+    pydev_imports.execfile(file, globals, locals)  # execute the script
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python 2.0\PyCharm Community Edition 2022.2.1\plugins\python-ce\helpers\pydev\_pydev_imps\_pydev_execfile.py", line 18, in execfile
+    exec(compile(contents+"\n", file, 'exec'), glob, loc)
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1117, in <module>
+    obj.main()
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1109, in main
+    GSMLS.quarterly_sales_mul(driver)
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 69, in wrapper
+    result = original_function(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 714, in quarterly_sales_mul
+    GSMLS.results_found(driver_var, cities[city_id], qtr, 'MUL')
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 950, in results_found
+    check_all_results = WebDriverWait(driver_var, 30).until(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Python 2.0\pythonProject\venv\Real Estate Analysis\Lib\site-packages\selenium\webdriver\support\wait.py", line 95, in until
+    raise TimeoutException(message, screen, stacktrace)
+selenium.common.exceptions.TimeoutException: Message:
