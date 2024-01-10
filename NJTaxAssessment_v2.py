@@ -347,6 +347,23 @@ class NJTaxAssessment:
         except IndexError as IE:
             print(f'{IE}')
         else:
+
+            # Pre-clean the tax_db for use in GSMLS.py
+
+            db.insert(0, 'Property Location', db.pop('Property Location').str.replace(r'RD|RD\.', 'ROAD', regex=True)
+                      .str.replace(r'CT$|CT\.$', 'COURT', regex=True)
+                      .str.replace(r'ST$|ST\.$', 'STREET', regex=True)
+                      .str.replace(r'AVE$|AV$|AVE\.$|AV\.$', 'AVENUE', regex=True)
+                      .str.replace(r'DR$|DR\.$', 'DRIVE', regex=True)
+                      .str.replace(r'LN$|LA$|LN\.$', 'LANE', regex=True)
+                      .str.replace(r'PL$|PL\.$', 'PLACE', regex=True)
+                      .str.replace(r'TER$|TER\.$', 'TERRACE', regex=True)
+                      .str.replace(r'HWY$|HWY\.$', 'HIGHWAY', regex=True)
+                      .str.replace(r'PKWY$|PKWY\.$', 'PARKWAY', regex=True)
+                      .str.replace(r'CIR$|CIR\.$', 'CIRCLE', regex=True))
+
+            db.astype({'Sq. Ft.': 'int64'})
+
             return db
 
     @staticmethod

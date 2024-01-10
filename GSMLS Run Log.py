@@ -25,3 +25,5 @@ os.chdir('F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Sa
 with shelve.open('GSMLS Run Dictionary', writeback=True) as saved_data_file:
     saved_data_file['Run Log'] = run_log
 
+print('Dictionary Saved')
+
