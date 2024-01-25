@@ -1,6 +1,8 @@
 import re
 import time
 import os
+from copy import deepcopy
+from statistics import mean
 import requests
 import shelve
 import datetime
@@ -9,6 +11,8 @@ import pandas as pd
 import numpy as np
 from NJTaxAssessment_v2 import NJTaxAssessment
 from bs4 import BeautifulSoup
+from sqlalchemy import create_engine
+import psycopg2
 import logging
 from datetime import datetime
 import selenium
@@ -55,19 +59,29 @@ class GSMLS:
             res_db_list = []
             mul_db_list = []
             lnd_db_list = []
+            state_data_path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Real Estate Data'
             path = 'C:\\Users\\Omar\\Desktop\\STF'
+
+            os.chdir(state_data_path)
+            latest_data = os.listdir(state_data_path)[-1]
+            state_db = pd.read_excel(latest_data, sheet_name='All Months')
+
             os.chdir(path)
             dirty_dbs_list = os.listdir(path)
 
             for file in dirty_dbs_list:
                 if file.endswith('.xlsx'):
                     db = pd.read_excel(file, engine='openpyxl')
-                    city_name = db.loc[0, 'TOWN'].rstrip('*1234567890()')
-                    for ending in ['Town', 'Twp.', 'Boro', 'City']:
+                    city_name = db.loc[0, 'TOWN'].rstrip('*1234567890().')
+                    city_name2 = deepcopy(city_name)
+                    for ending in ['Town', 'Twp', 'Boro', 'City']:
                         if ending in city_name:
                             city_name = city_name.split(ending)[0].strip()
                     county_name = db.loc[0, 'COUNTY'].rstrip('*')
                     property_type = file.split(' ')[-3]
+                    mls_type = file.split(' ')[-1].rstrip('.xlsx')
+                    qtr = file.split(' ')[-4][:2]
+                    year = int(file.split(' ')[-4][2:])
 
                     tax_db = NJTaxAssessment.city_database(county_name, city_name)
                     tax_db.set_index('Property Location')
@@ -75,6 +89,9 @@ class GSMLS:
                     kwargs['db'] = db
                     kwargs['tax_db'] = tax_db
                     kwargs['property_type'] = property_type
+                    kwargs['mls_type'] = mls_type
+                    kwargs['qtr'] = qtr
+                    kwargs['median_sales_price'] = GSMLS.median_sales_price(state_db, city_name2, qtr, year)
 
                     result = original_function(*args, **kwargs)
 
@@ -89,6 +106,12 @@ class GSMLS:
 
                 else:
                     continue
+            # Separate vars may not be necessary. Just insert the
+            # Concatenated dbs once the pandas2sql function is created
+
+            res_main_db = pd.concat(res_db_list)
+            mul_main_db = pd.concat(mul_db_list)
+            lnd_main_db = pd.concat(lnd_db_list)
 
             logger.removeHandler(f_handler)
             logger.removeHandler(c_handler)
@@ -96,7 +119,29 @@ class GSMLS:
 
         return wrapper
 
-
+    # @staticmethod
+    # def kpi(original_function):
+    #     def wrapper(*args, **kwargs):
+    #
+    #         property_type = str(original_function.__name__)[-3:].upper()
+    #         if property_type == 'RES':
+    #             kpi_db = GSMLS.potential_farm_area_res()
+    #         elif property_type == 'MUL':
+    #             pass
+    #         elif property_type == 'LND':
+    #             pass
+    #         elif property_type == 'COM':
+    #             pass
+    #
+    #         kpi_dict = {}
+    #         quarterly_sales_data = sql2pandas('RES')
+    #         for group, data in kpi:
+    #             kpi_dict.setdefault([group[0], {})
+    #             kpi_dict[group[0]].setdefault(group[1], 0)
+    #             # This currently wont work because the city names from both DB dont match
+    #             sales_price = quarterly_sales_data[quarterly_sales_data['TOWN'] == group[1]]['SALESPRICE'].median()
+    #             std = quarterly_sales_data[quarterly_sales_data['TOWN'] == group[1]].std()
+    #             kpi_dict[group[0]][group[1]] = sales_price - std
 
 
     @staticmethod
@@ -314,7 +359,15 @@ class GSMLS:
         return GSMLS.find_cities(results1)
 
     @staticmethod
-    def clean_and_transform_data_lnd(pandas_db):
+    def clean_addresses(search_string):
+
+        target_list = str(search_string.group()).split(' ')
+        new_address_list = [i for i in target_list if i != '']
+
+        return ' '.join(new_address_list)
+
+    @staticmethod
+    def clean_and_transform_data_lnd(pandas_db, mls, qtr):
         """
         Cleaning that needs to be done
         1. Filter for columns that I want displayed
@@ -329,6 +382,8 @@ class GSMLS:
             # Can be vectorized by doing db['UC-Days'] = db['Closing Date'] - db['Under Contract']
         9. Convert all the values in the LOTSIZE column to sqft. Use Pandas str methods
         :param pandas_db:
+        :param mls
+        :param qtr
         :return:
         """
 
@@ -337,14 +392,25 @@ class GSMLS:
         pandas_db.round({'SPLP': 3})
 
         # List item 2
-        pandas_db.insert(2, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
-        pandas_db.insert(3, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
-        pandas_db.insert(4, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
-        pandas_db.insert(6, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
+        pandas_db['MLS'] = mls
+        pandas_db['Variance Needed'] = 'N*'  # This is a temporary value which will be changed to either Y or N when the function is created
+        pandas_db['Qtr'] = qtr
+        pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - pandas_db['SALESPRICE'].mean()) / pandas_db[
+            'SALESPRICE'].std()
+        pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
+        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(2, 'LATITUDE', 0)
+        pandas_db.insert(3, 'LONGITUDE', 0)
+        pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
+        pandas_db.insert(5, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
+        pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
+        pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
         pandas_db.insert(12, 'SALESPRICE', pandas_db.pop('SALESPRICE'))
         pandas_db.insert(13, 'SPLP', pandas_db.pop('SPLP'))
-        pandas_db.insert(14, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
-        pandas_db.insert(17, 'LOTDESC', pandas_db.pop('LOTDESC'))
+        pandas_db.insert(14, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
+        pandas_db.insert(15, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(17, 'Variance Needed', pandas_db.pop('Variance Needed'))
+        pandas_db.insert(18, 'LOTDESC', pandas_db.pop('LOTDESC'))
 
         # List item 3
         pandas_db.insert(5, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
@@ -369,14 +435,12 @@ class GSMLS:
                          .str.replace(r'Hwy$', 'Highway', regex=True)
                          .str.replace(r'Pkwy$', 'Parkway', regex=True)
                          .str.replace(r'Cir$', 'Circle', regex=True))
-        # List item 7
-        pandas_db.insert(3, 'LATITUDE', 0)
-        pandas_db.insert(4, 'LONGITUDE', 0)
+        pandas_db.insert(6, 'ADDRESS', pandas_db.pop('ADDRESS').str.replace(r'.*', GSMLS.clean_addresses, regex=True))
 
         return pandas_db
 
     @staticmethod
-    def clean_and_transform_data_mul(pandas_db):
+    def clean_and_transform_data_mul(pandas_db, mls, qtr):
         """
         Cleaning that needs to be done
         1. Filter for columns that I want displayed
@@ -391,6 +455,8 @@ class GSMLS:
             # Can be vectorized by doing db['UC-Days'] = db['Closing Date'] - db['Under Contract']
         9. Convert all the values in the LOTSIZE column to sqft. Use Pandas str methods
         :param pandas_db:
+        :param mls:
+        :param qtr:
         :return:
         """
 
@@ -401,14 +467,23 @@ class GSMLS:
         pandas_db.round({'BATHSTOTAL': 1, 'SPLP': 3})
 
         # List item 2
-        pandas_db.insert(2, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
-        pandas_db.insert(3, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
-        pandas_db.insert(4, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
-        pandas_db.insert(6, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
+        pandas_db['MLS'] = mls
+        pandas_db['Qtr'] = qtr
+        pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - pandas_db['SALESPRICE'].mean()) / pandas_db[
+            'SALESPRICE'].std()
+        pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
+        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(2, 'LATITUDE', 0)
+        pandas_db.insert(3, 'LONGITUDE', 0)
+        pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
+        pandas_db.insert(5, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
+        pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
+        pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
         pandas_db.insert(11, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(18, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
 
         # List item 3
-        pandas_db.insert(5, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
+        pandas_db.insert(7, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
         # List item 4 and 8
         pandas_db.insert(26, 'LISTDATE', pd.to_datetime(pandas_db.pop('LISTDATE')))
         pandas_db.insert(27, 'PENDINGDATE', pd.to_datetime(pandas_db.pop('PENDINGDATE')))
@@ -430,14 +505,12 @@ class GSMLS:
                          .str.replace(r'Hwy$', 'Highway', regex=True)
                          .str.replace(r'Pkwy$', 'Parkway', regex=True)
                          .str.replace(r'Cir$', 'Circle', regex=True))
-        # List item 7
-        pandas_db.insert(3, 'LATITUDE', 0)
-        pandas_db.insert(4, 'LONGITUDE', 0)
+        pandas_db.insert(6, 'ADDRESS', pandas_db.pop('ADDRESS').str.replace(r'.*', GSMLS.clean_addresses, regex=True))
 
         return pandas_db
 
     @staticmethod
-    def clean_and_transform_data_res(pandas_db):
+    def clean_and_transform_data_res(pandas_db, mls, qtr, median_sales):
         """
         Cleaning that needs to be done
         1. Filter for columns that I want displayed
@@ -452,6 +525,10 @@ class GSMLS:
             # Can be vectorized by doing db['UC-Days'] = db['Closing Date'] - db['Under Contract']
         9. Convert all the values in the LOTSIZE column to sqft. Use Pandas str methods
         :param pandas_db:
+        :param mls:
+        :param qtr:
+        :param median_sales:
+
         :return:
         """
 
@@ -463,15 +540,23 @@ class GSMLS:
         pandas_db.round({'BATHSTOTAL': 1, 'SPLP': 3})
 
         # List item 2
-        pandas_db.insert(2, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
-        pandas_db.insert(3, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
-        pandas_db.insert(4, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
-        pandas_db.insert(6, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
+        pandas_db['MLS'] = mls
+        pandas_db['Qtr'] = qtr
+        pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - median_sales[0]) / median_sales[1]
+        pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
+        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(2, 'LATITUDE', 0)
+        pandas_db.insert(3, 'LONGITUDE', 0)
+        pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
+        pandas_db.insert(5, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
+        pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
+        pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
         pandas_db.insert(11, 'SQFTAPPROX', pandas_db.pop('SQFTAPPROX'))
         pandas_db.insert(12, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(18, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
 
         # List item 3
-        pandas_db.insert(5, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
+        pandas_db.insert(7, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
         # List item 4 and 8
         pandas_db.insert(26, 'LISTDATE', pd.to_datetime(pandas_db.pop('LISTDATE')))
         pandas_db.insert(27, 'PENDINGDATE', pd.to_datetime(pandas_db.pop('PENDINGDATE')))
@@ -484,20 +569,18 @@ class GSMLS:
         street_num = pandas_db.pop('STREETNUMDISPLAY')
         street_add = pandas_db.pop('STREETNAME')
         pandas_db.insert(3, 'ADDRESS', street_num.str.cat(street_add, join='left', sep=' ')
-                         .str.replace(r'Rd$', 'Road', regex=True)
-                         .str.replace(r'Ct$', 'Court', regex=True)
-                         .str.replace(r'St$', 'Street', regex=True)
-                         .str.replace(r'Ave$', 'Avenue', regex=True)
-                         .str.replace(r'Dr$', 'Drive', regex=True)
-                         .str.replace(r'Ln$', 'Lane', regex=True)
-                         .str.replace(r'Pl$', 'Place', regex=True)
-                         .str.replace(r'Ter$', 'Terrace', regex=True)
-                         .str.replace(r'Hwy$', 'Highway', regex=True)
-                         .str.replace(r'Pkwy$', 'Parkway', regex=True)
-                         .str.replace(r'Cir$', 'Circle', regex=True))
-        # List item 7
-        pandas_db.insert(3, 'LATITUDE', 0)
-        pandas_db.insert(4, 'LONGITUDE', 0)
+                         .str.replace(r'Rd$|Rd\.$', 'Road', regex=True)
+                         .str.replace(r'Ct$|Ct\.$', 'Court', regex=True)
+                         .str.replace(r'St$|St\.$', 'Street', regex=True)
+                         .str.replace(r'Ave$|Ave\.$', 'Avenue', regex=True)
+                         .str.replace(r'Dr$|Dr\.$', 'Drive', regex=True)
+                         .str.replace(r'Ln$|Ln\.$', 'Lane', regex=True)
+                         .str.replace(r'Pl$|Pl\.$', 'Place', regex=True)
+                         .str.replace(r'Ter$|Ter\.$', 'Terrace', regex=True)
+                         .str.replace(r'Hwy$|Hwy\.$', 'Highway', regex=True)
+                         .str.replace(r'Pkwy$|Pkwy\.$', 'Parkway', regex=True)
+                         .str.replace(r'Cir$|Cir\.$', 'Circle', regex=True))
+        pandas_db.insert(6, 'ADDRESS', pandas_db.pop('ADDRESS').str.replace(r'.*', GSMLS.clean_addresses, regex=True))
 
         return pandas_db
 
@@ -509,16 +592,20 @@ class GSMLS:
         This function accepts an Excel document or Pandas database to clean and transform all data into uniform
         datatypes before being transferred into a SQL database. This also fortifies the data with all the proper
         living space sq_ft and converts all lot size values to sq_ft
-        - Fill the SQFT column using sq_ft_finder method
+        - Fill the SQFT column using find_sq_ft method
         :param dirty_db:
         :param tax_db:
         :param property_type:
+        :param qtr:
         :return:
         """
 
         dirty_db = kwargs['db']
         tax_db = kwargs['tax_db']
         property_type = kwargs['property_type']
+        mls_type = kwargs['mls_type']
+        qtr = kwargs['qtr']
+        median_sales_prices = kwargs['median_sales_price']
 
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
@@ -526,8 +613,8 @@ class GSMLS:
 
         target_columns = ['TAXID', 'MLSNUM', 'BLOCKID', 'LOTID', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY',
                           'ROOMS', 'BEDS', 'BATHSTOTAL', 'LOTSIZE', 'LOTDESC', 'SQFTAPPROX', 'ORIGLISTPRICE', 'LISTPRICE',
-                          'SALESPRICE', 'SPLP', 'LOANTERMS', 'YEARBUILT', 'YEARBUILTDESC', 'STYLEPRIMARY', 'PROPCOLOR',
-                          'RENOVATED',  'TAXAMOUNT', 'TAXRATE', 'LISTDATE', 'PENDINGDATE',
+                          'SALESPRICE', 'SPLP', 'LOANTERMS', 'YEARBUILT', 'YEARBUILTDESC', 'STYLEPRIMARY',
+                          'PROPCOLOR', 'RENOVATED',  'TAXAMOUNT', 'TAXRATE', 'LISTDATE', 'PENDINGDATE',
                           'CLOSEDDATE', 'DAYSONMARKET', 'OFFICENAME', 'OFFICEPHONE', 'FAX',
                           'AGENTNAME', 'AGENTPHONE', 'COMPBUY', 'SELLOFFICENAME', 'SELLAGENTNAME', 'FIREPLACES',
                           'GARAGECAP', 'POOL', 'POOLDESC', 'BASEMENT', 'BASEDESC', 'AMENITIES', 'APPLIANCES', 'COOLSYSTEM',
@@ -537,16 +624,19 @@ class GSMLS:
 
         if property_type == 'RES':
             clean_db = dirty_db[target_columns].fillna(np.nan)
-            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_res).pipe(GSMLS.sq_ft_finder, tax_db=tax_db)\
+            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_res, mls=mls_type, qtr=qtr, median_sales=median_sales_prices)\
+                .pipe(GSMLS.find_sq_ft, tax_db=tax_db)\
                 .pipe(GSMLS.convert_lot_size, property_type=property_type)
 
         elif property_type == 'MUL':
-            temp_target_columns = [column for column in target_columns if column not in ['POOL', 'POOLDESC', 'SQFTAPPROX']]
+            temp_target_columns = [column for column in target_columns if column not in ['POOL', 'POOLDESC',
+                                    'SQFTAPPROX', 'STYLEPRIMARY', 'FIREPLACES', 'AMENITIES', 'APPLIANCES',
+                                    'FLOORS', 'ROOMLVL1DESC', 'ROOMLVL2DESC', 'ROOMLVL3DESC']]
             temp_target_columns.extend(['UNIT1BATHS', 'UNIT1BEDS', 'UNIT2BATHS', 'UNIT2BEDS', 'UNIT3BATHS', 'UNIT3BEDS',
                                    'UNIT4BATHS', 'UNIT4BEDS'])
             clean_db = dirty_db[temp_target_columns].fillna(np.nan)
-            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_mul).pipe(GSMLS.total_units)\
-                .pipe(GSMLS.convert_lot_size, property_type=property_type)
+            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_mul, mls=mls_type, qtr=qtr)\
+                .pipe(GSMLS.total_units).pipe(GSMLS.convert_lot_size, property_type=property_type)
 
         elif property_type == 'LND':
             remove_columns = ['ROOMS', 'BEDS', 'BATHSTOTAL', 'YEARBUILT', 'POOLDESC', 'SQFTAPPROX',
@@ -561,7 +651,7 @@ class GSMLS:
                                    'PERCTEST', 'ROADSURFACEDESC', 'SERVICES', 'SEWERINFO', 'SOILTYPE', 'WATERINFO',
                                    'ZONINGDESC'])
             clean_db = dirty_db[temp_target_columns].fillna(np.nan)
-            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_lnd)\
+            clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_lnd, mls=mls_type, qtr=qtr)\
                 .pipe(GSMLS.convert_lot_size, property_type=property_type)
 
         return clean_db
@@ -593,6 +683,28 @@ class GSMLS:
         pass
 
     @staticmethod
+    def connect2postgresql():
+
+        # Do I create a function which retrieve my info from UniversalFunction.get_us_pw?
+        '''
+        database: the name of the database that you want to connect.
+        user: the username used to authenticate.
+        password: password used to authenticate.
+        host: database server address e.g., localhost or an IP address.
+        port: the port number that defaults to 5432 if it is not provided.
+        '''
+
+        conn = psycopg2.connect(
+            host="localhost",
+            database="suppliers",
+            user="postgres",
+            password="Abcd1234")
+
+        cur = conn.cursor()
+
+        return cur
+
+    @staticmethod
     def convert_lot_size(db, property_type):
         """
 
@@ -620,19 +732,33 @@ class GSMLS:
 
         return db
 
+    @staticmethod
+    def cooling_system_statistics(db, **kwargs):
+        # Can only be used with RES and MUL property types
+        property_type = str(db.__name__)[-3:].upper()
+
+        if property_type == 'RES' or 'MUL':
+            interior_columns = ['COUNTY', 'TOWN', 'COOLSYSTEM']
+            interior_df = db[interior_columns].groupby(['COUNTY', 'TOWN'])
+            cooling_system_stats = interior_df['COOLSYSTEM'].value_counts()
+
+            return cooling_system_stats
+        else:
+            raise ValueError
+
     def descriptive_stats_state(self):
         # Run descriptive analysis on all the homes for the state for the quarter
         pass
 
-    def descriptive_stats_county(self):
-        # Run descriptive analysis on all the homes for the county for the quarter
-        pass
+    @staticmethod
+    def descriptive_statistics_county(db, **kwargs):
+        # Can be used with any property type RES, MUL, LND
 
-    def descriptive_stats_township(self):
-        # Run descriptive analysis on all the homes for the city/town for the quarter
-        # Create pie-charts for: types of mortgages used, home types, bed/bath combos, avg beds, avg baths
-        # Avg with pools, fireplaces, central air, etc
-        pass
+        main_columns = ['COUNTY', 'TOWN', 'LISTPRICE', 'SALESPRICE', 'DAYSONMARKET', 'UC-DAYS', 'SPLP']
+        target_df = db[main_columns].groupby(['COUNTY', 'TOWN'])
+        descriptive_stats = target_df.describe()
+
+        return descriptive_stats
 
     @staticmethod
     def download_manager(cities, city_id, property_type, qtr, driver_var, logger):
@@ -651,6 +777,12 @@ class GSMLS:
             GSMLS.results_found(driver_var, cities[city_id], qtr, property_type)
             GSMLS.set_city(city_id, driver_var)
             logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+
+    @staticmethod
+    @logger_decorator
+    # @kpi
+    def email_campaign(**kwargs):
+        pass
 
     @staticmethod
     def find_cities(page_source):
@@ -695,6 +827,64 @@ class GSMLS:
         return counties
 
     @staticmethod
+    def find_sq_ft(db, tax_db):
+        """
+
+        :param db:
+        :param tax_db:
+        :return:
+        """
+
+        numbers_dict = {'1ST': 'FIRST', 'FIRST': '1ST', '2ND': 'SECOND', 'SECOND': '2ND',
+                        '3RD': 'THIRD', 'THIRD': '3RD', '4TH': 'FOURTH', 'FOURTH': '4TH',
+                        '5TH': 'FIFTH', 'FIFTH': '5TH', '6TH': 'SIXTH', 'SIXTH': '6TH',
+                        '7TH': 'SEVENTH', 'SEVENTH': '7TH', '8TH': 'EIGHTH', 'EIGHTH': '8TH',
+                        '9TH': 'NINTH', 'NINTH': '9TH', '10TH': 'TENTH', 'TENTH': '10TH'}
+
+        address_list = db['ADDRESS'].to_list()
+        tax_address_list = tax_db['Property Location'].to_list()
+
+        db.set_index('ADDRESS', inplace=True, drop=True)
+        tax_db.set_index('Property Location', inplace=True, drop=False)  # Column would still need to be indexed in the event of a ValueError so leave duplicate
+        numbered_blocks = re.compile(
+            r'\d{1,2}?st|\d{1,2}?nd|\d{1,2}?rd|\d{1,2}?th|First|Second|Third|Fourth|Fifth|Sixth|Seventh|Eighth|Nineth|Tenth')
+
+        for address in address_list:
+            search_address = numbered_blocks.search(address, re.IGNORECASE)
+            if search_address is None:
+
+                db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list)
+
+            elif search_address is not None:
+                # Check if the current spelling of the address is the same as in the tax_tb
+                if address.upper() in tax_address_list:
+
+                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list)
+
+                else:
+                    # Change the spelling of the address and check tax_db again
+                    address_2 = address.replace(search_address.group(0), numbers_dict[search_address.group(0).upper()])
+
+                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list, address_2)
+
+        return db
+
+    @staticmethod
+    def floor_type_statistics(db, **kwargs):
+        # Can only be used with RES property type
+
+        property_type = str(db.__name__)[-3:].upper()
+
+        if property_type == 'RES':
+            type_columns = ['COUNTY', 'TOWN', 'FLOORS']
+            homes_df = db[type_columns].groupby(['COUNTY', 'TOWN'])
+            floor_type_stats = homes_df.value_counts()
+
+            return floor_type_stats
+        else:
+            raise ValueError
+
+    @staticmethod
     def get_us_pw(website):
         """
 
@@ -706,12 +896,27 @@ class GSMLS:
         os.chdir('F:\\Jibreel Hameed\\Kryptonite')
 
         db = pd.read_excel('get_us_pw.xlsx', index_col=0)
-        username = db.loc['GSMLS', 'Username']
-        pw = db.loc['GSMLS', 'Password']
+        username = db.loc[website, 'Username']
+        pw = db.loc[website, 'Password']
 
         os.chdir(previous_wd)
 
         return username, pw
+
+    @staticmethod
+    def home_type_statistics(db, **kwargs):
+        # Can only be used with RES property type
+
+        property_type = str(db.__name__)[-3:].upper()
+
+        if property_type == 'RES':
+            type_columns = ['COUNTY', 'TOWN', 'STYLEPRIMARY']
+            homes_df = db[type_columns].groupby(['COUNTY', 'TOWN'])
+            home_type_stats = homes_df.value_counts()
+
+            return home_type_stats
+        else:
+            raise ValueError
 
     def hotsheets(self):
         # Run the Hotsheets on GSMLS to pull the back on market, withdrawn listings, price changes from target cities
@@ -786,31 +991,103 @@ class GSMLS:
             return str(float(search_string.group(1)) * float(search_string.group(2)))
         else:
             return str(float(search_string.group(3)) * float(search_string.group(4)))
+
     @staticmethod
-    def login(driver_var):
+    def loan_type_statistics(db, **kwargs):
+        # Can be used with any property type RES, MUL, LND
+
+        loan_columns = ['COUNTY', 'TOWN', 'LOANTERMS']
+        loan_df = db[loan_columns].groupby(['COUNTY', 'TOWN'])
+        loan_stats = loan_df.value_counts()
+
+        return loan_stats
+
+    @staticmethod
+    def login(website, driver_var):
         """
 
+        :param website:
         :param driver_var:
         :return:
         """
-        username, pw = GSMLS.get_us_pw(GSMLS)
+        username, pw = GSMLS.get_us_pw(website)
 
-        gsmls_id = driver_var.find_element(By.ID, 'usernametxt')
-        gsmls_id.click()
-        gsmls_id.send_keys(username)
-        password = driver_var.find_element(By.ID, 'passwordtxt')
-        password.click()
-        password.send_keys(pw)
-        login_button = driver_var.find_element(By.ID, 'login-btn')
-        login_button.click()
-        page_results = driver_var.page_source
-        soup = BeautifulSoup(page_results, 'html.parser')
-        if 'class="gs-btn-submit-sh gs-btn-submit-two Yes-focus"' in str(soup):
-            terminate_duplicate_session = WebDriverWait(driver_var, 5).until(
-                            EC.presence_of_element_located((By.XPATH, '//*[@id="message-box"]/div[3]/input[1]')))
-            terminate_duplicate_session.click()
-        else:
-            pass
+        if website == 'GSMLS':
+            gsmls_id = driver_var.find_element(By.ID, 'usernametxt')
+            gsmls_id.click()
+            gsmls_id.send_keys(username)
+            password = driver_var.find_element(By.ID, 'passwordtxt')
+            password.click()
+            password.send_keys(pw)
+            login_button = driver_var.find_element(By.ID, 'login-btn')
+            login_button.click()
+            page_results = driver_var.page_source
+            soup = BeautifulSoup(page_results, 'html.parser')
+            if 'class="gs-btn-submit-sh gs-btn-submit-two Yes-focus"' in str(soup):
+                terminate_duplicate_session = WebDriverWait(driver_var, 5).until(
+                                EC.presence_of_element_located((By.XPATH, '//*[@id="message-box"]/div[3]/input[1]')))
+                terminate_duplicate_session.click()
+            else:
+                pass
+
+        elif website == 'RPR':
+            enter_email = WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.ID, "SignInEmail")))
+            enter_email.click()
+            enter_email.send_keys(username)
+
+            password = WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.ID, "SignInPassword")))
+            password.click()
+            password.send_keys(pw)
+
+            time.sleep(1)  # Built in latency for sign in button to appear. Is grey out until forms are filled
+            sign_in = WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.ID, "SignInBtn")))
+            sign_in.click()
+
+    @staticmethod
+    def median_sales_price(db, town_name, qtr, year):
+
+        towns_list = db['City'].unique().tolist()
+        for instance in towns_list:
+            if town_name in instance:
+                city = towns_list[towns_list.index(instance)]
+                break
+
+        target_db = db[(db['City'] == city) & (db['Quarter'] == qtr) & (db['Year'] == year)]
+
+        mean_sales_price = round(target_db['Median Sales Prices'].mean(), 2)
+        sales_prices_std = round(target_db['Median Sales Prices'].std(), 2)
+
+        return tuple([mean_sales_price, sales_prices_std])
+
+    @staticmethod
+    def municipality_sales_avg(series, db, dictionary):
+
+        county_list = series.index.to_list()
+        county_sales = series.to_list()
+
+        city_sales_per_list = []
+        for county, county_sum in zip(county_list, county_sales):
+            for group, data in db:
+                if county == group[0]:
+                    city_sales_per_list.append(data.sum() / county_sum)
+                else:
+                    continue
+
+        city_sales_avg = round((mean(city_sales_per_list)) * 100, 3)
+
+        market_dict = {}
+        for group, data in db:
+            if group[0] in dictionary.keys():
+                if (data.sum() / dictionary[group[0]][0]) * 100 >= city_sales_avg:
+                    market_dict.setdefault(group[0], {})
+                    market_dict[group[0]].setdefault(group[1], 0)
+                    market_dict[group[0]][group[1]] = round((data.sum() / dictionary[group[0]][0]) * 100, 3)
+
+        return market_dict
+
 
     @staticmethod
     def no_results(city_id_var, driver_var):
@@ -852,18 +1129,149 @@ class GSMLS:
 
     @staticmethod
     @logger_decorator
-    def pandas2sql(**kwargs):
-        pass
+    def pandas2sql(db, table_name, **kwargs):
+
+        logger = kwargs['logger']
+        f_handler = kwargs['f_handler']
+        c_handler = kwargs['c_handler']
+
+        # I need to not drop the duplicate 'ADDRESS' table in the dbs
+        cursor = GSMLS.connect2postgresql()  # Creates a seperate connection to PostgreSQL
+
+        # Creates a connection from Pandas to PostgreSQL
+        engine = create_engine("postgresql://scott:tiger@localhost:5432/mydatabase")
+
+        if GSMLS.sql_table_check(cursor, table_name):
+            db.to_sql(table_name, engine, if_exists='append', chunksize=1000)
+
+        else:
+            db.to_sql(table_name, engine, if_exists='fail', chunksize=1000)
 
     def population(self, city):
         # Create a method that can look into the population of a city over
         # a 5/10/30-year period and determine the future growth of the city
         pass
 
-    def possible_mls_deals(self, city):
-        # Create a method that can look for deals on the MLS:
-        # listings with DOM > X amount of days or under a certain price
-        pass
+    @staticmethod
+    def potential_farm_area_res(year_var: int, quarter_var: str, median_sales_cap=3000000):
+        # Upload the most recent NJRealtor data
+
+        previous_cwd = os.getcwd()
+        path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Real Estate Data'
+        os.chdir(path)
+        latest_file = os.listdir(path)[-1]
+        # Use the function which connects to PostgreSQL and gets the most recent table
+
+        db = pd.read_excel(latest_file, sheet_name='All Months')
+        os.chdir(previous_cwd)
+
+        temp_df1 = db[(db['Median Sales Prices'] <= median_sales_cap) & (db['Year'] == year_var) & (db['Quarter'] == quarter_var)].sort_values(by=['Closed Sales'], ascending=False)
+        target_df = temp_df1.groupby(['County', 'City'])['Closed Sales']
+        target_series = temp_df1.groupby('County')['Closed Sales'].sum()
+
+        county_farm_dict = GSMLS.target_counties_res(target_series)
+        farm_area = GSMLS.municipality_sales_avg(target_series, target_df, county_farm_dict)
+
+        return farm_area
+
+    @staticmethod
+    def property_archive(mls_number, mls_address=None):
+
+        contact_num = 2
+
+        options = Options()
+        # options.add_experimental_option("prefs", s)
+        # options.add_argument("--headless=new")
+        driver = webdriver.Edge(service=Service(), options=options)
+        driver.maximize_window()
+        website = 'https://mls.gsmls.com/member/'
+        driver.get(website)
+
+        # Login to the GSMLS
+        GSMLS.login('GSMLS', driver)
+
+        # Type in the MLS number or address. Create own function thats able to use both if necessary
+        search_listing = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, 'qcksrchmlstxt')))
+        search_listing.click()
+        search_listing.send_keys(mls_number)
+
+        print('Searching for MLS number...')
+        time.sleep(3.5)  # Built in latency to allow the table to populate
+        page_results = driver.page_source
+
+        # Find the address table
+        soup = BeautifulSoup(page_results, 'html.parser')
+        table = soup.find('table', {"class": "df-table nomin mart0", "id": "search-help-table"})
+        main_table = table.find('tbody')
+        all_rows = main_table.find_all('tr')
+
+        for row in all_rows:
+            if row.td.a['value'] == mls_number:
+
+                click_mls_number = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.ID, 'selcontact' + str(contact_num))))
+                click_mls_number.click()
+
+                #  Clicking the MLS number will open up a new window. I need to switch to that window
+                time.sleep(2)
+                home_window = driver.current_window_handle
+                windows_list = driver.window_handles
+                new_window = [window for window in windows_list if window != home_window][0]
+                driver.switch_to.window(new_window)
+
+                time.sleep(2)
+                page_results2 = driver.page_source
+                soup = BeautifulSoup(page_results2, 'html.parser')
+                sidebar_table = soup.find('div', {"class": "side-bar-padding"})
+                sidebar_buttons = sidebar_table.find_all('div', {"class": "sidebar-button select"})
+                for button in sidebar_buttons:
+
+                    if button.span['class'][1] == 'fa-history':
+
+                        property_archive = WebDriverWait(driver, 20).until(
+                            EC.presence_of_element_located((By.XPATH, "//span[contains(@class,'fa fa-history fa-lg')]")))
+                        property_archive.click()
+                        time.sleep(2)
+                        windows_list = driver.window_handles
+                        new_window2 = [window for window in windows_list if window not in [home_window, new_window]][0]
+                        driver.switch_to.window(new_window2)
+
+                        time.sleep(2)
+                        address_list = set()
+                        page_results3 = driver.page_source
+                        soup = BeautifulSoup(page_results3, 'html.parser')
+                        # print(soup)
+                        mls_tables = soup.find_all('table', {"class": "oneline"})
+
+                        for table in mls_tables:
+                            main_table2 = table.find('tbody')
+                            mls_history = main_table2.find_all('tr')[1]
+                            address_cell = mls_history.find_all('td')[3]
+
+                            address_list.add(address_cell.get_text())
+
+                            # Make sure I create functions to log out
+                        # print(address_list)
+                        return address_list
+
+                    elif button.span['class'][1] != 'fa-history':
+                        continue
+
+                    else:
+                        # There's no Property Archive. Use RPR program
+                        pass
+
+            else:
+                contact_num += 1
+                continue
+
+        # main_table2 = table.find('a', {"href": "#", "class": "has-submenu"})['id']
+        # main_search = WebDriverWait(driver_var, 5).until(
+        #     EC.presence_of_element_located((By.ID, submenu_id)))
+        # main_search.click()
+
+
 
     @staticmethod
     @logger_decorator
@@ -1286,6 +1694,159 @@ class GSMLS:
         close_form.click()
 
     @staticmethod
+    def rpr(search_type, full_address):
+
+        options = Options()
+        # options.add_experimental_option("prefs", s)
+        # options.add_argument("--headless=new")
+        driver = webdriver.Edge(service=Service(), options=options)
+        driver.maximize_window()
+        website = 'https://www.narrpr.com/'
+        driver.get(website)
+
+        GSMLS.login('RPR', driver)
+        address_found = GSMLS.rpr_search_address(full_address, driver)
+
+        if address_found:
+            if search_type == 'SQFT':
+                results = int(GSMLS.rpr_sq_ft(driver))
+
+            elif search_type == 'FULL':
+                results = GSMLS.rpr_property_facts(driver)
+
+            return results
+
+        else:
+            return 0
+
+    @staticmethod
+    def rpr_property_facts(driver_var):
+
+        county_html_pattern = re.compile(r'<span\s_ngcontent-ng-.*\sclass="ng-tns-.*">(\w+\sCounty)</span>')
+        block_lot_pattern = re.compile(r'<span\s_ngcontent-ng-.*\sclass="ng-tns-.*">(LOT:\d{1,5}?\sBLK:\d{1,5}?\sDIST:\d{1,5}?)')
+
+        property_dict = {}
+        page_results = driver_var.page_source
+        soup = BeautifulSoup(page_results, 'html.parser')
+
+        property_dict['estimated_value'] = soup.find('div', {"class": "price ng-star-inserted"}).a.get_text()
+        property_dict['rvm_last_updated'] = soup.find('div', {
+            "class": "footer ng-star-inserted"}).div.div.next_sibling.get_text()
+        property_dict['County'] = county_html_pattern.search(str(soup)).group(1)
+        property_dict['Block & Lot'] = block_lot_pattern.search(str(soup)).group(1)
+
+        key_facts = soup.find('section', {"class": "key-facts"})
+        basic_facts = soup.find('ul', {"class": "has-columns three-columns ng-star-inserted"})
+        property_facts = soup.find('table', {"class": "table is-fullwidth is striped details-table"}).tbody
+        exterior_features = soup.find_all('ul', {"class": "flex-item-equal-width ng-star-inserted"})
+
+        for idx, item in enumerate(key_facts.find_all('div')):
+            if idx == 0:
+                property_dict['sq_ft'] = item.get_text()
+            elif idx == 1:
+                property_dict['lot_size'] = item.get_text()
+
+        for idx1, item1 in enumerate(basic_facts.find_all('div', {"class": "break-word"})):
+            if idx1 == 0:
+                property_dict['type'] = item1.get_text()
+            elif idx1 == 2:
+                property_dict['owner_name'] = item1.get_text()
+
+        for idx2, item2 in enumerate(property_facts.find_all('tr', {"class": "ng-star-inserted"})):
+            if idx2 in [2, 3, 4, 5]:
+                property_dict[item2.td.get_text().strip()] = item2.find('div', {
+                    "class": "is-print-only ng-star-inserted"}).get_text()
+            else:
+                property_dict[item2.td.get_text().strip()] = item2.td.next_sibling.div.get_text()
+
+        for idx3, item3 in enumerate(exterior_features):
+            for idx4, item4 in enumerate(item3.find_all('li', {"class": "ng-star-inserted"})):
+                if idx3 == 0 and idx4 == 1:
+                    property_dict[item4.div.get_text().strip()] = item4.div.next_sibling.span.get_text().strip()
+
+                elif idx3 == 1 and idx4 == 0:
+                    property_dict[item4.div.get_text().strip()] = item4.div.next_sibling.span.get_text().strip()
+
+    # I need tro see how I can get the county, block and lot number
+
+        return property_dict
+
+    @staticmethod
+    @logger_decorator
+    def rpr_search_address(mls_address, driver_var, **kwargs):
+
+        logger = kwargs['logger']
+        f_handler = kwargs['f_handler']
+        c_handler = kwargs['c_handler']
+
+        time.sleep(1.5)  # Built in latency for sign in page to appear.
+        location = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Enter Address, Place, APN/Tax IDs or Listing IDs']")))
+        location.click()
+        location.send_keys(mls_address)
+
+        page_results = driver_var.page_source
+        soup = BeautifulSoup(page_results, 'html.parser')
+        address_matches = soup.find('div', {"class": "ng-star-inserted"})
+        suggested_address_list = address_matches.find_all('div', {
+            "class": "suggestion-container auto-suggest-item keyboard-nav-suggestion-item ng-star-inserted"})
+
+        if len(suggested_address_list) < 1:
+            logger.info(f'{mls_address} not found')
+
+            logger.removeHandler(f_handler)
+            logger.removeHandler(c_handler)
+            logging.shutdown()
+
+            return False
+
+        else:
+            address_part_list = []
+            for idx, address in enumerate(suggested_address_list):
+
+                suggested_text = address.div.find_all('b', {"class": "highlighted-text"})
+
+                for idx1 in suggested_text:
+                    address_part_list.append(idx1.get_text())
+
+                true_address = ' '.join(address_part_list)
+
+                if true_address == mls_address:
+                    logger.info(f'{mls_address} found')
+                    click_address = WebDriverWait(driver_var, 10).until(
+                        EC.presence_of_element_located((By.XPATH, "(//div[@class='suggestion-container auto-suggest-item keyboard-nav-suggestion-item ng-star-inserted'])[" + str(idx) + "]")))
+                    click_address.click()
+
+                    logger.removeHandler(f_handler)
+                    logger.removeHandler(c_handler)
+                    logging.shutdown()
+
+                    return True
+
+                elif true_address != mls_address:
+                    continue
+
+                else:
+
+                    logger.removeHandler(f_handler)
+                    logger.removeHandler(c_handler)
+                    logging.shutdown()
+
+                    return False
+
+    @staticmethod
+    def rpr_sq_ft(driver_var):
+
+        page_results = driver_var.page_source
+        soup = BeautifulSoup(page_results, 'html.parser')
+
+        key_facts = soup.find('section', {"class": "key-facts"})
+
+        sq_ft = key_facts.div.div.span.get_text()
+
+        return sq_ft
+
+    @staticmethod
     def save_run_log(run_log_object, quarter, property_type, status_type, logger, message=None):
 
         if message is None:
@@ -1428,34 +1989,171 @@ class GSMLS:
     #         os.chdir(previous_dir)
 
     @staticmethod
-    def sq_ft_finder(db, tax_db):
-        """
+    def sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list):
 
-        :param db:
-        :param tax_db:
+        change_dict = {'Rd': 'Road', 'Ct': 'Court', 'St': 'Street', 'Ave': 'Avenue',
+                       'Dr': 'Drive', 'Ln': 'Lane', 'Pl': 'Place', 'Ter': 'Terrace', 'Hwy': 'Highway',
+                       'Pkwy': 'Parkway', 'Cir': 'Circle'}
+        clean_pattern = re.compile(r'(Rd$|Ct$|St$|Ave$|Dr$|Ln$|Pl$|Ter$|Hwy$|Pkwy$|Cir$)', flags=re.IGNORECASE)
+        space_pattern = re.compile(r'(\xa0)')
+        address_pattern = re.compile(r'(.*)')
+        mls_number = str(mls_db.loc[mls_address, 'MLSNUM'])
+        address_list = GSMLS.property_archive(mls_number, mls_address)
+
+        for addy in address_list:
+            try:
+                space_search = space_pattern.search(addy).group()
+                space_found = addy.replace(space_search, ' ')
+                change_search = clean_pattern.search(space_found).group()
+                # change_found = space_found.replace(change_search, change_dict[change_search.title()])
+                change_found = change_dict[change_search.title()].join(space_found.rsplit(change_search, maxsplit=1))
+                address_search = address_pattern.search(change_found)
+                final_address = GSMLS.clean_addresses(address_search)
+
+            except AttributeError:
+                if addy != list(address_list)[-1]:
+                    continue
+
+                elif addy.upper() not in outer_address_list:
+                    space_search = space_pattern.search(addy).group()
+                    space_found = addy.replace(space_search, ' ')
+                    for idx, addy1 in enumerate(outer_address_list):
+                        if space_found[:10].upper() in addy1:
+                            final_address = outer_address_list[idx]
+
+                            return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                                      transformed_address=final_address)
+                        else:
+                            continue
+
+                else:
+                    # No address works
+                    full_address = addy.title() + ', ' + mls_db.loc[mls_address, 'TOWN']
+                    rpr_results = GSMLS.rpr('SQFT', full_address)
+                    if rpr_results > 0:
+
+                        mls_db.at[mls_address, 'SQFTAPPROX'] = rpr_results
+
+                    elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                        pass
+
+                    else:
+                        mls_db.at[mls_address, 'SQFTAPPROX'] = 0
+
+            else:
+
+                if final_address.upper() in outer_address_list:
+
+                    return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                              transformed_address=final_address)
+                elif final_address.upper() not in outer_address_list:
+
+                    for idx, addy1 in enumerate(outer_address_list):
+                        if final_address[:10].upper() in addy1:
+                            final_address = outer_address_list[idx]
+
+                            return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                                      transformed_address=final_address)
+                        else:
+                            continue
+
+                elif addy != list(address_list)[-1]:
+                    continue
+
+        return mls_db
+
+    @staticmethod
+    def sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address=None):
+
+        if transformed_address is None:
+            # Sq ft search for non numbered blocks
+            try:
+                if mls_db.loc[mls_address, 'SQFTAPPROX'] == 0:
+                    mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[mls_address.upper(), 'Sq. Ft.']
+                elif mls_db.loc[mls_address, 'SQFTAPPROX'] != 0:
+                    if mls_db.loc[mls_address, 'SQFTAPPROX'] == tax_db.loc[mls_address.upper(), 'Sq. Ft.']:
+                        pass
+                    elif (tax_db.loc[mls_address.upper(), 'Sq. Ft.'] == 0) and int(
+                            mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                        pass
+                    else:
+                        mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[mls_address.upper(), 'Sq. Ft.']
+
+            except ValueError:
+
+                year_built = mls_db.loc[mls_address, 'YEARBUILT']
+                tax_db = tax_db[(tax_db['Yr. Built'] == year_built) & (tax_db['Property Location'] == mls_address.upper())]
+
+                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list)
+
+            except KeyError:
+
+                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list)
+
+        else:
+            # Sq ft search for numbered blocks
+            try:
+                if mls_db.loc[mls_address, 'SQFTAPPROX'] == 0:
+                    mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[transformed_address.upper(), 'Sq. Ft.']
+                elif mls_db.loc[mls_address, 'SQFTAPPROX'] != 0:
+                    if mls_db.loc[mls_address, 'SQFTAPPROX'] == tax_db.loc[transformed_address.upper(), 'Sq. Ft.']:
+                        pass
+                    elif (tax_db.loc[transformed_address.upper(), 'Sq. Ft.'] == 0) and int(
+                            mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                        pass
+                    else:
+                        mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[transformed_address.upper(), 'Sq. Ft.']
+
+            except ValueError:
+
+                year_built = mls_db.loc[mls_address, 'YEARBUILT']
+                tax_db = tax_db[(tax_db['Yr. Built'] == year_built) & (tax_db['Property Location'] == transformed_address.upper())]
+
+                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address)
+
+            except KeyError:
+
+                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list)
+
+        return mls_db
+
+    @staticmethod
+    def sql_table_check(cursor_var, table_name):
+
+        # https://stackoverflow.com/questions/1874113/checking-if-a-postgresql-table-exists-under-python-and-probably-psycopg2
+        # https://thepythoncode.com/article/use-gmail-api-in-python
+        # https://stackoverflow.com/questions/51054245/read-mails-from-custom-label-in-gmail-using-pythongoogle-api
+        # https://stackoverflow.com/questions/41800867/gmail-api-using-multiple-labelids
+
+        cursor_var.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name = % s)", (table_name, ))
+
+        return cursor_var.fetchone()[0]
+
+    @staticmethod
+    def target_counties_res(series):
+        """
+        Calculates the average attributable percentage of state sales for a county then creates a dictionary
+        of counties who's attributaable sales are over that average for the quarter
+
+        :param series:
         :return:
         """
+        total_sum_county = series.sort_values().sum()
+        county_list = series.index.to_list()
+        county_sales_per_list = []
+        for cumsum in series.to_list():
+            county_sales_per_list.append(cumsum / total_sum_county)
 
-        # I actually may not have to download the whole db. Set index to Property Location and Just get the SQFT column
-        address_list = db['ADDRESS'].to_list()
+        county_sales_avg = round((mean(county_sales_per_list)) * 100, 3)
 
-        db.set_index('ADDRESS', inplace=True, drop=True)
-        tax_db.set_index('Property Location', inplace=True, drop=True)
-        #  Set index to db2['PROPERTY ADDRESS']
+        county_farm_dict = {}
+        for county, county_sum in zip(county_list, series.to_list()):
+            if ((county_sum / total_sum_county) * 100) > county_sales_avg:
+                county_farm_dict.setdefault(county, [])
+                county_farm_dict[county].append(county_sum)
+                county_farm_dict[county].append(round((county_sum / total_sum_county) * 100, 3))
 
-        for address in address_list:
-            # May need to switch the 'N/A' to pandas.NAdtype instances
-            if db.loc[address, 'SQFTAPPROX'] == 0:
-                db.at[address, 'SQFTAPPROX'] = tax_db.loc[address.upper(), 'Sq. Ft.']
-            elif db.loc[address, 'SQFTAPPROX'] != 0:
-                if db.loc[address, 'SQFTAPPROX'] == tax_db.loc[address.upper(), 'Sq. Ft.']:
-                    continue
-                elif (tax_db.loc[address.upper(), 'Sq. Ft.'] == 0) and int(db.loc[address, 'SQFTAPPROX']) > 0:
-                    continue
-                else:
-                    db.at[address, 'SQFTAPPROX'] = tax_db.loc[address.upper(), 'Sq. Ft.']
-
-        return db
+        return county_farm_dict
 
     @staticmethod
     def total_units(db):
@@ -1466,13 +2164,13 @@ class GSMLS:
 
         temp_dict = {
             'unit1': temp_db['UNIT1BATHS'].str.replace(r'\d{1}|\d{1}.\d{1,30}?', '1', regex=True)
-            .str.replace(np.nan, '0'),
+            .str.replace('np.nan', '0'),
             'unit2': temp_db['UNIT2BATHS'].str.replace(r'\d{1}|\d{1}.\d{1,30}?', '1', regex=True)
-            .str.replace(np.nan, '0'),
+            .str.replace('np.nan', '0'),
             'unit3': temp_db['UNIT3BATHS'].str.replace(r'\d{1}|\d{1}.\d{1,30}?', '1', regex=True)
-            .str.replace(np.nan, '0'),
+            .str.replace('np.nan', '0'),
             'unit4': temp_db['UNIT4BATHS'].str.replace(r'\d{1}|\d{1}.\d{1,30}?', '1', regex=True)
-            .str.replace(np.nan, '0')
+            .str.replace('np.nan', '0')
         }
 
         temp_db2 = pd.DataFrame(temp_dict)
@@ -1483,6 +2181,21 @@ class GSMLS:
         db.insert(5, 'TOTALUNITS', db.pop('TOTALUNITS'))
 
         return db
+
+    @staticmethod
+    def total_units_statistics(db, **kwargs):
+        # Can only be used with the MUL property type
+
+        property_type = str(db.__name__)[-3:].upper()
+
+        if property_type == 'MUL':
+            unit_columns = ['COUNTY', 'TOWN', 'TOTALUNITS']
+            units_df = db[unit_columns].groupby(['COUNTY', 'TOWN'])
+            units_stats = units_df.value_counts()
+
+            return units_stats
+        else:
+            raise ValueError
 
     def under_contract(self, city=None):
         """
@@ -1516,7 +2229,7 @@ class GSMLS:
         driver.get(website)
         # results = driver.page_source
         try:
-            GSMLS.login(driver)
+            GSMLS.login('GSMLS', driver)
             GSMLS.quarterly_sales_res(driver)
             # GSMLS.quarterly_sales_mul(driver)
             GSMLS.quarterly_sales_lnd(driver)
@@ -1547,3 +2260,4 @@ if __name__ == '__main__':
     else:
         # Send a text message saying the program has been completed and summarize results
         obj.clean_db()
+        # obj.property_archive('3819260')

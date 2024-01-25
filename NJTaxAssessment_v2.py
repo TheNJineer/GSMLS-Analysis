@@ -350,7 +350,7 @@ class NJTaxAssessment:
 
             # Pre-clean the tax_db for use in GSMLS.py
 
-            db.insert(0, 'Property Location', db.pop('Property Location').str.replace(r'RD|RD\.', 'ROAD', regex=True)
+            db.insert(0, 'Property Location', db.pop('Property Location').str.replace(r'RD$|RD\.$', 'ROAD', regex=True)
                       .str.replace(r'CT$|CT\.$', 'COURT', regex=True)
                       .str.replace(r'ST$|ST\.$', 'STREET', regex=True)
                       .str.replace(r'AVE$|AV$|AVE\.$|AV\.$', 'AVENUE', regex=True)
@@ -361,10 +361,19 @@ class NJTaxAssessment:
                       .str.replace(r'HWY$|HWY\.$', 'HIGHWAY', regex=True)
                       .str.replace(r'PKWY$|PKWY\.$', 'PARKWAY', regex=True)
                       .str.replace(r'CIR$|CIR\.$', 'CIRCLE', regex=True))
+            db.insert(0, 'Property Location', db.pop('Property Location').str.replace(r'.*', NJTaxAssessment.clean_addresses, regex=True))
 
             db.astype({'Sq. Ft.': 'int64'})
 
             return db
+
+    @staticmethod
+    def clean_addresses(search_string):
+
+        target_list = str(search_string.group()).split(' ')
+        new_address_list = [i for i in target_list if i != '']
+
+        return ' '.join(new_address_list)
 
     @staticmethod
     def creation_time_delta(file_name, time_stamp):

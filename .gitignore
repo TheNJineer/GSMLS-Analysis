@@ -3,3 +3,5 @@
 __pycache__/
 NJTaxAssessment.py
 UniversalFunctions.py
+RPR.py
+pandas2sql.py

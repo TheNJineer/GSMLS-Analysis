@@ -10,80 +10,69 @@ PRIORITIES:
     - May need to create a function loop to try different proxies until the download initiates
     - Use SeleniumWire to intercept some of the driver requests to read/change the payloads to get the dbs I need
 - Clean the municipality databases (DONE)
-    -Create uniformity in the 'Property Location' column by changing all abbreviated street names to the full endings (DONE)
+    - Create uniformity in the 'Property Location' column by changing all abbreviated street names to the full endings (DONE)
+    - Create function called (?)
+        - Create uniformity in the 'Property Location' column by changing all
+        abbreviated number block (1st, 2nd, 3rd, etc) to fully spelled
+        - I dont want to make the changes in either the tax_db or GSMLS_db permenant so create copies then apply the function
 23) create decorator for nj_databases to create a time constraint for downloads (1 year)
 
 2) GSMLS
-- Create copies of the target_columns list to use in the 'MUL' and 'LND' code blocks so it doesnt cause an error
-*** Pandas cant read any of the Excel files and I cant change the extension because it'll corrupt the file. How do I fix??? (DONE)
-    - Used ChatGPT to create a simple macro to open each file and save it with the '.xlsx' extension (DONE)
-    - Figure out how to automate the operation of the macro immediately after download and dispose of the old files
+***CHECKPOINT: Finish sq_ft_keyerror and separating the property_archive function into smaller functions
+               Make sure rpr and rpr_sq_ft actually works with real addresses and what happens if the address isnt found
+****Is there an easier, quicker way to create the farm area dictionary?
+- Work on potential_farm_area() (DONE)
+- Separate property_archive function into smaller functions
+- turn the street-ending search from sq_ft_keyerror() into a separate function to use on changing the tax and mls_dbs (NOT NECESSARY)
+    - The current method changes every instance of the pattern found instead of the last one (NOT NECESSARY)
+- elif final_address[:10].upper() in outer_address_list doesnt work because its checking the list to see if that actual value is in the list
+    - I have to create a for loop and check if the slice is in each individual value (DONE)
+    - *** The only thing I can think of is that the address isnt cleaned and it has that weird html space in it (DONE)
+- Refactor the property_archive() function to produce the property listing history
+- Create separate functions for the KeyError and ValueError exceptions in sq_ft_search (DONE)
+- The addresses in the address_list of sq_ft_search need to be cleaned before used. They have weird binary text in them (DONE)
+    - Use the code in the addy section of the KeyError to create a new function (DONE)
+    - {'50\xa0Little York Mt. Pleasant', '50\xa0LT YORK-MT PLEASANT RD', '50\xa0Little York Mt  Pleasant'}
+- For files that dont end in 'GSMLS', they will cause an error. Create a way to add 'GSMLS' to the end (DONE)
+- Add a column named 'MLS' to the target db and have the value equal to the DB it came from (DONE)
+- Finish sq_ft_finder address conversion (DONE)
+- Add a column named 'Variance Needed' in the LND db columns (DONE)
+- Add try-except block in sq_ft_finder to accept KeyError if the address doesnt exist is the tax_db (DONE)
+    - Add a function which looks into GSMLS Property Archive tab for alternate address spelling if address isnt found in the tax_db (DONE)
+    1) Login (DONE)
+    2) Type address into main search bar (DONE)
+    3) click the mls id which matches ours (DONE)
+    4) New window pops out, see how to capture this (DONE)
+    5) Click Property Archive. New window pops out, see how to capture this (DONE)
+    6) Scrap the table from the page and log out (DONE)
+    7) Create a list from addresses from the table (DONE)
+    8) If table address == target address, continue (DONE)
+    9) Else, if table address in tax_db['Property Location'].tolist() (DONE)
+    10) If it doesnt work, continue (DONE)
+    11) Else return that address to be used in the recursive sq_ft_search (DONE)
+
+    - Add a function which looks into RPR if none of the property archive addresses work (DONE)
+- Add try-except block for ValueError where the tax_db has duplicate addresses. (DONE)
+The tax_db.loc[address.upper(), 'Sq. Ft.'] will return a series, not a specific value (DONE)
+- Extend the pattern search for convert_lot_size()
+    - Land acres pattern needs to inlcude IRR, and all other abrv
+- Addresses still need extra cleaning. These addresses were manually input and could have hidden errors (extra sapces, etc) (DONE)
+- Create a function called (?) which is used inside of sq_ft_finder() which actually does the transformation. Use in each if-elif block (DONE)
+- Figure out how to automate the operation of the macro immediately after download and dispose of the old files
 - Create a anew directory called 'GSMLS' in the Selenium Temp Folder to put downloads in. Switch to this directory in the main function
 - Consolidate the 'MUL' and 'LND' quarterly_sales function into one. Accept property_type as an arg to use as a switch case
     - Modify the decorator to insert the property type as an arg
 - Create a try-except block in the main function which can be used to restart the program recursively
 - Refactor the main() function to not login to GSMLS if theres not data to download
-***LND stopped in 3rd Qtr. Last files came from Morris County (DONE)
-- Logger is being read twice (DONE)
 - Use Funct.tools to get the proper names for the function when going through the decorators
-- Create a try-except block for the modified_cities_list (DONE)
-    - In the event the program times out at the first city of a county, the decorator will give the last county and last city
-    downloaded. The modified_city_list starts from the next city if the list. If I do +1, this will cause an index error. If index error occurs
-    just continue the loop (DONE)
-- Add a switch case var in the elif block to state: (DONE)
-        modify = yes
-
-        if modify == 'yes':
-            city_index = list(cities.values()).index(city_name)
-            cities_ids_list = list(cities.keys())[city_index + 1:]
-
-            modify = 'no'
-
-        elif modify == 'no'
-            cities_ids_list = cities.keys()
-- Create two functions (determine function names later):
-    - download_manager(cities, city_id, property_type, qtr, driver_var, logger) (DONE)
-    - cities_download_manager(counties, county_id, driver_var, logger) (DONE)
-- Complete the quarterly_sales decorator
-    - create open_run_log function (DONE)
-    - create save_run_log function (DONE)
-    - Remove the time periods dict and qtr, date loop from the quarterly_res function (DONE)
-        - The qtr var and date_range var need to be added to the kwargs dict in the decorator (DONE)
-    - create these variables to be used in the inside of the function for switch cases:
-        - run_status:
-            - starts as 'IN PROGRESS' and the value is saved into the shelve immediately (DONE)
-            - if the end of the program is reached, it is saved as 'DOWNLOADED' (DONE)
-        - counties_ids_list (DONE)
-        - cities_ids_list: (DONE)
-            - If the program isn't completed these will be activated once a county_name and city_name are supplied to the function (DONE)
-            - The cities_ids_list should be dynamically changed as the program continues (DONE)
-    - Add functionality to the end of the decorator to save the the run log (DONE)
-        -Create function called check_run_log (DONE)
-
 - A selenium TimeoutError can occur if a page element isnt found. How to I get around this to continue the program?
 _ Refactor the run_main decorator to run on a quarterly basis
     - uses a shelve file to know which dates to download for
-- Refactor the clean_db function to adjust for RES, MUL and LND dbs (DONE)
-    - Create a decorator which will handle finding the NJTaxAssessment db , property_type, GSMLS file (DONE)
-        - concatenate the dbs in the respective list and return the results
-    - Fix the clean_and_transform function:
-        - remove one .str.replace(r'Ave', 'Avenue', regex=True) (DONE)
-        - add .str.replace(r'Dr', 'Drive', regex=True) (DONE)
-        - Round the BATHSTOTAL column to one dec place
-        - SQFTAPPROX column should be a int (DONE)
-        - RENOVATED column should be int (DONE)
-        - 'ORIGLISTPRICE', 'LISTPRICE', 'SALESPRICE' should be ints (DONE)
-        - SPLP should be rounded to 3 decimal places
-    - Create try-except block with sq_ft_finder that excepts a KeyError and defaults to the current sqft value or 0
-    - Tax_db Property_location column needs to be cleaned to. Convert all street abr to full words (DONE)
-    - Create function called total_units (DONE)
-        - Figure out how to vectorize the UNITS columns in the MUL dbs to get the total number of units (DONE)
-    - Add property_type as a function arg and add if statement blocks to allow the use of RES, MUL or LND property types (DONE)
-    - See if there are common columns between all dbs and use if statement blocks to add columns if necessary (DONE)
-    - Make sub-functions which will do the actual cleaning. Clean_db will be the main function (DONE)
-    *** The 'Property Location column list all addresses in all caps and uses AVE, LANE, ROAD, DRIVE (DONE)
-    - *** Create function to store all qtrly results in SQL after cleaning the data
-        - Use the clean_db() and new pandas2sql()
+- Fix the clean_and_transform function:
+    - Round the BATHSTOTAL column to one dec place
+    - SPLP should be rounded to 3 decimal places
+- *** Create function to store all qtrly results in SQL after cleaning the data
+    - Use the clean_db() and new pandas2sql()
 - Track rental prices as well
 
 3) Complete lat_long function in GSMLS
@@ -252,3 +241,12 @@ except ElementClickInterceptedException:
         # else:
         #     break
 finally:
+
+
+addy = addy.replace(r'\xa0', ' ').replace(r'Rd$', 'Road')\
+            #     .replace(r'Ct$', 'Court').replace(r'St$', 'Street')\
+            #     .replace(r'Ave$', 'Avenue').replace(r'Dr$', 'Drive')\
+            #     .replace(r'Ln$', 'Lane').replace(r'Pl$', 'Place')\
+            #     .replace(r'Ter$', 'Terrace').replace(r'Hwy$', 'Highway')\
+            #     .replace(r'Pkwy$', 'Parkway').replace(r'Cir$', 'Circle')\
+            #     .replace(r'.*', GSMLS.clean_addresses)

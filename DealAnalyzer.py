@@ -200,6 +200,10 @@ class DealAnalyzer(GSMLS):
         df for which ones that don't
         :return:
         """
+
+        # https://thepythoncode.com/article/use-gmail-api-in-python
+        # https://stackoverflow.com/questions/51054245/read-mails-from-custom-label-in-gmail-using-pythongoogle-api
+        # https://stackoverflow.com/questions/41800867/gmail-api-using-multiple-labelids
         pass
 
     def haversine(self, latitude, longitude, comp_db):
