@@ -9,56 +9,54 @@ PRIORITIES:
     - Be sure to update the format_proxies function when done in the main file
     - May need to create a function loop to try different proxies until the download initiates
     - Use SeleniumWire to intercept some of the driver requests to read/change the payloads to get the dbs I need
-- Clean the municipality databases (DONE)
-    - Create uniformity in the 'Property Location' column by changing all abbreviated street names to the full endings (DONE)
-    - Create function called (?)
-        - Create uniformity in the 'Property Location' column by changing all
-        abbreviated number block (1st, 2nd, 3rd, etc) to fully spelled
-        - I dont want to make the changes in either the tax_db or GSMLS_db permenant so create copies then apply the function
-23) create decorator for nj_databases to create a time constraint for downloads (1 year)
+- Create decorator for nj_databases to create a time constraint for downloads (1 year)
+- Make sure all Essex County tax db's 'Property Location' columns are converted to string types and addresses all converted to uppercase to work with program
+- Make sure the address regex patterns can recognize the S,W,E,N directions
+
 
 2) GSMLS
 ***CHECKPOINT: Finish sq_ft_keyerror and separating the property_archive function into smaller functions
-               Make sure rpr and rpr_sq_ft actually works with real addresses and what happens if the address isnt found
-****Is there an easier, quicker way to create the farm area dictionary?
+                Add loggers into sq_ft_search and sq_ft_keyerror and make windows headless
+                The following functions need to accept **kwargs as an arg:
+                - find_sq_ft (DONE)
+                - sq_ft_search (DONE)
+                - sq_ft_keyerror (DONE)
+- Update pandas2sql's SQLAlchemy info for the right connection (DONE)
+- Update the rename_pandas_columns function to work for RES, MUL, and LND dbs. Also get the correct list of column names
+- create a function called kill_logger to properly handle ending the logger stream after each function (DONE)
+- Figure out how to properly calculate the Z-Score for the LND and MUL data
+    - I may have to wait until the LND and MUL database is created then pull the mean prices from there
+- Integrate find_sq_ft for MUL properties
+- Create a function to house the string replacement methods on the address column
+- Add loggers into sq_ft_search and sq_ft_keyerror (DONE)
+    - THe logger isnt working in the sq_ft search
+- Add logic to where I open up a Selenium x GSMLS session and only use it when needed instead of logging in every time for usage (DONE)
+    - Create a function which opens rpr and gsmls in different tabs and returns the driver and window names so when they're ready to be used, they can (DONE)
+    - Close 2nd and 3rd opened windows (DONE)
+    - Add logic that creates a new window when doing an rpr_search() (DONE)
+    - Add logic to close the rpr_sq_ft window and clear the text from the rpr search box when search is complete then switch window
 - Work on potential_farm_area() (DONE)
-- Separate property_archive function into smaller functions
-- turn the street-ending search from sq_ft_keyerror() into a separate function to use on changing the tax and mls_dbs (NOT NECESSARY)
-    - The current method changes every instance of the pattern found instead of the last one (NOT NECESSARY)
-- elif final_address[:10].upper() in outer_address_list doesnt work because its checking the list to see if that actual value is in the list
-    - I have to create a for loop and check if the slice is in each individual value (DONE)
-    - *** The only thing I can think of is that the address isnt cleaned and it has that weird html space in it (DONE)
+    - How can I do this process easier?
+- Separate property_archive function into smaller functions:
+    - Add @logger_decorator (DONE)
+    - Function for logging in if necessary
+    - search_listing() (DONE)
+    - address_table_results() (DONE)
+    - open_property_listing() (DONE)
+    - address_list_scrape() (DONE)
+        - I need to log the address that I find as well to see the address format
+        - Do I need to kill the logger in this function? How do I put the logger in here?
+- Do a try-except clause for when there's no historical home's addresses (DONE)
 - Refactor the property_archive() function to produce the property listing history
-- Create separate functions for the KeyError and ValueError exceptions in sq_ft_search (DONE)
-- The addresses in the address_list of sq_ft_search need to be cleaned before used. They have weird binary text in them (DONE)
-    - Use the code in the addy section of the KeyError to create a new function (DONE)
-    - {'50\xa0Little York Mt. Pleasant', '50\xa0LT YORK-MT PLEASANT RD', '50\xa0Little York Mt  Pleasant'}
-- For files that dont end in 'GSMLS', they will cause an error. Create a way to add 'GSMLS' to the end (DONE)
-- Add a column named 'MLS' to the target db and have the value equal to the DB it came from (DONE)
-- Finish sq_ft_finder address conversion (DONE)
-- Add a column named 'Variance Needed' in the LND db columns (DONE)
-- Add try-except block in sq_ft_finder to accept KeyError if the address doesnt exist is the tax_db (DONE)
-    - Add a function which looks into GSMLS Property Archive tab for alternate address spelling if address isnt found in the tax_db (DONE)
-    1) Login (DONE)
-    2) Type address into main search bar (DONE)
-    3) click the mls id which matches ours (DONE)
-    4) New window pops out, see how to capture this (DONE)
-    5) Click Property Archive. New window pops out, see how to capture this (DONE)
-    6) Scrap the table from the page and log out (DONE)
-    7) Create a list from addresses from the table (DONE)
-    8) If table address == target address, continue (DONE)
-    9) Else, if table address in tax_db['Property Location'].tolist() (DONE)
-    10) If it doesnt work, continue (DONE)
-    11) Else return that address to be used in the recursive sq_ft_search (DONE)
-
-    - Add a function which looks into RPR if none of the property archive addresses work (DONE)
-- Add try-except block for ValueError where the tax_db has duplicate addresses. (DONE)
-The tax_db.loc[address.upper(), 'Sq. Ft.'] will return a series, not a specific value (DONE)
+- Add a function which looks into RPR if none of the property archive addresses work (DONE)
+    - Make sure rpr works properly when an address isnt found
+    - Make sure rpr_property_facts works as intended
 - Extend the pattern search for convert_lot_size()
     - Land acres pattern needs to inlcude IRR, and all other abrv
-- Addresses still need extra cleaning. These addresses were manually input and could have hidden errors (extra sapces, etc) (DONE)
-- Create a function called (?) which is used inside of sq_ft_finder() which actually does the transformation. Use in each if-elif block (DONE)
+    - Make sure the 'AC' pattern works even when 'AC' isnt there
+    - length_and_width_to_sqft isnt working for 3 7th Street (80 X 125)
 - Figure out how to automate the operation of the macro immediately after download and dispose of the old files
+    - Make sure the clean_db decorator skips the Batch File Conversion xlsx
 - Create a anew directory called 'GSMLS' in the Selenium Temp Folder to put downloads in. Switch to this directory in the main function
 - Consolidate the 'MUL' and 'LND' quarterly_sales function into one. Accept property_type as an arg to use as a switch case
     - Modify the decorator to insert the property type as an arg

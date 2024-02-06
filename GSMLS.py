@@ -52,10 +52,6 @@ class GSMLS:
     def clean_db_decorator(original_function):
         def wrapper(*args, **kwargs):
 
-            logger = kwargs['logger']
-            f_handler = kwargs['f_handler']
-            c_handler = kwargs['c_handler']
-
             res_db_list = []
             mul_db_list = []
             lnd_db_list = []
@@ -68,6 +64,7 @@ class GSMLS:
 
             os.chdir(path)
             dirty_dbs_list = os.listdir(path)
+            main_driver, gsmls_window, rpr_window = GSMLS.open_browser_windows()
 
             for file in dirty_dbs_list:
                 if file.endswith('.xlsx'):
@@ -86,7 +83,10 @@ class GSMLS:
                     tax_db = NJTaxAssessment.city_database(county_name, city_name)
                     tax_db.set_index('Property Location')
 
-                    kwargs['db'] = db
+                    kwargs['driver'] = main_driver
+                    kwargs['gsmls_window'] = gsmls_window
+                    kwargs['rpr_window'] = rpr_window
+                    kwargs['initial_db'] = db
                     kwargs['tax_db'] = tax_db
                     kwargs['property_type'] = property_type
                     kwargs['mls_type'] = mls_type
@@ -113,10 +113,7 @@ class GSMLS:
             mul_main_db = pd.concat(mul_db_list)
             lnd_main_db = pd.concat(lnd_db_list)
 
-            logger.removeHandler(f_handler)
-            logger.removeHandler(c_handler)
-            logging.shutdown()
-
+            GSMLS.kill_logger(logger_var=kwargs['logger'], file_handler=kwargs['f_handler'], console_handler=kwargs['c_handler'])
         return wrapper
 
     # @staticmethod
@@ -306,7 +303,55 @@ class GSMLS:
 
     @staticmethod
     def acres_to_sqft(search_string):
-        return str(float(search_string.group(1)) * 43560)
+        return str(round(float(search_string.group(1).rstrip(' AC.')) * 43560, 2))
+
+    @staticmethod
+    def address_list_scrape(driver_var, logger_var, mls_number, windows_var: list, **kwargs):
+        property_archive = WebDriverWait(driver_var, 20).until(
+            EC.presence_of_element_located((By.XPATH, "//span[contains(@class,'fa fa-history fa-lg')]")))
+        property_archive.click()
+        time.sleep(2)
+        windows_list = driver_var.window_handles
+        new_window2 = [window for window in windows_list if window not in windows_var][0]
+        driver_var.switch_to.window(new_window2)
+
+        time.sleep(2)
+        address_list = set()
+        page_results3 = driver_var.page_source
+        soup = BeautifulSoup(page_results3, 'html.parser')
+        # print(soup)
+        mls_tables = soup.find_all('table', {"class": "oneline"})
+
+        for table in mls_tables:
+            main_table2 = table.find('tbody')
+            mls_history = main_table2.find_all('tr')[1]
+            address_cell = mls_history.find_all('td')[3]
+
+            address_list.add(address_cell.get_text())
+
+        logger_var.info(f'{len(address_list)} historical addresses have been found for MLS#:{mls_number}')
+        driver_var.close()
+        driver_var.switch_to.window(windows_var[2])
+        driver_var.close()
+        driver_var.switch_to.window(windows_var[0])
+
+        return address_list
+
+    @staticmethod
+    def address_table_results(page_source_var, mls_number, logger_var):
+        try:
+            soup = BeautifulSoup(page_source_var, 'html.parser')
+            table = soup.find('table', {"class": "df-table nomin mart0", "id": "search-help-table"})
+            main_table = table.find('tbody')
+            all_rows = main_table.find_all('tr')
+
+            assert len(all_rows) > 0, f'There were no MLS results found. MLS#:{mls_number}'
+        except AssertionError as AE:
+            logger_var.info(f'{AE}')
+
+            return AE
+        else:
+            return all_rows
 
     def area_demographics(self, city):
         # Create a method that generates a report on the stores in or near a city,
@@ -393,32 +438,36 @@ class GSMLS:
 
         # List item 2
         pandas_db['MLS'] = mls
-        pandas_db['Variance Needed'] = 'N*'  # This is a temporary value which will be changed to either Y or N when the function is created
-        pandas_db['Qtr'] = qtr
+        pandas_db['VARIANCE NEEDED'] = 'N*'  # This is a temporary value which will be changed to either Y or N when the function is created
+        pandas_db['QTR'] = qtr
         pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - pandas_db['SALESPRICE'].mean()) / pandas_db[
             'SALESPRICE'].std()
         pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
-        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(1, 'QTR', pandas_db.pop('QTR'))
         pandas_db.insert(2, 'LATITUDE', 0)
         pandas_db.insert(3, 'LONGITUDE', 0)
         pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
         pandas_db.insert(5, 'LOTID', pandas_db.pop('LOTID').str.strip('*'))
         pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
-        pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
-        pandas_db.insert(12, 'SALESPRICE', pandas_db.pop('SALESPRICE'))
-        pandas_db.insert(13, 'SPLP', pandas_db.pop('SPLP'))
+        pandas_db.insert(8, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
+        pandas_db.insert(9, 'TAXID', pandas_db.pop('TAXID').str.strip('*'))
+        pandas_db.insert(10, 'MLSNUM', pandas_db.pop('MLSNUM'))
+        pandas_db.insert(11, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(12, 'LOTDESC', pandas_db.pop('LOTDESC'))
+        pandas_db.insert(13, 'VARIANCE NEEDED', pandas_db.pop('VARIANCE NEEDED'))
         pandas_db.insert(14, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
-        pandas_db.insert(15, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
-        pandas_db.insert(17, 'Variance Needed', pandas_db.pop('Variance Needed'))
-        pandas_db.insert(18, 'LOTDESC', pandas_db.pop('LOTDESC'))
+        pandas_db.insert(15, 'ORIGLISTPRICE', pandas_db.pop('ORIGLISTPRICE'))
+        pandas_db.insert(16, 'LISTPRICE', pandas_db.pop('LISTPRICE'))
+        pandas_db.insert(17, 'SALESPRICE', pandas_db.pop('SALESPRICE'))
+        pandas_db.insert(18, 'SPLP', pandas_db.pop('SPLP'))
 
         # List item 3
-        pandas_db.insert(5, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
+        pandas_db.insert(7, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
         # List item 4 and 8
-        pandas_db.insert(26, 'LISTDATE', pd.to_datetime(pandas_db.pop('LISTDATE')))
-        pandas_db.insert(27, 'PENDINGDATE', pd.to_datetime(pandas_db.pop('PENDINGDATE')))
-        pandas_db.insert(28, 'CLOSEDDATE', pd.to_datetime(pandas_db.pop('CLOSEDDATE')))
-        pandas_db.insert(29, 'UNDER CONTRACT LENGTH', pandas_db['CLOSEDDATE'] - pandas_db['PENDINGDATE'])
+        pandas_db.insert(20, 'LISTDATE', pd.to_datetime(pandas_db.pop('LISTDATE')))
+        pandas_db.insert(21, 'PENDINGDATE', pd.to_datetime(pandas_db.pop('PENDINGDATE')))
+        pandas_db.insert(22, 'CLOSEDDATE', pd.to_datetime(pandas_db.pop('CLOSEDDATE')))
+        pandas_db.insert(23, 'UNDER CONTRACT LENGTH', pandas_db['CLOSEDDATE'] - pandas_db['PENDINGDATE'])
 
         # List item 6
         street_num = pandas_db.pop('STREETNUMDISPLAY')
@@ -468,11 +517,11 @@ class GSMLS:
 
         # List item 2
         pandas_db['MLS'] = mls
-        pandas_db['Qtr'] = qtr
+        pandas_db['QTR'] = qtr
         pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - pandas_db['SALESPRICE'].mean()) / pandas_db[
             'SALESPRICE'].std()
         pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
-        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(1, 'QTR', pandas_db.pop('QTR'))
         pandas_db.insert(2, 'LATITUDE', 0)
         pandas_db.insert(3, 'LONGITUDE', 0)
         pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
@@ -480,7 +529,12 @@ class GSMLS:
         pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
         pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
         pandas_db.insert(11, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
-        pandas_db.insert(18, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
+        pandas_db.insert(12, 'LOTDESC', pandas_db.pop('LOTDESC'))
+        pandas_db.insert(14, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
+        pandas_db.insert(15, 'ORIGLISTPRICE', pandas_db.pop('ORIGLISTPRICE'))
+        pandas_db.insert(16, 'LISTPRICE', pandas_db.pop('LISTPRICE'))
+        pandas_db.insert(17, 'SALESPRICE', pandas_db.pop('SALESPRICE'))
+        pandas_db.insert(18, 'SPLP', pandas_db.pop('SPLP'))
 
         # List item 3
         pandas_db.insert(7, 'TOWN', pandas_db.pop('TOWN').str.rstrip('*(1234567890)'))
@@ -541,10 +595,10 @@ class GSMLS:
 
         # List item 2
         pandas_db['MLS'] = mls
-        pandas_db['Qtr'] = qtr
+        pandas_db['QTR'] = qtr
         pandas_db['Z-SCORE'] = (pandas_db['SALESPRICE'] - median_sales[0]) / median_sales[1]
         pandas_db.insert(0, 'MLS', pandas_db.pop('MLS'))
-        pandas_db.insert(1, 'Qtr', pandas_db.pop('Qtr'))
+        pandas_db.insert(1, 'QTR', pandas_db.pop('QTR'))
         pandas_db.insert(2, 'LATITUDE', 0)
         pandas_db.insert(3, 'LONGITUDE', 0)
         pandas_db.insert(4, 'BLOCKID', pandas_db.pop('BLOCKID').str.strip('*'))
@@ -552,7 +606,8 @@ class GSMLS:
         pandas_db.insert(6, 'STREETNAME', pandas_db.pop('STREETNAME').str.strip('*'))
         pandas_db.insert(7, 'COUNTY', pandas_db.pop('COUNTY').str.strip('*'))
         pandas_db.insert(11, 'SQFTAPPROX', pandas_db.pop('SQFTAPPROX'))
-        pandas_db.insert(12, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(13, 'LOTSIZE', pandas_db.pop('LOTSIZE').str.strip('*'))
+        pandas_db.insert(14, 'LOTDESC', pandas_db.pop('LOTDESC'))
         pandas_db.insert(18, 'Z-SCORE', pandas_db.pop('Z-SCORE'))
 
         # List item 3
@@ -600,16 +655,12 @@ class GSMLS:
         :return:
         """
 
-        dirty_db = kwargs['db']
-        tax_db = kwargs['tax_db']
+        dirty_db = kwargs['initial_db']
+        # tax_db = kwargs['tax_db']
         property_type = kwargs['property_type']
         mls_type = kwargs['mls_type']
         qtr = kwargs['qtr']
         median_sales_prices = kwargs['median_sales_price']
-
-        logger = kwargs['logger']
-        f_handler = kwargs['f_handler']
-        c_handler = kwargs['c_handler']
 
         target_columns = ['TAXID', 'MLSNUM', 'BLOCKID', 'LOTID', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY',
                           'ROOMS', 'BEDS', 'BATHSTOTAL', 'LOTSIZE', 'LOTDESC', 'SQFTAPPROX', 'ORIGLISTPRICE', 'LISTPRICE',
@@ -625,7 +676,7 @@ class GSMLS:
         if property_type == 'RES':
             clean_db = dirty_db[target_columns].fillna(np.nan)
             clean_db = clean_db.pipe(GSMLS.clean_and_transform_data_res, mls=mls_type, qtr=qtr, median_sales=median_sales_prices)\
-                .pipe(GSMLS.find_sq_ft, tax_db=tax_db)\
+                .pipe(GSMLS.find_sq_ft, **kwargs)\
                 .pipe(GSMLS.convert_lot_size, property_type=property_type)
 
         elif property_type == 'MUL':
@@ -694,15 +745,17 @@ class GSMLS:
         port: the port number that defaults to 5432 if it is not provided.
         '''
 
+        username, pw = GSMLS.get_us_pw('PostgreSQL')
+
         conn = psycopg2.connect(
             host="localhost",
-            database="suppliers",
-            user="postgres",
-            password="Abcd1234")
+            database="nj_realestate_data",
+            user=username,
+            password=pw)
 
         cur = conn.cursor()
 
-        return cur
+        return tuple([cur, conn, username, pw])
 
     @staticmethod
     def convert_lot_size(db, property_type):
@@ -713,22 +766,28 @@ class GSMLS:
         :return:
         """
 
-        acres_pattern = r'(\.\d{1,6}?|\d{1,4}?\.\d{1,6}?)\sAC'
-        by_pattern = r'(\d{1,5})X\s(\d{1,5})|(\d{1,5})X(\d{1,5})'
+        acres_pattern = r'(\.\d{1,6}(\sAC)?|\.\d{1,6}(\sAC.)?|\d{1,4}\.\d{1,6}(\sAC)?|\d{1,4}\.\d{1,6}(\sAC.)?)'
+        by_pattern = r'(\d{1,5})X\s(\d{1,5})|(\d{1,5})X(\d{1,5})|(\d{1,5})\sX\s(\d{1,5})|(\d{1,5})\sX(\d{1,5})'
         db = db.astype({'LOTSIZE': 'string'})
         lotsize_sqft = db['LOTSIZE']
 
         if property_type == 'RES':
             db.insert(12, 'LOTSIZE (SQFT)', lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True))
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
 
         elif property_type == 'MUL':
             db.insert(12, 'LOTSIZE (SQFT)', lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True))
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
 
         elif property_type == 'LND':
             db.insert(16, 'LOTSIZE (SQFT)', lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True))
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
+
+        db = db.astype({'LOTSIZE (SQFT)': 'float64'})
+        db = db.round({'LOTSIZE (SQFT)': 2})
 
         return db
 
@@ -745,6 +804,96 @@ class GSMLS:
             return cooling_system_stats
         else:
             raise ValueError
+
+    @staticmethod
+    def create_lnd_sales_table(cursor_var, conn_var):
+
+        statement = "CREATE TABLE mul_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
+                    "longitude numeric, blockid smallint, lotid smallint, address varchar(100), town varchar(100)," \
+                    "county varchar(100), tax_id varchar(100), mlsnum real, lotsize varchar(50), lotsize_sqft real," \
+                    "lot_desc varchar(50), variance_needed varchar(3), z_score real, origlistprice integer," \
+                    "listprice integer, salesprice integer, splp real, listdate date, pendingdate date," \
+                    "closeddate date, under_contract_length interval, loan_terms varchar(50), tax_amount integer," \
+                    "tax_rate real, dom smallint, lotsize varchar(50), office_name varchar(250), office_phone varchar(15)," \
+                    "fax varchar(15), listing_agent varchar(100), agent_phone varchar(15), comp_buy varchar(20)," \
+                    "buying_office varchar(250), buying_agent varchar(100), public_remarks text, num_lots smallint," \
+                    "zoning varchar(50), buildings_included varchar(50), current_use varchar(100)," \
+                    "development_status varchar(100), docs_avaialable varchar(100), easement varchar(5)," \
+                    "flood_insurance varchar(10), flood_zone varchar(10), improvements varchar(100)," \
+                    "location varchar(100), perc_test varchar(100), road_surface_desc varchar(100)," \
+                    "services varchar(100), sewer varchar(100) soil_type varchar(100), water_info varchar(100)," \
+                    "zoning varchar(100));"
+
+        cursor_var.execute(statement)
+        conn_var.commit()
+
+    @staticmethod
+    def create_mul_sales_table(cursor_var, conn_var):
+
+        statement = "CREATE TABLE mul_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
+                    "longitude numeric, blockid smallint, lotid smallint, total_units smallint, address varchar(100), town varchar(100)," \
+                    "county varchar(100), tax_id varchar(100), mlsnum real, sqft_approx smallint," \
+                    "lotsize varchar(50), lotsize_sqft real, rooms smallint, beds smallint, bathstotal real," \
+                    "lot_desc varchar(50), z_score real, origlistprice integer, listprice integer, salesprice integer," \
+                    "splp real, loan_terms varchar(50), yearbuilt smallint, yearbuilt_desc varchar(20)," \
+                    "listdate date, pending_date date, closeddate date, under_contract_length interval, dom smallint," \
+                    "primary_style varchar(100), property_color varchar(20), renovated smallint, tax_amount integer," \
+                    "tax_rate real, office_name varchar(250), office_phone varchar(15), fax varchar(15)," \
+                    "listing_agent varchar(100), agent_phone varchar(15), comp_buy varchar(20)," \
+                    "buying_office varchar(250), buying_agent varchar(100), basement char(1), basement_desc varchar(100)," \
+                    "coolsystem varchar(100), driveway_desc varchar(100), exterior varchar(100)," \
+                    "heatsource varchar(50), heatsystem varchar(100), roof varchar(100)," \
+                    "siding varchar(50), sewer varchar(10), water varchar(10), waterheater varchar(10)," \
+                    "unit1_baths real, unit1_beds smallint, unit2_baths real, unit2_beds smallint," \
+                    "unit3_baths real, unit3_beds smallint, unit4_baths real, unit4_beds smallint," \
+                    "public_remarks text);"
+
+        cursor_var.execute(statement)
+        conn_var.commit()
+
+    @staticmethod
+    def create_res_sales_table(cursor_var, conn_var):
+
+        statement = "CREATE TABLE res_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
+                    "longitude numeric, blockid smallint, lotid smallint, address varchar(100), town varchar(100)," \
+                    "county varchar(100), tax_id varchar(100), mlsnum real, sqft_approx smallint," \
+                    "lotsize varchar(50), lotsize_sqft real, rooms smallint, beds smallint, bathstotal real," \
+                    "lot_desc varchar(50), z_score real, origlistprice integer, listprice integer, salesprice integer," \
+                    "splp real, loan_terms varchar(50), yearbuilt smallint, yearbuilt_desc varchar(20)," \
+                    "listdate date, pending_date date, closeddate date, under_contract_length interval, dom smallint," \
+                    "primary_style varchar(100), property_color varchar(20), renovated smallint, tax_amount integer," \
+                    "tax_rate real, office_name varchar(250), office_phone varchar(15), fax varchar(15)," \
+                    "listing_agent varchar(100), agent_phone varchar(15), comp_buy varchar(20)," \
+                    "buying_office varchar(250), buying_agent varchar(100), fireplaces smallint, garagecap smallint, " \
+                    "pool char(1), pooldesc varchar(50), basement char(1), basement_desc varchar(100), ammenities varchar(50)," \
+                    "appliances varchar(250), coolsystem varchar(100), driveway_desc varchar(100), exterior varchar(100)," \
+                    "floors varchar(100), heatsource varchar(50), heatsystem varchar(100), roof varchar(100), " \
+                    "siding varchar(50), sewer varchar(10), water varchar(10), waterheater varchar(10), interior varchar(250)," \
+                    "roomlvl1desc text, roomlvl2desc text, roomlvl3desc text, public_remarks text);" \
+
+        cursor_var.execute(statement)
+        conn_var.commit()
+
+    @staticmethod
+    def create_sql_table(table_name, cursor_var, conn_var, **kwargs):
+
+        logger = kwargs['logger']
+
+        if table_name == 'res_sales_data':
+            GSMLS.create_res_sales_table(cursor_var, conn_var)
+            logger.info(f'PostgreSQL table named {table_name} has been created')
+
+        elif table_name == 'mul_sales_data':
+            GSMLS.create_mul_sales_table(cursor_var, conn_var)
+            logger.info(f'PostgreSQL table named {table_name} has been created')
+
+        elif table_name == 'lnd_sales_data':
+            GSMLS.create_res_sales_table(cursor_var, conn_var)
+            logger.info(f'PostgreSQL table named {table_name} has been created')
+
+        else:
+            # placeholder for a block that a user can create a table on spot?
+            pass
 
     def descriptive_stats_state(self):
         # Run descriptive analysis on all the homes for the state for the quarter
@@ -827,7 +976,7 @@ class GSMLS:
         return counties
 
     @staticmethod
-    def find_sq_ft(db, tax_db):
+    def find_sq_ft(db, tax_db, **kwargs):
         """
 
         :param db:
@@ -853,19 +1002,19 @@ class GSMLS:
             search_address = numbered_blocks.search(address, re.IGNORECASE)
             if search_address is None:
 
-                db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list)
+                db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list, **kwargs)
 
             elif search_address is not None:
                 # Check if the current spelling of the address is the same as in the tax_tb
                 if address.upper() in tax_address_list:
 
-                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list)
+                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list, **kwargs)
 
                 else:
                     # Change the spelling of the address and check tax_db again
                     address_2 = address.replace(search_address.group(0), numbers_dict[search_address.group(0).upper()])
 
-                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list, address_2)
+                    db = GSMLS.sq_ft_search(address, db, tax_db, tax_address_list, address_2, **kwargs)
 
         return db
 
@@ -921,6 +1070,13 @@ class GSMLS:
     def hotsheets(self):
         # Run the Hotsheets on GSMLS to pull the back on market, withdrawn listings, price changes from target cities
         pass
+
+    @staticmethod
+    def kill_logger(logger_var, file_handler, console_handler):
+
+        logger_var.removeHandler(file_handler)
+        logger_var.removeHandler(console_handler)
+        logging.shutdown()
 
     @logger_decorator
     def lat_long(self, db, county=None, city=None, **kwargs):
@@ -989,8 +1145,12 @@ class GSMLS:
     def length_and_width_to_sqft(search_string):
         if search_string.group(1) is not None:
             return str(float(search_string.group(1)) * float(search_string.group(2)))
-        else:
+        elif search_string.group(3) is not None:
             return str(float(search_string.group(3)) * float(search_string.group(4)))
+        elif search_string.group(5) is not None:
+            return str(float(search_string.group(5)) * float(search_string.group(6)))
+        elif search_string.group(7) is not None:
+            return str(float(search_string.group(7)) * float(search_string.group(8)))
 
     @staticmethod
     def loan_type_statistics(db, **kwargs):
@@ -1098,6 +1258,50 @@ class GSMLS:
         GSMLS.set_city(city_id_var, driver_var)
 
     @staticmethod
+    def open_browser_windows():
+        options = Options()
+        # options.add_argument("--headless=new")
+        driver = webdriver.Edge(service=Service(), options=options)
+        driver.maximize_window()
+        website1 = 'https://mls.gsmls.com/member/'
+        website2 = 'https://www.narrpr.com/'
+        driver.get(website1)
+
+        # Login to the GSMLS
+        GSMLS.login('GSMLS', driver)
+        gsmls_window = driver.current_window_handle
+        # Create a new tab to also log into RPR so it's ready for use
+        driver.switch_to.new_window('tab')
+        driver.get(website2)
+        GSMLS.login('RPR', driver)
+        rpr_window = driver.current_window_handle
+        # Switch back to the GSMLS window as this window is the first one used in the sq_ft_search()
+        driver.switch_to.window(gsmls_window)
+
+        return tuple([driver, gsmls_window, rpr_window])
+
+    @staticmethod
+    def open_property_listing(driver_var, list_of_windows, contact_num):
+
+        click_mls_number = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, 'selcontact' + str(contact_num))))
+        click_mls_number.click()
+
+        #  Clicking the MLS number will open up a new window. I need to switch to that window
+        time.sleep(2)
+        windows_list = driver_var.window_handles
+        new_window = [window for window in windows_list if window not in list_of_windows][0]
+        driver_var.switch_to.window(new_window)
+
+        time.sleep(2)
+        page_results2 = driver_var.page_source
+        soup = BeautifulSoup(page_results2, 'html.parser')
+        sidebar_table = soup.find('div', {"class": "side-bar-padding"})
+        sidebar_buttons = sidebar_table.find_all('div', {"class": "sidebar-button select"})
+
+        return tuple([new_window, sidebar_buttons])
+
+    @staticmethod
     def open_run_log():
 
         previous_dir = os.getcwd()
@@ -1136,16 +1340,25 @@ class GSMLS:
         c_handler = kwargs['c_handler']
 
         # I need to not drop the duplicate 'ADDRESS' table in the dbs
-        cursor = GSMLS.connect2postgresql()  # Creates a seperate connection to PostgreSQL
+        cursor, conn, username, pw = GSMLS.connect2postgresql()  # Creates a seperate connection to PostgreSQL
+
+        logger.info('PostgreSQL Database connection made')
 
         # Creates a connection from Pandas to PostgreSQL
-        engine = create_engine("postgresql://scott:tiger@localhost:5432/mydatabase")
+        engine = create_engine(f"postgresql://{username}:{pw}@localhost:5433/nj_realestate_data")
 
         if GSMLS.sql_table_check(cursor, table_name):
-            db.to_sql(table_name, engine, if_exists='append', chunksize=1000)
+            db.to_sql(table_name, engine, if_exists='append', chunksize=1000, index=False)
 
         else:
-            db.to_sql(table_name, engine, if_exists='fail', chunksize=1000)
+            GSMLS.create_sql_table(table_name, cursor, conn, **kwargs)
+            db.to_sql(table_name, engine, if_exists='fail', chunksize=1000, index=False)
+
+        conn.close()
+
+        logger.removeHandler(f_handler)
+        logger.removeHandler(c_handler)
+        logging.shutdown()
 
     def population(self, city):
         # Create a method that can look into the population of a city over
@@ -1175,102 +1388,48 @@ class GSMLS:
         return farm_area
 
     @staticmethod
-    def property_archive(mls_number, mls_address=None):
+    def property_archive(mls_number, mls_address=None, **kwargs):
+
+        logger = kwargs['logger']
+        driver = kwargs['driver']
+        gsmls_window = kwargs['gsmls_window']
+        rpr_window = kwargs['rpr_window']
+        open_window_list = [gsmls_window, rpr_window]
 
         contact_num = 2
 
-        options = Options()
-        # options.add_experimental_option("prefs", s)
-        # options.add_argument("--headless=new")
-        driver = webdriver.Edge(service=Service(), options=options)
-        driver.maximize_window()
-        website = 'https://mls.gsmls.com/member/'
-        driver.get(website)
-
-        # Login to the GSMLS
-        GSMLS.login('GSMLS', driver)
-
-        # Type in the MLS number or address. Create own function thats able to use both if necessary
-        search_listing = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, 'qcksrchmlstxt')))
-        search_listing.click()
-        search_listing.send_keys(mls_number)
-
-        print('Searching for MLS number...')
-        time.sleep(3.5)  # Built in latency to allow the table to populate
-        page_results = driver.page_source
+        # Type in the MLS number or address. Create own function that's able to use both if necessary
+        page_results = GSMLS.search_listing(mls_number, driver, logger)
 
         # Find the address table
-        soup = BeautifulSoup(page_results, 'html.parser')
-        table = soup.find('table', {"class": "df-table nomin mart0", "id": "search-help-table"})
-        main_table = table.find('tbody')
-        all_rows = main_table.find_all('tr')
+        all_rows = GSMLS.address_table_results(page_results, mls_number, logger)
 
-        for row in all_rows:
-            if row.td.a['value'] == mls_number:
+        if type(all_rows) is list:
+            for row in all_rows:
+                if row.td.a['value'] == mls_number:
 
-                click_mls_number = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.ID, 'selcontact' + str(contact_num))))
-                click_mls_number.click()
+                    new_window, sidebar_buttons = GSMLS.open_property_listing(driver, open_window_list, contact_num)
+                    open_window_list.append(new_window)
+                    try:
+                        for button in sidebar_buttons:
 
-                #  Clicking the MLS number will open up a new window. I need to switch to that window
-                time.sleep(2)
-                home_window = driver.current_window_handle
-                windows_list = driver.window_handles
-                new_window = [window for window in windows_list if window != home_window][0]
-                driver.switch_to.window(new_window)
+                            if button.span['class'][1] == 'fa-history':
 
-                time.sleep(2)
-                page_results2 = driver.page_source
-                soup = BeautifulSoup(page_results2, 'html.parser')
-                sidebar_table = soup.find('div', {"class": "side-bar-padding"})
-                sidebar_buttons = sidebar_table.find_all('div', {"class": "sidebar-button select"})
-                for button in sidebar_buttons:
+                                return GSMLS.address_list_scrape(driver, logger, mls_number, open_window_list)
 
-                    if button.span['class'][1] == 'fa-history':
+                            elif (button.span['class'][1] != 'fa-history') and (button != sidebar_buttons[-1]):
+                                continue
 
-                        property_archive = WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located((By.XPATH, "//span[contains(@class,'fa fa-history fa-lg')]")))
-                        property_archive.click()
-                        time.sleep(2)
-                        windows_list = driver.window_handles
-                        new_window2 = [window for window in windows_list if window not in [home_window, new_window]][0]
-                        driver.switch_to.window(new_window2)
-
-                        time.sleep(2)
-                        address_list = set()
-                        page_results3 = driver.page_source
-                        soup = BeautifulSoup(page_results3, 'html.parser')
-                        # print(soup)
-                        mls_tables = soup.find_all('table', {"class": "oneline"})
-
-                        for table in mls_tables:
-                            main_table2 = table.find('tbody')
-                            mls_history = main_table2.find_all('tr')[1]
-                            address_cell = mls_history.find_all('td')[3]
-
-                            address_list.add(address_cell.get_text())
-
-                            # Make sure I create functions to log out
-                        # print(address_list)
-                        return address_list
-
-                    elif button.span['class'][1] != 'fa-history':
-                        continue
-
-                    else:
+                    except Exception as E:
+                        logger.warning(f'{E}')
                         # There's no Property Archive. Use RPR program
-                        pass
+                        return f'No historical addresses available for MLS#:{mls_number}'
 
-            else:
-                contact_num += 1
-                continue
-
-        # main_table2 = table.find('a', {"href": "#", "class": "has-submenu"})['id']
-        # main_search = WebDriverWait(driver_var, 5).until(
-        #     EC.presence_of_element_located((By.ID, submenu_id)))
-        # main_search.click()
-
+                else:
+                    contact_num += 1
+                    continue
+        elif type(all_rows) is str:
+            return all_rows
 
 
     @staticmethod
@@ -1646,6 +1805,25 @@ class GSMLS:
             lnd_search.click()
 
     @staticmethod
+    def rename_pandas_columns(db):
+
+        # db = db.rename(columns={'City': 'city', 'Dates': 'dates', 'County': 'county',
+        #                         'Quarter': 'quarter', 'Month': 'month', 'Year': 'year',
+        #                         'New Listings': 'new_listings', 'New Listing % Change (YoY)': 'new_listing_yoy_change',
+        #                         'Closed Sales': 'closed_sales', 'Closed Sale % Change (YoY)': 'closed_sales_yoy_change',
+        #                         'Days on Markets': 'dom', 'Days on Market % Change (YoY)': 'dom_yoy_change',
+        #                         'Median Sales Prices': 'median_sales_price',
+        #                         'Median Sales Price % Change (YoY)': 'median_sales_price_yoy_change',
+        #                         'Percent of Listing Price Received': 'polpr',
+        #                         'Percent of Listing Price Receive % Change (YoY)': 'polpr_yoy_change',
+        #                         'Inventory of Homes for Sales': 'inventory_of_homes',
+        #                         'Inventory of Homes for Sale % Change (YoY)': 'inventory_of_homes_yoy_change',
+        #                         'Months of Supply': 'months_of_supply',
+        #                         'Months of Supplies % Change (YoY)': 'months_of_supply_yoy_change'})
+
+        return db
+
+    @staticmethod
     def res_property_styles(driver_var, page_source):
         """
 
@@ -1694,17 +1872,13 @@ class GSMLS:
         close_form.click()
 
     @staticmethod
-    def rpr(search_type, full_address):
+    def rpr(search_type, full_address, **kwargs):
 
-        options = Options()
-        # options.add_experimental_option("prefs", s)
-        # options.add_argument("--headless=new")
-        driver = webdriver.Edge(service=Service(), options=options)
-        driver.maximize_window()
-        website = 'https://www.narrpr.com/'
-        driver.get(website)
+        driver = kwargs['driver']
+        gsmls_window = kwargs['gsmls_window']
+        rpr_window = kwargs['rpr_window']
 
-        GSMLS.login('RPR', driver)
+        driver.switch_to.window(rpr_window)
         address_found = GSMLS.rpr_search_address(full_address, driver)
 
         if address_found:
@@ -1720,7 +1894,8 @@ class GSMLS:
             return 0
 
     @staticmethod
-    def rpr_property_facts(driver_var):
+    @logger_decorator
+    def rpr_property_facts(driver_var, **kwargs):
 
         county_html_pattern = re.compile(r'<span\s_ngcontent-ng-.*\sclass="ng-tns-.*">(\w+\sCounty)</span>')
         block_lot_pattern = re.compile(r'<span\s_ngcontent-ng-.*\sclass="ng-tns-.*">(LOT:\d{1,5}?\sBLK:\d{1,5}?\sDIST:\d{1,5}?)')
@@ -1780,6 +1955,13 @@ class GSMLS:
         c_handler = kwargs['c_handler']
 
         time.sleep(1.5)  # Built in latency for sign in page to appear.
+
+        main_page_results = driver_var.page_source
+        if '<div class="appcues-skip">' in main_page_results:
+            close_button = WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//html/body/appcues/modal-container/div/a")))
+            close_button.click()
+
         location = WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Enter Address, Place, APN/Tax IDs or Listing IDs']")))
         location.click()
@@ -1873,6 +2055,19 @@ class GSMLS:
             logger.info(f'{message}')
 
         return run_log_object
+
+    @staticmethod
+    def search_listing(mls_number, driver_var, logger_var, mls_address=None):
+        # Type in the MLS number or address. Create own function thats able to use both if necessary
+        search_listing = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.ID, 'qcksrchmlstxt')))
+        search_listing.click()
+        search_listing.send_keys(mls_number)
+
+        time.sleep(3.5)  # Built in latency to allow the table to populate
+        page_results = driver_var.page_source
+
+        return page_results
 
     @staticmethod
     def set_city(city_id_var, driver_var):
@@ -1989,7 +2184,9 @@ class GSMLS:
     #         os.chdir(previous_dir)
 
     @staticmethod
-    def sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list):
+    def sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs):
+
+        logger = kwargs['logger']
 
         change_dict = {'Rd': 'Road', 'Ct': 'Court', 'St': 'Street', 'Ave': 'Avenue',
                        'Dr': 'Drive', 'Ln': 'Lane', 'Pl': 'Place', 'Ter': 'Terrace', 'Hwy': 'Highway',
@@ -1998,72 +2195,147 @@ class GSMLS:
         space_pattern = re.compile(r'(\xa0)')
         address_pattern = re.compile(r'(.*)')
         mls_number = str(mls_db.loc[mls_address, 'MLSNUM'])
-        address_list = GSMLS.property_archive(mls_number, mls_address)
+        address_list = GSMLS.property_archive(mls_number, mls_address, **kwargs)
 
-        for addy in address_list:
-            try:
-                space_search = space_pattern.search(addy).group()
-                space_found = addy.replace(space_search, ' ')
-                change_search = clean_pattern.search(space_found).group()
-                # change_found = space_found.replace(change_search, change_dict[change_search.title()])
-                change_found = change_dict[change_search.title()].join(space_found.rsplit(change_search, maxsplit=1))
-                address_search = address_pattern.search(change_found)
-                final_address = GSMLS.clean_addresses(address_search)
+        if address_list == 'No historical addresses available':
+            logger.info(f'There are no historical addresses available for {mls_address}')
+            for idx, addy1 in enumerate(outer_address_list):
+                if mls_address[:10].upper() in addy1:
+                    final_address = outer_address_list[idx]
+                    logger.info(f'Partial match for {addy1} found in outer list. Sqft can now be found')
 
-            except AttributeError:
-                if addy != list(address_list)[-1]:
+                    return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                              transformed_address=final_address, **kwargs)
+
+                elif (mls_address[:10].upper() not in addy1) and (addy1 != outer_address_list[-1]):
                     continue
 
-                elif addy.upper() not in outer_address_list:
-                    space_search = space_pattern.search(addy).group()
-                    space_found = addy.replace(space_search, ' ')
-                    for idx, addy1 in enumerate(outer_address_list):
-                        if space_found[:10].upper() in addy1:
-                            final_address = outer_address_list[idx]
+                elif (mls_address[:10].upper() not in addy1) and (addy1 == outer_address_list[-1]):
 
-                            return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
-                                                      transformed_address=final_address)
-                        else:
-                            continue
-
-                else:
-                    # No address works
-                    full_address = addy.title() + ', ' + mls_db.loc[mls_address, 'TOWN']
-                    rpr_results = GSMLS.rpr('SQFT', full_address)
-                    if rpr_results > 0:
-
-                        mls_db.at[mls_address, 'SQFTAPPROX'] = rpr_results
-
-                    elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                    if int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
                         pass
 
                     else:
-                        mls_db.at[mls_address, 'SQFTAPPROX'] = 0
+                        # No address works
+                        logger.info(
+                            f'None of the addresses meets the database search criteria. Now initiating the RPR function.')
+                        full_address = mls_address + ', ' + mls_db.loc[mls_address, 'TOWN']
+                        rpr_results = GSMLS.rpr('SQFT', full_address)
+                        if rpr_results > 0:
+                            logger.info(f'RPR sqft results for {mls_address} have been found: {rpr_results}')
+                            mls_db.at[mls_address, 'SQFTAPPROX'] = rpr_results
 
-            else:
+                        elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                            pass
 
-                if final_address.upper() in outer_address_list:
-
-                    return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
-                                              transformed_address=final_address)
-                elif final_address.upper() not in outer_address_list:
-
-                    for idx, addy1 in enumerate(outer_address_list):
-                        if final_address[:10].upper() in addy1:
-                            final_address = outer_address_list[idx]
-
-                            return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
-                                                      transformed_address=final_address)
                         else:
-                            continue
+                            logger.info(f'RPR sqft results for {mls_address} have not been found')
+                            mls_db.at[mls_address, 'SQFTAPPROX'] = 0
+        else:
+            logger.info(f'A list of addresses similar to {mls_address} have been found. Looping through the list until an address which matches the criteria is found')
+            for addy in address_list:
+                try:
+                    space_search = space_pattern.search(addy).group()
+                    space_found = addy.replace(space_search, ' ')
+                    change_search = clean_pattern.search(space_found).group()
+                    # change_found = space_found.replace(change_search, change_dict[change_search.title()])
+                    change_found = change_dict[change_search.title()].join(space_found.rsplit(change_search, maxsplit=1))
+                    address_search = address_pattern.search(change_found)
+                    final_address = GSMLS.clean_addresses(address_search)
 
-                elif addy != list(address_list)[-1]:
-                    continue
+                except AttributeError:
+                    if addy != list(address_list)[-1]:
+                        logger.info(f'{addy} does not meet the database search criteria. Continuing through the loop')
+                        continue
+
+                    elif addy.upper() not in outer_address_list:
+                        space_search = space_pattern.search(addy).group()
+                        space_found = addy.replace(space_search, ' ')
+                        for idx, addy1 in enumerate(outer_address_list):
+                            if space_found[:10].upper() in addy1:
+                                final_address = outer_address_list[idx]
+                                logger.info(f'Partial match for {addy} found in outer list. Sqft can now be found')
+
+                                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                                          transformed_address=final_address, **kwargs)
+
+                            elif (space_found[:10].upper() not in addy1) and (addy1 != outer_address_list[-1]):
+                                continue
+
+                            elif (space_found[:10].upper() not in addy1) and (addy1 == outer_address_list[-1]):
+
+                                if int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                                    pass
+
+                                else:
+                                    # No address works
+                                    logger.info(f'None of the addresses meets the database search criteria. Now initiating the RPR function.')
+                                    full_address = addy.title() + ', ' + mls_db.loc[mls_address, 'TOWN']
+                                    rpr_results = GSMLS.rpr('SQFT', full_address)
+                                    if rpr_results > 0:
+                                        logger.info(f'RPR sqft results for {mls_address} have been found: {rpr_results}')
+                                        mls_db.at[mls_address, 'SQFTAPPROX'] = rpr_results
+
+                                    elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                                        pass
+
+                                    else:
+                                        logger.info(f'RPR sqft results for {mls_address} have not been found')
+                                        mls_db.at[mls_address, 'SQFTAPPROX'] = 0
+
+                else:
+
+                    if final_address.upper() in outer_address_list:
+                        logger.info(f'{final_address} meets the database search criteria')
+
+                        return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                                  transformed_address=final_address, **kwargs)
+                    elif final_address.upper() not in outer_address_list:
+
+                        for idx, addy1 in enumerate(outer_address_list):
+                            if final_address[:10].upper() in addy1:
+                                final_address = outer_address_list[idx]
+                                logger.info(f'Partial match for {final_address} found in outer list. Sqft can now be found')
+
+                                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list,
+                                                          transformed_address=final_address, **kwargs)
+
+                            elif (space_found[:10].upper() not in addy1) and (addy1 != outer_address_list[-1]):
+                                continue
+
+                            elif (space_found[:10].upper() not in addy1) and (addy1 == outer_address_list[-1]):
+
+                                if addy != list(address_list)[-1]:
+                                    continue
+
+                                elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                                    pass
+
+                                else:
+                                    # No address works
+                                    logger.info(
+                                        f'None of the addresses meets the database search criteria. Now initiating the RPR function.')
+                                    full_address = addy.title() + ', ' + mls_db.loc[mls_address, 'TOWN']
+                                    rpr_results = GSMLS.rpr('SQFT', full_address)
+                                    if rpr_results > 0:
+                                        logger.info(f'RPR sqft results for {mls_address} have been found: {rpr_results}')
+                                        mls_db.at[mls_address, 'SQFTAPPROX'] = rpr_results
+
+                                    elif int(mls_db.loc[mls_address, 'SQFTAPPROX']) > 0:
+                                        pass
+
+                                    else:
+                                        logger.info(f'RPR sqft results for {mls_address} have not been found')
+                                        mls_db.at[mls_address, 'SQFTAPPROX'] = 0
 
         return mls_db
 
     @staticmethod
-    def sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address=None):
+    def sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address=None, **kwargs):
+
+        logger = kwargs['logger']
+        f_handler = kwargs['f_handler']
+        c_handler = kwargs['c_handler']
 
         if transformed_address is None:
             # Sq ft search for non numbered blocks
@@ -2080,15 +2352,19 @@ class GSMLS:
                         mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[mls_address.upper(), 'Sq. Ft.']
 
             except ValueError:
-
+                logger.info(f'Multiple addresses @ {mls_address} have been found. The search will be narrowed to find the correct one')
                 year_built = mls_db.loc[mls_address, 'YEARBUILT']
                 tax_db = tax_db[(tax_db['Yr. Built'] == year_built) & (tax_db['Property Location'] == mls_address.upper())]
 
-                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list)
+                # GSMLS.kill_logger(logger, f_handler, c_handler)
+
+                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, **kwargs)
 
             except KeyError:
+                logger.warning(f'{mls_address} was not found in the tax database. Sq_ft_keyerror will be initiated to find the correct address')
+                # GSMLS.kill_logger(logger, f_handler, c_handler)
 
-                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list)
+                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs)
 
         else:
             # Sq ft search for numbered blocks
@@ -2105,15 +2381,23 @@ class GSMLS:
                         mls_db.at[mls_address, 'SQFTAPPROX'] = tax_db.loc[transformed_address.upper(), 'Sq. Ft.']
 
             except ValueError:
-
+                logger.info(
+                    f'Multiple addresses @ {mls_address} have been found. The search will be narrowed to find the correct one')
                 year_built = mls_db.loc[mls_address, 'YEARBUILT']
                 tax_db = tax_db[(tax_db['Yr. Built'] == year_built) & (tax_db['Property Location'] == transformed_address.upper())]
 
-                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address)
+                # GSMLS.kill_logger(logger, f_handler, c_handler)
+
+                return GSMLS.sq_ft_search(mls_address, mls_db, tax_db, outer_address_list, transformed_address, **kwargs)
 
             except KeyError:
+                logger.warning(
+                    f'{mls_address} was not found in the tax database. Sq_ft_keyerror will be initiated to find the correct address')
+                # GSMLS.kill_logger(logger, f_handler, c_handler)
 
-                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list)
+                return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs)
+
+        # GSMLS.kill_logger(logger, f_handler, c_handler)
 
         return mls_db
 
@@ -2125,7 +2409,7 @@ class GSMLS:
         # https://stackoverflow.com/questions/51054245/read-mails-from-custom-label-in-gmail-using-pythongoogle-api
         # https://stackoverflow.com/questions/41800867/gmail-api-using-multiple-labelids
 
-        cursor_var.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name = % s)", (table_name, ))
+        cursor_var.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name = %s)", (table_name, ))
 
         return cursor_var.fetchone()[0]
 
@@ -2173,12 +2457,14 @@ class GSMLS:
             .str.replace('np.nan', '0')
         }
 
-        temp_db2 = pd.DataFrame(temp_dict)
+        temp_db2 = pd.DataFrame(temp_dict).fillna(value='0')
         temp_db2 = temp_db2.astype({'unit1': 'int64', 'unit2': 'int64', 'unit3': 'int64', 'unit4': 'int64'})
 
         db['TOTALUNITS'] = temp_db2['unit1'] + temp_db2['unit2'] + temp_db2['unit3'] + temp_db2['unit4']
 
-        db.insert(5, 'TOTALUNITS', db.pop('TOTALUNITS'))
+        db.insert(6, 'TOTALUNITS', db.pop('TOTALUNITS'))
+
+        print(db.columns)
 
         return db
 
