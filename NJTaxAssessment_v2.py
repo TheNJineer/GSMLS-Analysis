@@ -332,6 +332,8 @@ class NJTaxAssessment:
                     elif city in i:
                         filename = os.path.join(target_path, i + '.xlsx')
                         db = pd.read_excel(filename, header=0)
+                        db = db.rename(columns={'PropertyLocation': 'Property Location',
+                                                'BuildingSqFt': 'Sq. Ft.', 'YearBuilt': 'Yr. Built'})
                     else:
                         raise IndexError(f'{city} does not exist in {county} County')
             else:

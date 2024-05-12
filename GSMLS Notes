@@ -1,4 +1,26 @@
 PRIORITIES:
+A)*** Use Apache Kafka, Apache Spark and Apache Airflow/NiFi to create a data pipeline for this system
+        - Apache Kafka can help me send sales data in batches to be processed in real time instead
+        of waiting for all the data to finish downloading to the process
+        - Apache Airflow/NiFi will help with the workflow/data flow management of the complex system
+    - Create Kafka topics called "Sold RES", "Sold MUL", "Sold LND", and "Pictures"
+    - The GSMLS class will house all of the necessary functions to complete the pipeline
+    - The first portion of the system will download data on a daily basis. Will be programmed using Apache Airflow and Python
+        - Download the sales data and the associated pictures
+        - Immediately send pictures to Kafka to be stored in Cassandra or MongoDB
+    - Convert xls files to xlsx using the batch_conversion_macro.py to clean and store in JSON format
+    - Use the GSMLS.clean_db_decorator as a template to understand what msgs need to be sent to Kafka so downstream trasnformation
+    can be seamless
+        - Create a metadata_json to hold main file contents and data for later transformations
+        {"metadata":
+            {"city_name":"", "city_name2":"", "county":"", "property_type":"", "mls_type":"", "qtr":"", "year":"", "median_sales_price":""},
+         "main_data": json
+            }
+    - Use pandas to convert xlsx content to JSON (json = df.to_json())
+    - Produce JSON data to Kafka
+    - Consume the the JSON data from Kafka using Apache Spark and Apache Airflow/NiFi and complete the rest of the data transformation and enrichment
+    - Store data in PostgreSQL for data exploration
+
 1) NJTaxAssessment
 ***Figure out how to properly add a package to sys.path and use it. Currently copied class from parent folder
 ***The url's arent https even though thats what I'm labeling them as. Figure this out. I think I need to add verifyssl=False
@@ -15,49 +37,78 @@ PRIORITIES:
 
 
 2) GSMLS
-***CHECKPOINT: Finish sq_ft_keyerror and separating the property_archive function into smaller functions
-                Add loggers into sq_ft_search and sq_ft_keyerror and make windows headless
-                The following functions need to accept **kwargs as an arg:
-                - find_sq_ft (DONE)
-                - sq_ft_search (DONE)
-                - sq_ft_keyerror (DONE)
-- Update pandas2sql's SQLAlchemy info for the right connection (DONE)
-- Update the rename_pandas_columns function to work for RES, MUL, and LND dbs. Also get the correct list of column names
-- create a function called kill_logger to properly handle ending the logger stream after each function (DONE)
-- Figure out how to properly calculate the Z-Score for the LND and MUL data
-    - I may have to wait until the LND and MUL database is created then pull the mean prices from there
-- Integrate find_sq_ft for MUL properties
+***CHECKPOINT: sq_ft_search experiences random failures when the sidebar_buttons cant be found. Figure this out
+selenium.common.exceptions.WebDriverException: Message: unknown error: failed to close window in 20 seconds
+  (Session info: MicrosoftEdge=121.0.2277.128)
+
+- clean_db_decorator()
+    - Create a seperate function to parse the county, city_name, property_type, mls_type, qtr, year
+
+- Find a way to clean up the code for find_sq_ft, sq_ft_search and sq_ft_search_keyerror
+    convert_lot_size
+  *** Organize STF folder. Remove old Excel files
+_ ***Create a function called old_sold_data() that utilizes the quarterly_sales functions to download all of the listings from
+    1990-2022 for RES, MUL and LND
+    - I'll have to update the page_criteria function to accept another arg so I can switch between "S" and "SD" (DONE)
+    - I'll have to find a way to update the quarterly_sales decorator to cycle through the old years
+        - old_sold_data() doesnt need to be created. Retrofit all quarterly_sales() functions to have a status_var and year_var
+        - The status_var would allow the functions switch between any property status necessary
+        - For the year_var, the default value is None. If none, the decorator will use the current year time_periods dict
+        - If year_var is not None, use the old_sold_time_periods dict
+        - Figure out what data type will be accepted for the year_var and how to cycle through the years
+        - Create an old_sold run log to house the download status of each year and qtr and shelve it(model off of GSMLS Run Dictionary)
+
+- FileNotFoundError is raised when loading the tax_db due to certain city names not being spelled correctly (ie: Andover vs Andover Township & Borough) (DONE)
+    - Incorporate FileNotFoundError exception and modify names until file found (DONE)
+    - FileNotFoundError: [WinError 3] The system cannot find the path specified: 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Property Data\\SUSSEX\\ANDOVER' (DONE)
+    - city_list = os.listdir(target_path) (DONE)
+    - Create function called tax_db_notfound(city_name2) (DONE)
+    - Ocean County doesn't have tax_dbs. For cities located in these counties, set tax_db = None (DONE)
+    - Have sq_ft_finder set all NA's in the mls_db to 0 and cast column datatype to int64 (DONE)
+
+- Extend the pattern search for convert_lot_size()
+    - Add a redundant .str.rstrip('ABCDEFGabcdef') on thr target1 in fix_lotsize() before trying to convert the type to float
+    - Land acres pattern needs to inlcude IRR, and all other abrv (DONE)
+    - Make sure the 'AC' pattern works even when 'AC' isnt there (DONE)
+    - Completely redo the convert_lot_size function (DONE)
+        - initial wrapper function accepts all string values
+        - Then, if string value meets a certain regex pattern, it initiate the function (DONE)
+        - Currently, the column is going through 2 conversion functions and giving bad results (DONE)
+        - Also add to acres pattern: \.\d{1,4}\sACRE(S)?, \.\d{1,4}\sAcre(s)? (DONE)
+        - Also add to lxw pattern: \d{1,5})\sX\s(\d{1,5} AVG, \d{1,3}\.\d{1,5})\sX\s(\d{1,5} (DONE)
+        - Theres a chance that both the acres and lot lxw is added. Create a seperate regex pattern for that (DONE)
+        - The current patterns returns whatever pattern is matches first. This creates a problem for results with AC and ACRES. How do I fix this? (DONE)
+        ValueError: could not convert string to float: '175111.2RES': Error while type casting for column 'LOTSIZE (SQFT)' (DONE)
+        - Lot sizes with just decimals numbers will trigger most of the patterns. How do I stop that? (DONE)
+        - The patterns 'ACRE', 'ACS', 'Acres' doesnt show up in the acres_pattern. Add this
+            - Turn the acres pattern into an re.compile object to include the re.ignorecase flag
+        - Create a pattern for lot size when two or more pattern type values are found in the cells
+
+- Cast the respective columns which use .str methods to strings in the clean_and_transfer_data functions
+- Properly accept the property_archive() traceback and use the correct except block (DONE)
+- Make sure the address regex patterns can recognize the S,W,E,N directions
+- Integrate find_sq_ft for MUL properties (DONE)
+    - Integrate the property type into sq_ft_search and sq_ft_keyerror (NOT NECESSARY)
+    - Create two modular functions which should be housed inside sq_ft_search that will be activated depending on the property type (NOT NECESSARY)
+    - The MUL function should be exactly identical to the RES function. Just replace 'SQFTAPPROX' with 'SQFTBLDG' (NOT NECESSARY)
+    - Change the 'SQFTBLDG' column to 'SQFTAPPROX' during the cleaning so I dont have to unnecessarily create new functions (DONE)
 - Create a function to house the string replacement methods on the address column
-- Add loggers into sq_ft_search and sq_ft_keyerror (DONE)
-    - THe logger isnt working in the sq_ft search
-- Add logic to where I open up a Selenium x GSMLS session and only use it when needed instead of logging in every time for usage (DONE)
-    - Create a function which opens rpr and gsmls in different tabs and returns the driver and window names so when they're ready to be used, they can (DONE)
-    - Close 2nd and 3rd opened windows (DONE)
-    - Add logic that creates a new window when doing an rpr_search() (DONE)
-    - Add logic to close the rpr_sq_ft window and clear the text from the rpr search box when search is complete then switch window
+- Add logic that creates a new window when doing an rpr_search() (DONE)
+    - Add logic to close the rpr_sq_ft window and clear the text from the rpr search box when search is complete then switch window (DONE)
 - Work on potential_farm_area() (DONE)
     - How can I do this process easier?
 - Separate property_archive function into smaller functions:
-    - Add @logger_decorator (DONE)
-    - Function for logging in if necessary
-    - search_listing() (DONE)
-    - address_table_results() (DONE)
-    - open_property_listing() (DONE)
     - address_list_scrape() (DONE)
         - I need to log the address that I find as well to see the address format
-        - Do I need to kill the logger in this function? How do I put the logger in here?
-- Do a try-except clause for when there's no historical home's addresses (DONE)
-- Refactor the property_archive() function to produce the property listing history
+- Refactor the property_archive() function to produce the property listing history (DONE)
 - Add a function which looks into RPR if none of the property archive addresses work (DONE)
     - Make sure rpr works properly when an address isnt found
+        - rpr_search_address(): Switch back to GSMLS tab if no address if found (Dont switch if theres no new tab open) (DONE)
+        - I also need to clear the results of the search page too regardless of if theres anything found (DONE)
     - Make sure rpr_property_facts works as intended
-- Extend the pattern search for convert_lot_size()
-    - Land acres pattern needs to inlcude IRR, and all other abrv
-    - Make sure the 'AC' pattern works even when 'AC' isnt there
-    - length_and_width_to_sqft isnt working for 3 7th Street (80 X 125)
 - Figure out how to automate the operation of the macro immediately after download and dispose of the old files
     - Make sure the clean_db decorator skips the Batch File Conversion xlsx
-- Create a anew directory called 'GSMLS' in the Selenium Temp Folder to put downloads in. Switch to this directory in the main function
+- Create a new directory called 'GSMLS' in the Selenium Temp Folder to put downloads in. Switch to this directory in the main function
 - Consolidate the 'MUL' and 'LND' quarterly_sales function into one. Accept property_type as an arg to use as a switch case
     - Modify the decorator to insert the property type as an arg
 - Create a try-except block in the main function which can be used to restart the program recursively
@@ -69,8 +120,11 @@ _ Refactor the run_main decorator to run on a quarterly basis
 - Fix the clean_and_transform function:
     - Round the BATHSTOTAL column to one dec place
     - SPLP should be rounded to 3 decimal places
-- *** Create function to store all qtrly results in SQL after cleaning the data
-    - Use the clean_db() and new pandas2sql()
+- *** Create function to store all qtrly results in SQL after cleaning the data (DONE)
+    - Update the rename_pandas_columns function to work for RES, MUL, and LND dbs. Also get the correct list of column names
+    - Use the clean_db() and new pandas2sql() (DONE)
+- Figure out how to properly calculate the Z-Score for the LND and MUL data
+    - I may have to wait until the LND and MUL database is created then pull the mean prices from there
 - Track rental prices as well
 
 3) Complete lat_long function in GSMLS
@@ -248,3 +302,66 @@ addy = addy.replace(r'\xa0', ' ').replace(r'Rd$', 'Road')\
             #     .replace(r'Ter$', 'Terrace').replace(r'Hwy$', 'Highway')\
             #     .replace(r'Pkwy$', 'Parkway').replace(r'Cir$', 'Circle')\
             #     .replace(r'.*', GSMLS.clean_addresses)
+
+
+ acres_pattern = r'(\.\d{1,6}(\sAC)?|\.\d{1,6}(\sAC.)?|\d{1,4}\.\d{1,6}(\sAC)?|\d{1,4}\.\d{1,6}(\sAC.)?|' \
+                        r'\d{0,4}\.\d{1,4}\sACRE(S)?|\d{0,4}\.\d{1,4}\sAcre(s)?)'
+                        (\d{1,4})?\.\d{1,6}(\s)?ac(\.)?(re(s)?)?
+        by_pattern = r'(\d{1,5})X\s(\d{1,5})|(\d{1,5})X(\d{1,5})|(\d{1,5})\sX\s(\d{1,5})|(\d{1,5})\sX(\d{1,5}|' \
+                     r'\d{1,5})\sX\s(\d{1,5}\sAVG|\d{1,3}\.\d{1,5})\sX\s(\d{1,5})'
+        # db = db.astype({'LOTSIZE': 'string'})
+        lotsize_sqft = db['LOTSIZE']
+
+        if property_type == 'RES':
+            db.insert(12, 'LOTSIZE (SQFT)',
+                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
+
+        elif property_type == 'MUL':
+            db.insert(12, 'LOTSIZE (SQFT)',
+                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
+
+        elif property_type == 'LND':
+            db.insert(12, 'LOTSIZE (SQFT)',
+                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
+                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
+                      .str.replace(',', ''))
+
+        db = db.astype({'LOTSIZE (SQFT)': 'float64'})
+        db = db.round({'LOTSIZE (SQFT)': 2})
+
+        return db
+
+
+ @staticmethod
+    def length_and_width_to_sqft(search_string):
+        if search_string.group(1) is not None:
+            return str((float(search_string.group(1)) * float(search_string.group(2))))
+        elif search_string.group(3) is not None:
+            return str((float(search_string.group(3)) * float(search_string.group(4))))
+        elif search_string.group(5) is not None:
+            return str((float(search_string.group(5)) * float(search_string.group(6))))
+        elif search_string.group(7) is not None:
+            return str((float(search_string.group(7)) * float(search_string.group(8))))
+
+KeyError: '17 E MAIN STREET'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 2427, in sq_ft_search
+    return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 2254, in sq_ft_keyerror
+    address_list = GSMLS.property_archive(mls_number, mls_address, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1445, in property_archive
+    new_window, sidebar_buttons = GSMLS.open_property_listing(driver, open_window_list, contact_num)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1334, in open_property_listing
+    sidebar_buttons = sidebar_table.find_all('div', {"class": "sidebar-button select"})
+                      ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'find_all'

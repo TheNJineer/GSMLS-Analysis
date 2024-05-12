@@ -1,0 +1,36 @@
+### Multiple Linear Regression: Feature Engineering
+
+##### As a real estate agent, I know there are many factors which effect home prices; 
+and one of those major factors are mortgage rates. 
+I'm interested to see if adding 'Mortgage Rates' as a feature of the data will convey any correlation to the 'Median Home Prices'
+
+new_data = pd.read_excel('NJ 10k Real Estate Data 2024-01-25.xlsx', sheet_name='All Months')
+new_data = new_data[['Dates', 'Median Sales Prices', 'New Listings', 'Closed Sales', 'Days on Markets', 'Percent of Listing Price Received', 'Inventory of Homes for Sales', 'Months of Supply']]
+new_data = new_data[new_data[['Dates', 'Median Sales Prices', 'New Listings', 'Closed Sales', 'Days on Markets', 'Percent of Listing Price Received', 'Inventory of Homes for Sales', 'Months of Supply']] != 0]
+new_data = new_data.dropna()
+modify_dates = new_data['Dates'].to_list()
+modify_dates = [str(i)[:7] for i in modify_dates]
+new_data.drop(columns=['Dates'], inplace=True)
+new_data.insert(0, 'Dates', pd.to_datetime(modify_dates, format='%Y-%m'))
+new_data.set_index('Dates', inplace=True, drop=False)
+new_data['Mortgage Rates'] = 0
+
+mortgage_data = pd.read_excel('Mortgage Rates 1971 - 2024.xlsx')
+observation_dates = mortgage_data['observation_date'].to_list()
+observation_dates = [str(i)[:7] for i in observation_dates]
+mortgage_data.drop(columns=['observation_date'], inplace=True)
+mortgage_data.insert(0, 'Dates', pd.to_datetime(observation_dates, format="%Y-%m"))
+
+def get_mortgage_rate(mortgage_df, main_df):
+    mortgage_df = mortgage_df.loc[2515:]
+    for idx, date in enumerate(set(mortgage_df['Dates'].to_list())):
+        median_mortgage_rate = mortgage_df[mortgage_df['Dates'] == date]
+        main_df.loc[date, 'Mortgage Rates'] = median_mortgage_rate['MORTGAGE30US_20240229'].mean()
+
+    return main_df
+
+new_df = get_mortgage_rate(mortgage_data, new_data)
+new_df.set_index('Dates', inplace=True, drop=False)
+new_df.describe()
+
+***Mortgage rates have a weak correlation to the PoLPR (0.17)
