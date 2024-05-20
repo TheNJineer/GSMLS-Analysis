@@ -1,4 +1,57 @@
 PRIORITIES:
+
+Apache Kafka Notes:
+https://docs.confluent.io/platform/current/installation/installing_cp/zip-tar.html
+https://www.youtube.com/watch?v=heXd6JA2TQc
+
+- I'm going to be using the community/commercial distro of Kafka: Confluent Kafka
+
+1) Download Steps:
+- Go to confluent.io/get-started
+- Choose the "self-managed" deployment and download
+- Choose the Community edition which is open-source and free forever
+    - Download the zip file
+    - Unzipped to C:\Users\Omar\Desktop\Confluent
+    - set CONFLUENT_HOME=~/Confluent
+
+2) Producer and consumer flow:
+- Change the local dir and server directory in the server and zookeeper files
+- Start Zookeeper
+    - Start a cmd from the confluent-7.6.1 folder
+    - then start the zookeeper with the following command:
+        - .\bin\windows\zookeeper-server-start.bat .\etc\kafka\zookeeper.properties
+        - the above command starts the zookeeper with the zookeeper config file
+        - *** If you encounter the "Classpath is empty. Please build the project first e.g. by running ‘gradlew jarAll’ error"
+        Use the solution in the following link: https://medium.com/@praveenkumarsingh/confluent-kafka-on-windows-how-to-fix-classpath-is-empty-cf7c31d9c787
+        - *** My current client port is 2128
+
+- Start Kafka Server
+    - Start new cmd line from the confluent-7.6.1 folder
+    - then start the server with the following command:
+        - .\bin\windows\kafka-server-start.bat .\etc\kafka\server.properties
+        - *** My server port is 9092
+- Create topics
+    - Start another cmd from the confluent-7.6.1 folder
+    - .\bin\windows\kafka-topics.bat --create --topic myFirstTopic --bootstrap-server localhost:9092
+
+- Start your producer
+    - In the same cmd as the topic, write the following command:
+        - .\bin\windows\kafka-console-producer.bat --topic myFirstTopic --bootstrap-server localhost:9092
+
+- Start your consumer
+    - Start another cmd from the confluent-7.6.1 folder
+    - Start the consumer with the following command:
+        - .\bin\windows\kafka-console-consumer.bat --topic myFirstTopic --from-beginning --bootstrap-server localhost:9092
+
+- Be sure to close both the Zookeeper and Server when finished
+
+
+
+
+
+
+
+
 A)*** Use Apache Kafka, Apache Spark and Apache Airflow/NiFi to create a data pipeline for this system
         - Apache Kafka can help me send sales data in batches to be processed in real time instead
         of waiting for all the data to finish downloading to the process
@@ -40,6 +93,33 @@ A)*** Use Apache Kafka, Apache Spark and Apache Airflow/NiFi to create a data pi
 ***CHECKPOINT: sq_ft_search experiences random failures when the sidebar_buttons cant be found. Figure this out
 selenium.common.exceptions.WebDriverException: Message: unknown error: failed to close window in 20 seconds
   (Session info: MicrosoftEdge=121.0.2277.128)
+
+*** CHECKPOINT: last index in publish_images_2kafka() produces an error AttributeError: 'NoneType' object has no attribute 'a'
+Remove this from the list
+
+
+**** 'xlrd' for opening old xls files works. Not sure what was going on last time but I dont have to convert to xlsx now
+- add function called scrape_image_links() into download_manager() which will return a dictionary (DONE)
+- build in latency periods to download xls file and for media page to load
+- Add kwargs args to the functions which accept the kafka producers so I can send two producers (one for pictures and one for json data)
+- Connect the Kafka Control Center to monitor my downloads
+- Create functions to log the kafka-producer error if it fails to produce
+- create function called format_data_for_kafka() which accepts the dwonloaded xls file name and image dict (DONE)
+    - merge the latlong data from the image dict into the pandas df before publishing to Kafka (DONE)
+        - df.to_json() which is an accepted Kafka datatype (DONE)
+    - separate IMAGE key and json.dumps() which is an accepted Kafka datatype (DONE)
+- Change publish_data_2kafka to format_data_for_kafka() and vice versa (DONE)
+- Some pictures might have the same name. Account for this so images arent replaced (DONE)
+- change the base paths for:
+    - Selenium saved path
+    - base path for publish_2kafka
+    - send2trash
+- have the GSMLS.results_found function return the xls file name (DONE)
+- have GSMLS.download manager() return both scrape_image_link() and results_found() (DONE)
+- Remove RPR from the sq_ft_finding process. Make this separate process
+- Add function to all quartly_sales functions that produce to Kafka
+- Add function that uses Spark to consume from Kafka and chain together cleaning/transformation pipeline
+- Delete unnecessary functions
 
 - clean_db_decorator()
     - Create a seperate function to parse the county, city_name, property_type, mls_type, qtr, year

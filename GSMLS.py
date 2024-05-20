@@ -1,6 +1,8 @@
+import json
 import pprint
 import re
-import sys
+import xlwings as xl
+import send2trash
 import time
 import os
 from copy import deepcopy
@@ -11,7 +13,6 @@ import requests
 import shelve
 import datetime
 import traceback
-import sys
 import pandas as pd
 import numpy as np
 from NJTaxAssessment_v2 import NJTaxAssessment
@@ -20,7 +21,6 @@ from sqlalchemy import create_engine
 import psycopg2
 import logging
 from datetime import datetime
-import selenium
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
@@ -29,17 +29,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
-# Allows for Selenium to click a button
-from selenium.webdriver.support.select import Select
-from selenium.common.exceptions import ElementNotVisibleException
 from selenium.common.exceptions import TimeoutException
-from selenium.common.exceptions import ElementNotSelectableException
-from selenium.common.exceptions import ElementClickInterceptedException
-from selenium.common.exceptions import InvalidArgumentException
-from selenium.common.exceptions import NoSuchAttributeException
-from selenium.common.exceptions import NoSuchDriverException
-from selenium.common.exceptions import NoSuchElementException
-from selenium.common.exceptions import WebDriverException
+from kafka import KafkaProducer
+
 
 
 class GSMLS:
@@ -226,25 +218,26 @@ class GSMLS:
                 kwargs['Run Log'] = run_log
                 if datetime.today() >= datetime.strptime(date_range[1], '%m/%d/%Y'):
 
-                    if run_log[property_type][qtr] == 'D.N.A':
+                    # if run_log[property_type][qtr] == 'D.N.A':
                         # D.N.A means 'Data Not Available'
-                        run_log = original_function(*args, **kwargs)
+                        # run_log = original_function(*args, **kwargs)
+                    original_function(*args, **kwargs)
 
-                    elif run_log[property_type][qtr] == 'IN PROGRESS':
-                        # run modified_quarterly_download
-                        previous_dir = os.getcwd()
-                        path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
-                        os.chdir(path)
-                        latest_file = sorted(os.listdir(path), key=lambda x: os.path.getctime(x))[-1]
-                        db = pd.read_excel(latest_file)
-                        os.chdir(previous_dir)
-                        kwargs['city_name'] = latest_file.split('Q')[0].strip()
-                        kwargs['county_name'] = db.loc[0, 'COUNTY'].rstrip('*')
-                        run_log = original_function(*args, **kwargs)
-
-                    elif run_log[property_type][qtr] == 'DOWNLOADED':
-                        logger.info(f'The {property_type} data has already been downloaded for {qtr}')
-                        pass
+                    # elif run_log[property_type][qtr] == 'IN PROGRESS':
+                    #     # run modified_quarterly_download
+                    #     previous_dir = os.getcwd()
+                    #     path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
+                    #     os.chdir(path)
+                    #     latest_file = sorted(os.listdir(path), key=lambda x: os.path.getctime(x))[-1]
+                    #     db = pd.read_excel(latest_file)
+                    #     os.chdir(previous_dir)
+                    #     kwargs['city_name'] = latest_file.split('Q')[0].strip()
+                    #     kwargs['county_name'] = db.loc[0, 'COUNTY'].rstrip('*')
+                    #     run_log = original_function(*args, **kwargs)
+                    #
+                    # elif run_log[property_type][qtr] == 'DOWNLOADED':
+                    #     logger.info(f'The {property_type} data has already been downloaded for {qtr}')
+                    #     pass
 
                 else:
                     # May need to put a logger msg here
@@ -257,60 +250,6 @@ class GSMLS:
             logger.removeHandler(f_handler)
             logger.removeHandler(c_handler)
             logging.shutdown()
-
-        return wrapper
-
-    @staticmethod
-    def run_main(original_function):
-        def wrapper(*args, **kwargs):
-            pass
-            # Formulate all the date variables
-            # todays_date = datetime.datetime.today().date()
-            # data_avail = Scraper.current_data
-            # temp_date = str(todays_date).split('-')
-            # day = int(temp_date[2])
-            # month = int(temp_date[1])
-            # year = temp_date[0]
-            # current_run_date = datetime.datetime.strptime(year + '-' + temp_date[1] + '-' + '24', "%Y-%m-%d").date()
-            #
-            # # Logic for calculating the next date to run main()
-            # if day < 24:
-            #     next_run_date = year + '-' + temp_date[1] + '-' + '24'
-            # elif day >= 24:
-            #     if data_avail == Scraper.event_log[obj.no_of_runs - 1]['Latest Available Data']:
-            #         next_run_date = year + '-' + temp_date[1] + '-' + '24'
-            #     else:
-            #         if month in [1, 2, 3, 4, 5, 6, 7, 8]:
-            #             nm = str(month + 1)
-            #             next_month = '0' + nm
-            #             next_run_date = year + '-' + next_month + '-' + '24'
-            #         elif month in [9, 10, 11]:
-            #             next_month = str(month + 1)
-            #             next_run_date = year + '-' + next_month + '-' + '24'
-            #         elif month == 12:
-            #             next_month = '01'
-            #             year = str(int(temp_date[0]) + 1)
-            #             next_run_date = year + '-' + next_month + '-' + '24'
-            #
-            # next_run_date = datetime.datetime.strptime(next_run_date, "%Y-%m-%d").date()
-            # if todays_date >= current_run_date:
-            #     if data_avail == Scraper.event_log[Scraper.no_of_runs - 1]['Latest Available Data']:
-            #         sleep_time = timedelta(days=1)
-            #         Scraper.waiting(sleep_time)
-            #
-            #         return 'RESTART'
-            #
-            #     else:
-            #         good_to_go = original_function(*args, **kwargs)
-            #
-            #     return good_to_go
-            #
-            # elif current_run_date < todays_date < next_run_date:
-            #     if todays_date < next_run_date:
-            #         sleep_time = next_run_date - todays_date
-            #         Scraper.waiting(sleep_time)
-            #
-            #         return 'RESTART'
 
         return wrapper
 
@@ -821,18 +760,19 @@ class GSMLS:
         return db
 
     @staticmethod
-    def cooling_system_statistics(db, **kwargs):
-        # Can only be used with RES and MUL property types
-        property_type = str(db.__name__)[-3:].upper()
+    def convert_xls_2_xlsx(xls_file_name):
 
-        if property_type == 'RES' or 'MUL':
-            interior_columns = ['COUNTY', 'TOWN', 'COOLSYSTEM']
-            interior_df = db[interior_columns].groupby(['COUNTY', 'TOWN'])
-            cooling_system_stats = interior_df['COOLSYSTEM'].value_counts()
+        base_path = 'new target folder'
+        macro_file = os.path.join(base_path, 'Batch Conversion Macro.xlsm')
 
-            return cooling_system_stats
-        else:
-            raise ValueError
+        wb = xl.Book(macro_file)
+        macro = wb.macro('BatchConvertXLSToXLSX')
+        macro()
+
+        temp_var = xls_file_name.split('.')
+        temp_var[-1] = 'xlsx'
+
+        return '.'.join(temp_var)
 
     @staticmethod
     def create_lnd_sales_table(cursor_var, conn_var):
@@ -924,22 +864,8 @@ class GSMLS:
             # placeholder for a block that a user can create a table on spot?
             pass
 
-    def descriptive_stats_state(self):
-        # Run descriptive analysis on all the homes for the state for the quarter
-        pass
-
     @staticmethod
-    def descriptive_statistics_county(db, **kwargs):
-        # Can be used with any property type RES, MUL, LND
-
-        main_columns = ['COUNTY', 'TOWN', 'LISTPRICE', 'SALESPRICE', 'DAYSONMARKET', 'UC-DAYS', 'SPLP']
-        target_df = db[main_columns].groupby(['COUNTY', 'TOWN'])
-        descriptive_stats = target_df.describe()
-
-        return descriptive_stats
-
-    @staticmethod
-    def download_manager(cities, city_id, property_type, qtr, driver_var, logger):
+    def download_manager(cities, city_id, property_type, qtr, driver_var, logger, kafka_prod):
 
         GSMLS.set_city(city_id, driver_var)
         GSMLS.show_results(driver_var)
@@ -952,9 +878,17 @@ class GSMLS:
 
         else:
             # Results were found
-            GSMLS.results_found(driver_var, cities[city_id], qtr, property_type)
+            file_name = GSMLS.results_found(driver_var, cities[city_id], qtr, property_type)
+            task = GSMLS.format_data_for_kafka(driver_var, page_results1, file_name, kafka_prod)
+            close_form = WebDriverWait(driver_var, 60).until(
+                EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
+            # close_form = WebDriverWait(driver_var, 60).until(
+            #         EC.presence_of_element_located((By.XPATH, "//a[@class='last show set']")))
+            close_form.click()
             GSMLS.set_city(city_id, driver_var)
             logger.info(f'Sales data for {cities[city_id]} has been downloaded')
+
+            return task
 
     @staticmethod
     @logger_decorator
@@ -1089,21 +1023,6 @@ class GSMLS:
         return sum_series
 
     @staticmethod
-    def floor_type_statistics(db, **kwargs):
-        # Can only be used with RES property type
-
-        property_type = str(db.__name__)[-3:].upper()
-
-        if property_type == 'RES':
-            type_columns = ['COUNTY', 'TOWN', 'FLOORS']
-            homes_df = db[type_columns].groupby(['COUNTY', 'TOWN'])
-            floor_type_stats = homes_df.value_counts()
-
-            return floor_type_stats
-        else:
-            raise ValueError
-
-    @staticmethod
     def get_us_pw(website):
         """
 
@@ -1121,21 +1040,6 @@ class GSMLS:
         os.chdir(previous_wd)
 
         return username, pw
-
-    @staticmethod
-    def home_type_statistics(db, **kwargs):
-        # Can only be used with RES property type
-
-        property_type = str(db.__name__)[-3:].upper()
-
-        if property_type == 'RES':
-            type_columns = ['COUNTY', 'TOWN', 'STYLEPRIMARY']
-            homes_df = db[type_columns].groupby(['COUNTY', 'TOWN'])
-            home_type_stats = homes_df.value_counts()
-
-            return home_type_stats
-        else:
-            raise ValueError
 
     def hotsheets(self):
         # Run the Hotsheets on GSMLS to pull the back on market, withdrawn listings, price changes from target cities
@@ -1222,16 +1126,6 @@ class GSMLS:
             print(f'{traceback.print_tb(te.__traceback__)}')
 
     @staticmethod
-    def loan_type_statistics(db, **kwargs):
-        # Can be used with any property type RES, MUL, LND
-
-        loan_columns = ['COUNTY', 'TOWN', 'LOANTERMS']
-        loan_df = db[loan_columns].groupby(['COUNTY', 'TOWN'])
-        loan_stats = loan_df.value_counts()
-
-        return loan_stats
-
-    @staticmethod
     def login(website, driver_var):
         """
 
@@ -1316,7 +1210,6 @@ class GSMLS:
                     market_dict[group[0]][group[1]] = round((data.sum() / dictionary[group[0]][0]) * 100, 3)
 
         return market_dict
-
 
     @staticmethod
     def no_results(city_id_var, driver_var):
@@ -1445,11 +1338,6 @@ class GSMLS:
         logger.removeHandler(c_handler)
         logging.shutdown()
 
-    def population(self, city):
-        # Create a method that can look into the population of a city over
-        # a 5/10/30-year period and determine the future growth of the city
-        pass
-
     @staticmethod
     def potential_farm_area_res(year_var: int, month_var: str, median_sales_cap=3000000):
         # Upload the most recent NJRealtor data
@@ -1473,7 +1361,6 @@ class GSMLS:
         return farm_area
 
     @staticmethod
-
     def property_archive(mls_number, mls_address=None, **kwargs):
 
         logger = kwargs['logger']
@@ -1566,6 +1453,8 @@ class GSMLS:
         qtr = kwargs['Qtr']
         date_range = kwargs['Dates']
         property_type = 'RES'
+        producer = KafkaProducer(bootstrap_servers='localhost:9092',
+                                 value_serializer=lambda v: json.dumps(v).encode('utf-8'))
 
         page_results = driver_var.page_source
         # Step 1: Choose the property type for the quick search
@@ -1597,7 +1486,7 @@ class GSMLS:
                         for city_id in cities_ids_list:
                             # Step 6: Download sales data from all municipalities which has data
                             # If no data is available, continue the program
-                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger)
+                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger, producer)
 
                         logger.info(
                             f'Sales data for municipalities located in {counties[county_id]} County is now complete')
@@ -1632,7 +1521,7 @@ class GSMLS:
                             cities_ids_list = cities.keys()
 
                         for city_id in cities_ids_list:
-                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger)
+                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger, producer)
 
                         logger.info(
                             f'Sales data for municipalities located in {counties[county_id]} County is now complete')
@@ -1914,25 +1803,6 @@ class GSMLS:
             lnd_search.click()
 
     @staticmethod
-    def rename_pandas_columns(db):
-
-        # db = db.rename(columns={'City': 'city', 'Dates': 'dates', 'County': 'county',
-        #                         'Quarter': 'quarter', 'Month': 'month', 'Year': 'year',
-        #                         'New Listings': 'new_listings', 'New Listing % Change (YoY)': 'new_listing_yoy_change',
-        #                         'Closed Sales': 'closed_sales', 'Closed Sale % Change (YoY)': 'closed_sales_yoy_change',
-        #                         'Days on Markets': 'dom', 'Days on Market % Change (YoY)': 'dom_yoy_change',
-        #                         'Median Sales Prices': 'median_sales_price',
-        #                         'Median Sales Price % Change (YoY)': 'median_sales_price_yoy_change',
-        #                         'Percent of Listing Price Received': 'polpr',
-        #                         'Percent of Listing Price Receive % Change (YoY)': 'polpr_yoy_change',
-        #                         'Inventory of Homes for Sales': 'inventory_of_homes',
-        #                         'Inventory of Homes for Sale % Change (YoY)': 'inventory_of_homes_yoy_change',
-        #                         'Months of Supply': 'months_of_supply',
-        #                         'Months of Supplies % Change (YoY)': 'months_of_supply_yoy_change'})
-
-        return db
-
-    @staticmethod
     def res_property_styles(driver_var, page_source):
         """
 
@@ -1976,9 +1846,11 @@ class GSMLS:
         # GSMLS.sort_file()
         close_page = driver_var.find_element(By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")
         close_page.click()
-        close_form = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
-        close_form.click()
+        # close_form = WebDriverWait(driver_var, 5).until(
+        #     EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
+        # close_form.click()
+
+        return city_var + ' ' + qtr_var + str(datetime.today().year) + ' ' + property_type + ' Sales GSMLS.xls'
 
     @staticmethod
     def rpr(search_type, full_address, **kwargs):
@@ -2174,6 +2046,135 @@ class GSMLS:
         return run_log_object
 
     @staticmethod
+    def format_data_for_kafka(driver_var, page_source, xls_file_name, kafka_prod):
+
+        # Step 1: Acquire the page source and find the main table holding the property information
+        latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
+        soup = BeautifulSoup(page_source, 'html.parser')
+        main_table = soup.find('div', {'class': 'result-table map_adjust'})
+        sold_listings = main_table.find_all('div', {'class': 'result-row'})
+        temp_var = sold_listings[0].find('div', {'class': 'result-cell media map-hide'}).a.get_text().strip()
+        first_media_link = GSMLS.first_media_link(temp_var)
+
+        main_window = driver_var.current_window_handle
+
+        sold_listings_dictionary = {
+            'MLSNUM': [],
+            'TOWN': [],
+            'ADDRESS': [],
+            'LATITUDE': [],
+            'LONGITUDE': [],
+            'IMAGES': []
+        }
+        # Step 2: Scrape all high res images associated with each property
+        GSMLS.scrape_image_links(len(sold_listings), sold_listings_dictionary, driver_var, first_media_link)
+
+        # Step 3: Switch to main property table window after scraping images
+        driver_var.switch_to.window(main_window)
+
+        # Step 4: Loop through all rows of the table to get target information
+        # We do not include the last index because it will result in an error
+        for result in sold_listings[:-1]:
+
+            sold_listings_dictionary['MLSNUM'].append(result.find('div', {'class': 'result-cell mlnum'}).a.get_text().strip())
+            town = result.find('div', {'class': 'result-cell town'}).get_text().strip()
+            sold_listings_dictionary['TOWN'].append(town.split('\t')[-1])
+            address = result.find('div', {'class': 'result-cell address'}).find_all('a')[-1]
+            sold_listings_dictionary['ADDRESS'].append(address.get_text().strip())
+            latlong = latlong_pattern.search(str(address))
+            sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
+            sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
+
+        GSMLS.publish_data_2kafka(xls_file_name, sold_listings_dictionary, kafka_prod)
+
+    @staticmethod
+    def first_media_link(target_str):
+
+        if '\n' or '\t' in target_str:
+            target_str = [i for i in target_str if i not in ['\n', '\t']]
+            if target_str[-1].isalpha():
+                target_str = ' '.join([''.join(target_str[:-1]), target_str[-1]])
+            else:
+                target_str = ''.join(target_str)
+
+        return target_str
+
+    @staticmethod
+    def publish_data_2kafka(xls_file_name: str, soldlistings: dict, kafka_prod):
+
+        base_path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
+
+        image_df = pd.DataFrame(soldlistings)
+        image_df = image_df[['MLSNUM', 'LATITUDE', 'LONGITUDE']]
+        sold_df = pd.read_excel(os.path.join(base_path, xls_file_name), engine='xlrd')
+        sold_df = sold_df.astype({'MLSNUM': 'string'})
+
+        # Merge the Latitude and Longitude data from the image df to the sold listings df
+        target_df = pd.merge(sold_df, image_df, on='MLSNUM')
+        target_df = target_df.to_json(orient='split', date_format='iso')
+
+        # Isolate the IMAGE key to send to Kafka Image topic
+        # print(soldlistings['IMAGES'])
+
+        # Send to Kafka
+        kafka_prod.send('myFirstTopic', target_df)
+        kafka_prod.send('myFirstTopic', soldlistings['IMAGES'])
+        # kafka_prod.flush()
+
+        GSMLS.sendfile2trash(xls_file_name)
+
+        # Delete the unnecessary keys from the dict and convert to pandas
+        # Isolate the IMAGE key to send to Kafka Image topic
+        # Convert merged dictionary to json and send to Kafka
+
+    @staticmethod
+    def scrape_image_links(len_var, dict_var, driver_var, link_var):
+
+        #Step 1: Find the respective media link and open it
+        print('Before media:', driver_var.window_handles)
+        media_link = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//a[normalize-space()='" + link_var + "']")))
+        media_link.click()
+
+        # Step 2: Switch to new media links window
+        print('New media opened:', driver_var.window_handles)
+        media_window = driver_var.window_handles[-1]
+        driver_var.switch_to.window(media_window)
+
+        # Step 3: Scrape the webpage and all associated high res image links
+        # We do minus 2 because the first listing is scraped without needing to click next and the very last one isnt needed
+        for num in range(len_var - 1):
+            image_dictionary = {}
+            # Set a checkpoint that makes sure the page loads
+            WebDriverWait(driver_var, 60).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@class='imageReportContainer']")))
+            soup = BeautifulSoup(driver_var.page_source, 'html.parser')
+            images_list = soup.find_all('div', {'class': 'imageReportContainer'})
+            for image_num, image in enumerate(images_list):
+                # The image name is found in the alt attribute of the img tag
+                # The high res image is in the value attribute of the first input tage
+                image_dictionary[f"{image.img['alt']} - {image_num}"] = image.input['value']
+
+            dict_var['IMAGES'].append(image_dictionary)
+
+            # Step 4: Find 'NEXT' link to cycle through the list of property pictures
+            next_button = WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.XPATH, "(//a[normalize-space()='Next'])[1]")))
+
+            if num != len_var - 2:
+                next_button.click()
+            else:
+                break
+
+        # Close the media window
+        driver_var.close()
+        print('Media closed:', driver_var.window_handles)
+        # driver_var.find_element(By.XPATH, "//a[normalize-space()='Close']").click()
+        # driver_var.switch_to.window(main_window)
+
+
+
+    @staticmethod
     def search_listing(mls_number, driver_var, logger_var, mls_address=None):
         # Type in the MLS number or address. Create own function thats able to use both if necessary
         search_listing = WebDriverWait(driver_var, 10).until(
@@ -2185,6 +2186,11 @@ class GSMLS:
         page_results = driver_var.page_source
 
         return page_results
+
+    @staticmethod
+    def sendfile2trash(xls_file_name: str):
+
+        send2trash.send2trash(os.path.join('C:\\Users\\Omar\\Desktop\\Selenium Temp Folder', xls_file_name))
 
     @staticmethod
     def set_city(city_id_var, driver_var):
@@ -2228,77 +2234,6 @@ class GSMLS:
         sign_out_button = WebDriverWait(driver_var, 5).until(
                             EC.presence_of_element_located((By.XPATH, '//*[@id="logout"]')))
         sign_out_button.click()
-
-    # @staticmethod
-    # def sort_file(county, city, filename):
-    #     """
-    #     Will find the recently downloaded zip file of the city
-    #     for which all the property information is located. This function will accept the
-    #     temporary file name and city as arguments and rename the file with the respective
-    #     city in the name and store it in the specific directory under that county
-    #     :param county:
-    #     :param city:
-    #     :param temp_file_name:
-    #     :return:
-    #     """
-    #
-    #     previous_dir = os.getcwd()
-    #     path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
-    #     base_path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Property Data'
-    #     os.chdir(path)
-    #     filenames = os.listdir(path)
-    #
-    #     try:
-    #         for file in filenames:
-    #             target_path = os.path.join(base_path, county, city)
-    #             if temp_file_name is not None:
-    #                 if temp_file_name != file:
-    #                     continue
-    #
-    #                 elif temp_file_name == file:
-    #                     extract_file = ZipFile(os.path.abspath(file))
-    #                     target_file = temp_file_name.rstrip('.zip') + '.csv'
-    #                     extract_file.extract(target_file)
-    #                     extract_file.close()
-    #
-    #                     if os.path.exists(target_path):
-    #                         time.sleep(0.5)
-    #                         shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
-    #                                                                                + 'Database' + ' ' + str(
-    #                             datetime.today().date()) + '.csv'))
-    #                     else:
-    #                         os.makedirs(target_path)
-    #                         time.sleep(0.5)
-    #                         shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
-    #                                                                                + 'Database' + ' ' + str(
-    #                             datetime.today().date()) + '.csv'))
-    #             elif file.startswith('TaxData'):
-    #                 target_file = file + '.xlsx'
-    #                 if os.path.exists(target_path):
-    #                     time.sleep(0.5)
-    #                     shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
-    #                                                                            + 'Database' + ' ' + str(
-    #                         datetime.today().date()) + '.xlsx'))
-    #                 else:
-    #                     os.makedirs(target_path)
-    #                     time.sleep(0.5)
-    #                     shutil.move(os.path.abspath(target_file), os.path.join(target_path, city + ' '
-    #                                                                            + 'Database' + ' ' + str(
-    #                         datetime.today().date()) + '.xlsx'))
-    #             # else:
-    #             #     if temp_file_name is not None:
-    #             #         raise IndexError(f"File Does Not Exist: {temp_file_name}")
-    #             #     else:
-    #             #         raise IndexError(f"File Does Not Exist", county, city)
-    #     except IndexError as IE:
-    #         print(f'{IE} ----> {city}')
-    #
-    #     except Exception as E:
-    #         print(f'{E}')
-    #
-    #     else:
-    #         send2trash.send2trash(file)
-    #         os.chdir(previous_dir)
 
     @staticmethod
     def sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs):
@@ -2629,21 +2564,6 @@ class GSMLS:
         db.insert(6, 'TOTALUNITS', db.pop('TOTALUNITS'))
 
         return db
-
-    @staticmethod
-    def total_units_statistics(db, **kwargs):
-        # Can only be used with the MUL property type
-
-        property_type = str(db.__name__)[-3:].upper()
-
-        if property_type == 'MUL':
-            unit_columns = ['COUNTY', 'TOWN', 'TOTALUNITS']
-            units_df = db[unit_columns].groupby(['COUNTY', 'TOWN'])
-            units_stats = units_df.value_counts()
-
-            return units_stats
-        else:
-            raise ValueError
 
     def under_contract(self, city=None):
         """
