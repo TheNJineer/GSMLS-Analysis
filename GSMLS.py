@@ -33,7 +33,6 @@ from selenium.common.exceptions import TimeoutException
 from kafka import KafkaProducer
 
 
-
 class GSMLS:
 
     def __init__(self):
@@ -45,112 +44,6 @@ class GSMLS:
                                    Use this section to house the decorator functions
     ______________________________________________________________________________________________________________
     """
-    @staticmethod
-    def clean_db_decorator(original_function):
-        @wraps(original_function)
-        def wrapper(*args, **kwargs):
-
-            # Final dictionary which will hold the individual pandas Dataframes to be concatenated
-            # and input into PostgreSQL
-            sales_data_dict = {
-                'lnd_sales_data': [],
-                'mul_sales_data': [],
-                'res_sales_data': []
-            }
-
-            state_data_path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Real Estate Data'
-            path = 'C:\\Users\\Omar\\Desktop\\STF'
-
-            # Step 1: Load latest NCJAR Data. Should no longer be loading from an Excel file
-            # Update this to pull data from PostgreSQL
-            os.chdir(state_data_path)
-            latest_data = os.listdir(state_data_path)[-1]
-            state_db = pd.read_excel(latest_data, sheet_name='All Months')  # Change this to pull from the SQL DB
-
-            os.chdir(path)
-            dirty_dbs_list = os.listdir(path)
-            main_driver, gsmls_window, rpr_window = GSMLS.open_browser_windows()
-
-            # Step 2: Initiate looping through batches of data to clean
-            for file in dirty_dbs_list:
-                if file.endswith('.xlsx'):
-                    db = pd.read_excel(file, engine='openpyxl')
-                    city_name = db.loc[0, 'TOWN'].rstrip('*1234567890().')
-                    city_name2 = deepcopy(city_name)
-                    for ending in ['Town', 'Twp', 'Boro', 'City']:
-                        if ending in city_name:
-                            city_name = city_name.split(ending)[0].strip()
-                    county_name = db.loc[0, 'COUNTY'].rstrip('*')
-                    property_type = file.split(' ')[-3]
-                    mls_type = file.split(' ')[-1].rstrip('.xlsx')
-                    qtr = file.split(' ')[-4][:2]
-                    year = int(file.split(' ')[-4][2:])
-                    try:
-                        # Step 3: Load the respective municipality's tax database. Will be needed to
-                        # obtain the sold listing's square footage. There are instances where the
-                        # city name parsed from the data raises a tax db error
-                        tax_db = NJTaxAssessment.city_database(county_name, city_name)
-                        tax_db.set_index('Property Location')
-                    except FileNotFoundError:
-                        # Modified var city_name isn't equivalent to the tax_db directory folder name
-                        tax_db = GSMLS.tax_db_notfound(county_name, city_name2, **kwargs)
-                    finally:
-                        kwargs['driver'] = main_driver
-                        kwargs['gsmls_window'] = gsmls_window
-                        kwargs['rpr_window'] = rpr_window
-                        kwargs['initial_db'] = db
-                        kwargs['tax_db'] = tax_db
-                        kwargs['property_type'] = property_type
-                        kwargs['mls_type'] = mls_type
-                        kwargs['qtr'] = qtr
-                        kwargs['median_sales_price'] = GSMLS.median_sales_price(state_db, city_name2, qtr, year)
-
-                        result = original_function(*args, **kwargs)
-
-                        # Step 4: Sort respective data into appropriate Sale Data List
-                        if property_type == 'RES':
-                            sales_data_dict['res_sales_data'].append(result)
-
-                        elif property_type == 'MUL':
-                            sales_data_dict['mul_sales_data'].append(result)
-
-                        elif property_type == 'LND':
-                            sales_data_dict['lnd_sales_data'].append(result)
-
-                else:
-                    continue
-
-            # Step 5: Insert pandas Dataframes into respective tables in PostgreSQL
-            for table_name, database in sales_data_dict.items():
-                GSMLS.pandas2sql(database, table_name, **kwargs)
-
-            GSMLS.kill_logger(logger_var=kwargs['logger'], file_handler=kwargs['f_handler'], console_handler=kwargs['c_handler'])
-        return wrapper
-
-    # @staticmethod
-    # def kpi(original_function):
-    #     def wrapper(*args, **kwargs):
-    #
-    #         property_type = str(original_function.__name__)[-3:].upper()
-    #         if property_type == 'RES':
-    #             kpi_db = GSMLS.potential_farm_area_res()
-    #         elif property_type == 'MUL':
-    #             pass
-    #         elif property_type == 'LND':
-    #             pass
-    #         elif property_type == 'COM':
-    #             pass
-    #
-    #         kpi_dict = {}
-    #         quarterly_sales_data = sql2pandas('RES')
-    #         for group, data in kpi:
-    #             kpi_dict.setdefault([group[0], {})
-    #             kpi_dict[group[0]].setdefault(group[1], 0)
-    #             # This currently wont work because the city names from both DB dont match
-    #             sales_price = quarterly_sales_data[quarterly_sales_data['TOWN'] == group[1]]['SALESPRICE'].median()
-    #             std = quarterly_sales_data[quarterly_sales_data['TOWN'] == group[1]].std()
-    #             kpi_dict[group[0]][group[1]] = sales_price - std
-
 
     @staticmethod
     def logger_decorator(original_function):
@@ -210,12 +103,9 @@ class GSMLS:
             #     'Q4': ['10/01/2023', '12/31/2023']
             # }
 
-            run_log = GSMLS.open_run_log()
-
             for qtr, date_range in time_periods.items():
                 kwargs['Qtr'] = qtr
                 kwargs['Dates'] = date_range
-                kwargs['Run Log'] = run_log
                 if datetime.today() >= datetime.strptime(date_range[1], '%m/%d/%Y'):
 
                     # if run_log[property_type][qtr] == 'D.N.A':
@@ -244,8 +134,6 @@ class GSMLS:
                     # May need to break the code here. No sense of continuing the loop if all subsequent data isnt
                     # available
                     continue
-
-            GSMLS.check_run_log(run_log, logger)
 
             logger.removeHandler(f_handler)
             logger.removeHandler(c_handler)
@@ -320,11 +208,6 @@ class GSMLS:
         else:
             return all_rows
 
-    def area_demographics(self, city):
-        # Create a method that generates a report on the stores in or near a city,
-        # school rankings, walk score, public transportation
-        pass
-
     def available_inventory(self, city=None):
         """
         Checks the available inventory in that city and checks the percentage of homes which have
@@ -337,6 +220,7 @@ class GSMLS:
 
     @staticmethod
     def check_run_log(run_log_object: dict, logger):
+        """Possibly can delete this function"""
 
         count = 0
 
@@ -355,10 +239,6 @@ class GSMLS:
             information = f'The sales data for all quarters have been downloaded. The run log has been reset'
             GSMLS.save_run_log(run_log_object, qtr, prop_type, "Doesn't matter", logger, message=information)
 
-    def check_status(self):
-        # Checks the action buttons to filter to the status of the homes we want to look up
-        pass
-
     @staticmethod
     def cities_download_manager(counties, county_id, driver_var, logger):
 
@@ -371,7 +251,19 @@ class GSMLS:
         return GSMLS.find_cities(results1)
 
     @staticmethod
+    def clean_address(address):
+
+        target = address.split(',')
+        raw_address = ' '.join(target[0].rstrip('*').strip().split(' '))
+        city = target[1].rstrip('*').strip()
+        raw_address = ' '.join([i.strip() for i in raw_address.split('\xa0')])
+        clean_address = ', '.join([raw_address, city])
+
+        return clean_address
+
+    @staticmethod
     def clean_addresses(search_string):
+        """Used inside of the find sq_ft function"""
 
         target_list = str(search_string.group()).split(' ')
         new_address_list = [i for i in target_list if i != '']
@@ -616,7 +508,6 @@ class GSMLS:
 
     @staticmethod
     @logger_decorator
-    @clean_db_decorator
     def clean_db(**kwargs):
         """
         This function accepts a Pandas database to:
@@ -776,7 +667,7 @@ class GSMLS:
 
     @staticmethod
     def create_lnd_sales_table(cursor_var, conn_var):
-
+        """Possibly can delete this function after creating schema function in cleaning script"""
         statement = "CREATE TABLE lnd_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
                     "longitude numeric, blockid smallint, lotid smallint, address varchar(100), town varchar(100)," \
                     "county varchar(100), tax_id varchar(100), mlsnum real, lotsize varchar(50), lotsize_sqft real," \
@@ -798,7 +689,7 @@ class GSMLS:
 
     @staticmethod
     def create_mul_sales_table(cursor_var, conn_var):
-
+        """Possibly can delete this function after creating schema function in cleaning script"""
         statement = "CREATE TABLE mul_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
                     "longitude numeric, blockid smallint, lotid smallint, total_units smallint, address varchar(100), town varchar(100)," \
                     "county varchar(100), tax_id varchar(100), mlsnum real, sqft_approx smallint," \
@@ -822,7 +713,7 @@ class GSMLS:
 
     @staticmethod
     def create_res_sales_table(cursor_var, conn_var):
-
+        """Possibly can delete this function after creating schema function in cleaning script"""
         statement = "CREATE TABLE res_sales_data (id serial, mls varchar(20), quarter char(2), latitude numeric," \
                     "longitude numeric, blockid smallint, lotid smallint, address varchar(100), town varchar(100)," \
                     "county varchar(100), tax_id varchar(100), mlsnum real, sqft_approx smallint," \
@@ -845,7 +736,7 @@ class GSMLS:
 
     @staticmethod
     def create_sql_table(table_name, cursor_var, conn_var, **kwargs):
-
+        """Possibly can delete this function"""
         logger = kwargs['logger']
 
         if table_name == 'res_sales_data':
@@ -865,8 +756,9 @@ class GSMLS:
             pass
 
     @staticmethod
-    def download_manager(cities, city_id, property_type, qtr, driver_var, logger, kafka_prod):
+    def download_manager(cities, city_id, property_type, qtr, driver_var, **kwargs):
 
+        logger = kwargs['logger']
         GSMLS.set_city(city_id, driver_var)
         GSMLS.show_results(driver_var)
         time.sleep(2)
@@ -878,21 +770,18 @@ class GSMLS:
 
         else:
             # Results were found
-            file_name = GSMLS.results_found(driver_var, cities[city_id], qtr, property_type)
-            task = GSMLS.format_data_for_kafka(driver_var, page_results1, file_name, kafka_prod)
+            file_name = GSMLS.results_found(driver_var, cities[city_id], qtr, property_type, **kwargs)
+            # Built-in latency to allow for file to xls file to download
+            time.sleep(1.5)
+            GSMLS.format_data_for_kafka(driver_var, page_results1, file_name, **kwargs)
             close_form = WebDriverWait(driver_var, 60).until(
                 EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
-            # close_form = WebDriverWait(driver_var, 60).until(
-            #         EC.presence_of_element_located((By.XPATH, "//a[@class='last show set']")))
             close_form.click()
             GSMLS.set_city(city_id, driver_var)
-            logger.info(f'Sales data for {cities[city_id]} has been downloaded')
-
-            return task
+            logger.info(f'{file_name} has been downloaded')
 
     @staticmethod
     @logger_decorator
-    # @kpi
     def email_campaign(**kwargs):
         pass
 
@@ -1041,10 +930,6 @@ class GSMLS:
 
         return username, pw
 
-    def hotsheets(self):
-        # Run the Hotsheets on GSMLS to pull the back on market, withdrawn listings, price changes from target cities
-        pass
-
     @staticmethod
     def kill_logger(logger_var, file_handler, console_handler):
 
@@ -1168,48 +1053,6 @@ class GSMLS:
             sign_in = WebDriverWait(driver_var, 10).until(
                 EC.presence_of_element_located((By.ID, "SignInBtn")))
             sign_in.click()
-
-    @staticmethod
-    def median_sales_price(db, town_name, qtr, year):
-
-        towns_list = db['City'].unique().tolist()
-        for instance in towns_list:
-            if town_name in instance:
-                city = towns_list[towns_list.index(instance)]
-                break
-
-        target_db = db[(db['City'] == city) & (db['Quarter'] == qtr) & (db['Year'] == year)]
-
-        mean_sales_price = round(target_db['Median Sales Prices'].mean(), 2)
-        sales_prices_std = round(target_db['Median Sales Prices'].std(), 2)
-
-        return tuple([mean_sales_price, sales_prices_std])
-
-    @staticmethod
-    def municipality_sales_avg(series, db, dictionary):
-
-        county_list = series.index.to_list()
-        county_sales = series.to_list()
-
-        city_sales_per_list = []
-        for county, county_sum in zip(county_list, county_sales):
-            for group, data in db:
-                if county == group[0]:
-                    city_sales_per_list.append(data.sum() / county_sum)
-                else:
-                    continue
-
-        city_sales_avg = round((mean(city_sales_per_list)) * 100, 3)
-
-        market_dict = {}
-        for group, data in db:
-            if group[0] in dictionary.keys():
-                if (data.sum() / dictionary[group[0]][0]) * 100 >= city_sales_avg:
-                    market_dict.setdefault(group[0], {})
-                    market_dict[group[0]].setdefault(group[1], 0)
-                    market_dict[group[0]][group[1]] = round((data.sum() / dictionary[group[0]][0]) * 100, 3)
-
-        return market_dict
 
     @staticmethod
     def no_results(city_id_var, driver_var):
@@ -1339,28 +1182,6 @@ class GSMLS:
         logging.shutdown()
 
     @staticmethod
-    def potential_farm_area_res(year_var: int, month_var: str, median_sales_cap=3000000):
-        # Upload the most recent NJRealtor data
-
-        previous_cwd = os.getcwd()
-        path = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\Real Estate Data'
-        os.chdir(path)
-        latest_file = os.listdir(path)[-1]
-        # Use the function which connects to PostgreSQL and gets the most recent table
-
-        db = pd.read_excel(latest_file, sheet_name='All Months')
-        os.chdir(previous_cwd)
-
-        temp_df1 = db[(db['Median Sales Prices'] <= median_sales_cap) & (db['Year'] == year_var) & (db['Month'] == month_var)].sort_values(by=['Closed Sales'], ascending=False)
-        target_df = temp_df1.groupby(['County', 'City'])['Closed Sales']
-        target_series = temp_df1.groupby('County')['Closed Sales'].sum()
-
-        county_farm_dict = GSMLS.target_counties_res(target_series)
-        farm_area = GSMLS.municipality_sales_avg(target_series, target_df, county_farm_dict)
-
-        return farm_area
-
-    @staticmethod
     def property_archive(mls_number, mls_address=None, **kwargs):
 
         logger = kwargs['logger']
@@ -1449,12 +1270,14 @@ class GSMLS:
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
-        run_log: dict = kwargs['Run Log']
         qtr = kwargs['Qtr']
         date_range = kwargs['Dates']
         property_type = 'RES'
-        producer = KafkaProducer(bootstrap_servers='localhost:9092',
-                                 value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+        kwargs['data-producer'] = KafkaProducer(bootstrap_servers='localhost:9092',
+                                                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                                                key_serializer=lambda k: bytes(k, 'utf-8'))
+        kwargs['image-producer'] = KafkaProducer(bootstrap_servers='localhost:9092',
+                                                value_serializer=lambda v: json.dumps(v).encode('utf-8'),)
 
         page_results = driver_var.page_source
         # Step 1: Choose the property type for the quick search
@@ -1469,7 +1292,6 @@ class GSMLS:
             counties = GSMLS.find_counties(results)  # Step 3: Find all the counties available
             GSMLS.set_dates(date_range, driver_var)  # Step 4: Set the target dates to search for data
             logger.info(f'Results for {qtr} ({date_range[0]} - {date_range[1]}) will now be extracted.')
-            run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'IN PROGRESS', logger)
 
             counties_ids_list = counties.keys()
 
@@ -1480,13 +1302,14 @@ class GSMLS:
                         continue
                     else:
                         # Step 5: Search for all available municipalities in the target county
+                        kwargs['county'] = counties[county_id] + ' County'
                         cities = GSMLS.cities_download_manager(counties, county_id, driver_var, logger)
                         cities_ids_list = cities.keys()
 
                         for city_id in cities_ids_list:
                             # Step 6: Download sales data from all municipalities which has data
                             # If no data is available, continue the program
-                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger, producer)
+                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, **kwargs)
 
                         logger.info(
                             f'Sales data for municipalities located in {counties[county_id]} County is now complete')
@@ -1521,20 +1344,16 @@ class GSMLS:
                             cities_ids_list = cities.keys()
 
                         for city_id in cities_ids_list:
-                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, logger, producer)
+                            GSMLS.download_manager(cities, city_id, property_type, qtr, driver_var, **kwargs)
 
                         logger.info(
                             f'Sales data for municipalities located in {counties[county_id]} County is now complete')
                         GSMLS.set_county(county_id, driver_var)
                         switch_case = 'NO'
 
-        run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'DOWNLOADED', logger)
-
         logger.removeHandler(f_handler)
         logger.removeHandler(c_handler)
         logging.shutdown()
-
-        return run_log
 
     @staticmethod
     @logger_decorator
@@ -1559,7 +1378,6 @@ class GSMLS:
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
-        run_log: dict = kwargs['Run Log']
         qtr = kwargs['Qtr']
         date_range = kwargs['Dates']
         property_type = 'MUL'
@@ -1576,7 +1394,6 @@ class GSMLS:
             counties = GSMLS.find_counties(results)  # Step 1: Find all the counties available
             GSMLS.set_dates(date_range, driver_var)
             logger.info(f'Results for {qtr} ({date_range[0]} - {date_range[1]}) will now be extracted.')
-            run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'IN PROGRESS', logger)
 
             counties_ids_list = counties.keys()
 
@@ -1628,13 +1445,9 @@ class GSMLS:
                         GSMLS.set_county(county_id, driver_var)
                         switch_case = 'NO'
 
-        run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'DOWNLOADED', logger)
-
         logger.removeHandler(f_handler)
         logger.removeHandler(c_handler)
         logging.shutdown()
-
-        return run_log
 
     @staticmethod
     @logger_decorator
@@ -1659,7 +1472,6 @@ class GSMLS:
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
-        run_log: dict = kwargs['Run Log']
         qtr = kwargs['Qtr']
         date_range = kwargs['Dates']
         property_type = 'LND'
@@ -1676,7 +1488,6 @@ class GSMLS:
             counties = GSMLS.find_counties(results)  # Step 1: Find all the counties available
             GSMLS.set_dates(date_range, driver_var)
             logger.info(f'Results for {qtr} ({date_range[0]} - {date_range[1]}) will now be extracted.')
-            run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'IN PROGRESS', logger)
 
             counties_ids_list = counties.keys()
 
@@ -1728,13 +1539,9 @@ class GSMLS:
                         GSMLS.set_county(county_id, driver_var)
                         switch_case = 'NO'
 
-        run_log = GSMLS.save_run_log(run_log, qtr, property_type, 'DOWNLOADED', logger)
-
         logger.removeHandler(f_handler)
         logger.removeHandler(c_handler)
         logging.shutdown()
-
-        return run_log
 
     @staticmethod
     def quarterly_appr_depr(county, city, quarter):
@@ -1828,7 +1635,8 @@ class GSMLS:
                 selection.click()
 
     @staticmethod
-    def results_found(driver_var, city_var, qtr_var, property_type):
+    def results_found(driver_var, city_var, qtr_var, property_type, **kwargs):
+
         check_all_results = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, 'checkall')))
         check_all_results.click()
@@ -1840,17 +1648,16 @@ class GSMLS:
         excel_file_input.click()
         filename_input = driver_var.find_element(By.ID, 'filename')
         filename_input.click()
-        AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(
-            city_var + ' ' + qtr_var + str(datetime.today().year) + ' ' + property_type + ' Sales GSMLS.xls').perform()
+        filename = city_var + ' ' + kwargs['county'] + ' ' + qtr_var + str(datetime.today().year) + ' ' + \
+                   property_type + ' Sales GSMLS'
+        AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(filename).perform()
+        time.sleep(0.5)
         download_button.click()
-        # GSMLS.sort_file()
         close_page = driver_var.find_element(By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")
         close_page.click()
-        # close_form = WebDriverWait(driver_var, 5).until(
-        #     EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[15]")))
-        # close_form.click()
 
-        return city_var + ' ' + qtr_var + str(datetime.today().year) + ' ' + property_type + ' Sales GSMLS.xls'
+
+        return filename
 
     @staticmethod
     def rpr(search_type, full_address, **kwargs):
@@ -2018,35 +1825,7 @@ class GSMLS:
         return sq_ft
 
     @staticmethod
-    def save_run_log(run_log_object, quarter, property_type, status_type, logger, message=None):
-
-        if message is None:
-            previous_dir = os.getcwd()
-            old_status = run_log_object[property_type][quarter]
-            run_log_object[property_type][quarter] = status_type
-            os.chdir('F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Saved Data')
-            with shelve.open('GSMLS Run Dictionary', writeback=True) as saved_data_file:
-                saved_data_file['Run Log'] = run_log_object
-
-            os.chdir(previous_dir)
-            logger.info(f'{property_type} {quarter}  status has been changed from {old_status} to {status_type}.'
-                        f'Run log has been saved.')
-            # print(f'{property_type} {quarter}  status has been changed from {old_status} to {status_type}.'
-            #             f'Run log has been saved.')
-
-        else:
-            previous_dir = os.getcwd()
-            os.chdir('F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Saved Data')
-            with shelve.open('GSMLS Run Dictionary', writeback=True) as saved_data_file:
-                saved_data_file['Run Log'] = run_log_object
-
-            os.chdir(previous_dir)
-            logger.info(f'{message}')
-
-        return run_log_object
-
-    @staticmethod
-    def format_data_for_kafka(driver_var, page_source, xls_file_name, kafka_prod):
+    def format_data_for_kafka(driver_var, page_source, xls_file_name, **kwargs):
 
         # Step 1: Acquire the page source and find the main table holding the property information
         latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
@@ -2085,7 +1864,7 @@ class GSMLS:
             sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
             sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
 
-        GSMLS.publish_data_2kafka(xls_file_name, sold_listings_dictionary, kafka_prod)
+        GSMLS.publish_data_2kafka(xls_file_name, sold_listings_dictionary, **kwargs)
 
     @staticmethod
     def first_media_link(target_str):
@@ -2100,25 +1879,33 @@ class GSMLS:
         return target_str
 
     @staticmethod
-    def publish_data_2kafka(xls_file_name: str, soldlistings: dict, kafka_prod):
+    def publish_data_2kafka(xls_file_name: str, soldlistings: dict, **kwargs):
 
+        kafka_data_prod = kwargs['data-producer']
+        kafka_img_prod = kwargs['image-producer']
         base_path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
 
         image_df = pd.DataFrame(soldlistings)
         image_df = image_df[['MLSNUM', 'LATITUDE', 'LONGITUDE']]
-        sold_df = pd.read_excel(os.path.join(base_path, xls_file_name), engine='xlrd')
+        sold_df = pd.read_excel(os.path.join(base_path, xls_file_name + '.xls'), engine='xlrd')
         sold_df = sold_df.astype({'MLSNUM': 'string'})
+
+        metadata_dict = {
+            'QTR': [],
+            'MLS': []
+        }
+        for _ in range(len(sold_df)):
+            metadata_dict['QTR'].append(kwargs['Qtr'])
+            metadata_dict['MLS'].append('GSMLS')
 
         # Merge the Latitude and Longitude data from the image df to the sold listings df
         target_df = pd.merge(sold_df, image_df, on='MLSNUM')
+        target_df = pd.concat([target_df, pd.DataFrame(metadata_dict)], axis=1)
         target_df = target_df.to_json(orient='split', date_format='iso')
 
-        # Isolate the IMAGE key to send to Kafka Image topic
-        # print(soldlistings['IMAGES'])
-
         # Send to Kafka
-        kafka_prod.send('myFirstTopic', target_df)
-        kafka_prod.send('myFirstTopic', soldlistings['IMAGES'])
+        kafka_data_prod.send('myFirstTopic', value=target_df, key=xls_file_name)
+        kafka_img_prod.send('testImages', soldlistings['IMAGES'])
         # kafka_prod.flush()
 
         GSMLS.sendfile2trash(xls_file_name)
@@ -2137,7 +1924,7 @@ class GSMLS:
         media_link.click()
 
         # Step 2: Switch to new media links window
-        print('New media opened:', driver_var.window_handles)
+        # print('New media opened:', driver_var.window_handles)
         media_window = driver_var.window_handles[-1]
         driver_var.switch_to.window(media_window)
 
@@ -2145,11 +1932,16 @@ class GSMLS:
         # We do minus 2 because the first listing is scraped without needing to click next and the very last one isnt needed
         for num in range(len_var - 1):
             image_dictionary = {}
+            #Built-in latency to allow for page to load
+            time.sleep(1)
             # Set a checkpoint that makes sure the page loads
             WebDriverWait(driver_var, 60).until(
                 EC.presence_of_element_located((By.XPATH, "//div[@class='imageReportContainer']")))
             soup = BeautifulSoup(driver_var.page_source, 'html.parser')
             images_list = soup.find_all('div', {'class': 'imageReportContainer'})
+            raw_property_address = soup.find('div', {'class': 'imagesReportTitle'}).get_text(strip=True).split('•')[1].strip()
+            clean_address = GSMLS.clean_address(raw_property_address)
+            print(clean_address)
             for image_num, image in enumerate(images_list):
                 # The image name is found in the alt attribute of the img tag
                 # The high res image is in the value attribute of the first input tage
@@ -2168,7 +1960,7 @@ class GSMLS:
 
         # Close the media window
         driver_var.close()
-        print('Media closed:', driver_var.window_handles)
+        # print('Media closed:', driver_var.window_handles)
         # driver_var.find_element(By.XPATH, "//a[normalize-space()='Close']").click()
         # driver_var.switch_to.window(main_window)
 
@@ -2190,7 +1982,7 @@ class GSMLS:
     @staticmethod
     def sendfile2trash(xls_file_name: str):
 
-        send2trash.send2trash(os.path.join('C:\\Users\\Omar\\Desktop\\Selenium Temp Folder', xls_file_name))
+        send2trash.send2trash(os.path.join('C:\\Users\\Omar\\Desktop\\Selenium Temp Folder', xls_file_name + '.xls'))
 
     @staticmethod
     def set_city(city_id_var, driver_var):
@@ -2472,32 +2264,6 @@ class GSMLS:
         cursor_var.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name = %s)", (table_name, ))
 
         return cursor_var.fetchone()[0]
-
-    @staticmethod
-    def target_counties_res(series):
-        """
-        Calculates the average attributable percentage of state sales for a county then creates a dictionary
-        of counties who's attributaable sales are over that average
-
-        :param series:
-        :return:
-        """
-        total_sum_county = series.sort_values().sum()
-        county_list = series.index.to_list()
-        county_sales_per_list = []
-        for cumsum in series.to_list():
-            county_sales_per_list.append(cumsum / total_sum_county)
-
-        county_sales_avg = round((mean(county_sales_per_list)) * 100, 3)
-
-        county_farm_dict = {}
-        for county, county_sum in zip(county_list, series.to_list()):
-            if ((county_sum / total_sum_county) * 100) > county_sales_avg:
-                county_farm_dict.setdefault(county, [])
-                county_farm_dict[county].append(county_sum)
-                county_farm_dict[county].append(round((county_sum / total_sum_county) * 100, 3))
-
-        return county_farm_dict
 
     @staticmethod
     def tax_db_notfound(county_var, cityname_var, **kwargs):

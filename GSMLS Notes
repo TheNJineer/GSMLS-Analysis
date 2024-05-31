@@ -33,6 +33,9 @@ https://www.youtube.com/watch?v=heXd6JA2TQc
 - Create topics
     - Start another cmd from the confluent-7.6.1 folder
     - .\bin\windows\kafka-topics.bat --create --topic myFirstTopic --bootstrap-server localhost:9092
+    - *** Be sure to set the amount of partitions I want when creating the topic
+    - *** I can change the amount of partitions to the topic after creation with the following command line:
+        - .\bin\windows\kafka-topics.bat --alter --topic <my_topic> --partitons <amount> --boostrap-server localhost:9092
 
 - Start your producer
     - In the same cmd as the topic, write the following command:
@@ -41,14 +44,10 @@ https://www.youtube.com/watch?v=heXd6JA2TQc
 - Start your consumer
     - Start another cmd from the confluent-7.6.1 folder
     - Start the consumer with the following command:
+        *** Make sure I adjust the settings to read from latest instead of the beginning
         - .\bin\windows\kafka-console-consumer.bat --topic myFirstTopic --from-beginning --bootstrap-server localhost:9092
 
 - Be sure to close both the Zookeeper and Server when finished
-
-
-
-
-
 
 
 
@@ -60,21 +59,13 @@ A)*** Use Apache Kafka, Apache Spark and Apache Airflow/NiFi to create a data pi
     - The GSMLS class will house all of the necessary functions to complete the pipeline
     - The first portion of the system will download data on a daily basis. Will be programmed using Apache Airflow and Python
         - Download the sales data and the associated pictures
-        - Immediately send pictures to Kafka to be stored in Cassandra or MongoDB
-    - Convert xls files to xlsx using the batch_conversion_macro.py to clean and store in JSON format
-    - Use the GSMLS.clean_db_decorator as a template to understand what msgs need to be sent to Kafka so downstream trasnformation
-    can be seamless
-        - Create a metadata_json to hold main file contents and data for later transformations
-        {"metadata":
-            {"city_name":"", "city_name2":"", "county":"", "property_type":"", "mls_type":"", "qtr":"", "year":"", "median_sales_price":""},
-         "main_data": json
-            }
     - Use pandas to convert xlsx content to JSON (json = df.to_json())
     - Produce JSON data to Kafka
-    - Consume the the JSON data from Kafka using Apache Spark and Apache Airflow/NiFi and complete the rest of the data transformation and enrichment
+    - Consume the the JSON data from Kafka using Apache Spark and complete the rest of the data transformation and enrichment
     - Store data in PostgreSQL for data exploration
 
 1) NJTaxAssessment
+*** Upload all tax municipality databases to PostgreSQL in one table
 ***Figure out how to properly add a package to sys.path and use it. Currently copied class from parent folder
 ***The url's arent https even though thats what I'm labeling them as. Figure this out. I think I need to add verifyssl=False
 - Update city_database function
@@ -94,17 +85,31 @@ A)*** Use Apache Kafka, Apache Spark and Apache Airflow/NiFi to create a data pi
 selenium.common.exceptions.WebDriverException: Message: unknown error: failed to close window in 20 seconds
   (Session info: MicrosoftEdge=121.0.2277.128)
 
-*** CHECKPOINT: last index in publish_images_2kafka() produces an error AttributeError: 'NoneType' object has no attribute 'a'
-Remove this from the list
+*** CHECKPOINT: Add the property name to the image dictionary keys
+    name = soup.find('div', {'class': 'imageReportTitle'}).input.get_text() (DONE)
+    - Will have to message the BS4 Object to get the name (DONE)
+        - Continue figuring out how to remove the \xa0 from the strings (DONE)
+    - Add the county to the xls filename. In the event an error is raised and program needs to restart, a Kafka Consumer will pull the latest
+    offset to know where to resume and feed to program (DONE)
+        - I need to find a way to read all partitions to find the last sent piece of data (CANT DO)
+        - I need to format my logger in a way that the quarterly_sales decorator reads the file in the event of failure (DONE)
+        and parses the last file name produced to know where to continue
+    - Be sure to properly add the key serializer to the Kafka Producer and add the xls filename as the key (Check this)
+    - Be sure to add a function to query the median sale price data for a municipality in the cleaning part of the pipeline (based on quarter)
+    - Add the Kafka Control Center
 
 
 **** 'xlrd' for opening old xls files works. Not sure what was going on last time but I dont have to convert to xlsx now
 - add function called scrape_image_links() into download_manager() which will return a dictionary (DONE)
-- build in latency periods to download xls file and for media page to load
-- Add kwargs args to the functions which accept the kafka producers so I can send two producers (one for pictures and one for json data)
+- Create a function which creates a metadata dict to concat necessary data to the target df. Current way of doing presents performance issues
+    - Due to PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.
+    Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy(
+- build in latency periods to download xls file and for media page to load (DONE)
+- Add kwargs args to the functions which accept the kafka producers so I can send two producers (one for pictures and one for json data) (NOT NECESSARY)
+    - Just create another topic called 'testImages' and have the producer produce to each separate topic (DONE)
 - Connect the Kafka Control Center to monitor my downloads
-- Create functions to log the kafka-producer error if it fails to produce
-- create function called format_data_for_kafka() which accepts the dwonloaded xls file name and image dict (DONE)
+- Add try-except blocks to the kafka producers to log if the producers fail to send data to Kafka
+- create function called format_data_for_kafka() which accepts the downloaded xls file name and image dict (DONE)
     - merge the latlong data from the image dict into the pandas df before publishing to Kafka (DONE)
         - df.to_json() which is an accepted Kafka datatype (DONE)
     - separate IMAGE key and json.dumps() which is an accepted Kafka datatype (DONE)
@@ -117,12 +122,9 @@ Remove this from the list
 - have the GSMLS.results_found function return the xls file name (DONE)
 - have GSMLS.download manager() return both scrape_image_link() and results_found() (DONE)
 - Remove RPR from the sq_ft_finding process. Make this separate process
-- Add function to all quartly_sales functions that produce to Kafka
+- Add function to all quarterly_sales functions that produce to Kafka
 - Add function that uses Spark to consume from Kafka and chain together cleaning/transformation pipeline
 - Delete unnecessary functions
-
-- clean_db_decorator()
-    - Create a seperate function to parse the county, city_name, property_type, mls_type, qtr, year
 
 - Find a way to clean up the code for find_sq_ft, sq_ft_search and sq_ft_search_keyerror
     convert_lot_size
@@ -274,23 +276,6 @@ ________________________________________________________________________________
 18) Allow code to check what was downloaded already and start at new point
 8) Continue working on the auction_locations function
     - Save this as a class variable
-
-GSMLS class
-________________________________________________________________________________________________________________________
-    - Break quarterly_sales_res down into smaller/modular functions
-    - Create a function which finds the recently downloaded file and move it to a specific folder, Use NJTaxAssessment function as a template
-    - For quarterly sales_res
-        Create function for:
-        Create a function that asks the user which counties and cities they want to download for to
-        account for cities and counties values as NONE
-        - no county name(s) or city(s) provided (DONE)
-        - one county name no city name
-        - list of county names no city names
-        - list of county names and list of names
-    - Stream the xlsx file instead of downloading to reduce the built-in latency
-        - Use the Requests an Session.Requests module to stream the files. (ie: Scraper class)
-        - On the final download page, use the Elements and Network tabs to fill out the payload to stream the file
-
 _______________________________________________________________________________________________________________________
 Unassigned
 3) Continue working on the property_tax_legend function
@@ -304,144 +289,3 @@ Unassigned
     11a) This should be a threaded operation. Create an empty list at the top of nj_database to store threaded operations (DONE)
 14) Update waiting function
 15) Update run_main decorator
-
-Use when you want to implement threading
-ALL COUNTYS
-# download_link1 = driver_var.find_element(By.XPATH, "/html/body/form/b[2]/big/a")
-# download_link1.click()  # Step 5: Download the zip file
-# threadobj = threading.Thread(target=NJTaxAssessment.unzip_and_extract,
-#                              args=[counties[key], cities[k], download_link.split('/')[2]])  # Step 6: Unzip and save file
-# started_threads.append(threadobj)
-# threadobj.start()
-
-ESSEX COUNTY
-# threadobj = threading.Thread(target=NJTaxAssessment.unzip_and_extract,
-#                              args=['ESSEX', cities[k]])  # Step 6: Unzip and save file
-# started_threads.append(threadobj)
-# threadobj.start()
-
-except ElementNotVisibleException as ENV:  # Make more specific exception handling blocks later
-    logger.exception(f'{ENV}')
-
-except ElementNotSelectableException as ENS:
-    logger.exception(f'{ENS}')
-
-except NoSuchElementException as NSEE:
-    logger.exception(f'{NSEE}')
-
-except WebDriverException as WDE:
-    logger.exception(f'{traceback.format_tb(WDE.__traceback__)}')
-    GSMLS.sign_out(driver_var)
-
-else:
-
-label[title='10 - Atlantic']
-
-Traceback (most recent call last):
-  File "F:\Python 2.0\PyCharm Community Edition 2022.2.1\plugins\python-ce\helpers\pydev\pydevd.py", line 1496, in _exec
-    pydev_imports.execfile(file, globals, locals)  # execute the script
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:\Python 2.0\PyCharm Community Edition 2022.2.1\plugins\python-ce\helpers\pydev\_pydev_imps\_pydev_execfile.py", line 18, in execfile
-    exec(compile(contents+"\n", file, 'exec'), glob, loc)
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1117, in <module>
-    obj.main()
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1109, in main
-    GSMLS.quarterly_sales_mul(driver)
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 69, in wrapper
-    result = original_function(*args, **kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 714, in quarterly_sales_mul
-    GSMLS.results_found(driver_var, cities[city_id], qtr, 'MUL')
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 950, in results_found
-    check_all_results = WebDriverWait(driver_var, 30).until(
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:\Python 2.0\pythonProject\venv\Real Estate Analysis\Lib\site-packages\selenium\webdriver\support\wait.py", line 95, in until
-    raise TimeoutException(message, screen, stacktrace)
-selenium.common.exceptions.TimeoutException: Message:
-
-except ElementClickInterceptedException:
-    element_not_found = True
-    while element_not_found:
-        try:
-            GSMLS.set_county(county_id, driver_var)
-            results1 = driver_var.page_source
-            cities = GSMLS.find_cities(results1)
-            cities_ids_list = cities.keys()
-            element_not_found = False
-        except ElementClickInterceptedException as ECIE:
-            logger.exception(f'Retrying the selection of {counties[county_id]}\n{ECIE.msg}')
-        # else:
-        #     break
-finally:
-
-
-addy = addy.replace(r'\xa0', ' ').replace(r'Rd$', 'Road')\
-            #     .replace(r'Ct$', 'Court').replace(r'St$', 'Street')\
-            #     .replace(r'Ave$', 'Avenue').replace(r'Dr$', 'Drive')\
-            #     .replace(r'Ln$', 'Lane').replace(r'Pl$', 'Place')\
-            #     .replace(r'Ter$', 'Terrace').replace(r'Hwy$', 'Highway')\
-            #     .replace(r'Pkwy$', 'Parkway').replace(r'Cir$', 'Circle')\
-            #     .replace(r'.*', GSMLS.clean_addresses)
-
-
- acres_pattern = r'(\.\d{1,6}(\sAC)?|\.\d{1,6}(\sAC.)?|\d{1,4}\.\d{1,6}(\sAC)?|\d{1,4}\.\d{1,6}(\sAC.)?|' \
-                        r'\d{0,4}\.\d{1,4}\sACRE(S)?|\d{0,4}\.\d{1,4}\sAcre(s)?)'
-                        (\d{1,4})?\.\d{1,6}(\s)?ac(\.)?(re(s)?)?
-        by_pattern = r'(\d{1,5})X\s(\d{1,5})|(\d{1,5})X(\d{1,5})|(\d{1,5})\sX\s(\d{1,5})|(\d{1,5})\sX(\d{1,5}|' \
-                     r'\d{1,5})\sX\s(\d{1,5}\sAVG|\d{1,3}\.\d{1,5})\sX\s(\d{1,5})'
-        # db = db.astype({'LOTSIZE': 'string'})
-        lotsize_sqft = db['LOTSIZE']
-
-        if property_type == 'RES':
-            db.insert(12, 'LOTSIZE (SQFT)',
-                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
-                      .str.replace(',', ''))
-
-        elif property_type == 'MUL':
-            db.insert(12, 'LOTSIZE (SQFT)',
-                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
-                      .str.replace(',', ''))
-
-        elif property_type == 'LND':
-            db.insert(12, 'LOTSIZE (SQFT)',
-                      lotsize_sqft.str.replace(acres_pattern, GSMLS.acres_to_sqft, regex=True)
-                      .str.replace(by_pattern, GSMLS.length_and_width_to_sqft, regex=True).str.rstrip('.')
-                      .str.replace(',', ''))
-
-        db = db.astype({'LOTSIZE (SQFT)': 'float64'})
-        db = db.round({'LOTSIZE (SQFT)': 2})
-
-        return db
-
-
- @staticmethod
-    def length_and_width_to_sqft(search_string):
-        if search_string.group(1) is not None:
-            return str((float(search_string.group(1)) * float(search_string.group(2))))
-        elif search_string.group(3) is not None:
-            return str((float(search_string.group(3)) * float(search_string.group(4))))
-        elif search_string.group(5) is not None:
-            return str((float(search_string.group(5)) * float(search_string.group(6))))
-        elif search_string.group(7) is not None:
-            return str((float(search_string.group(7)) * float(search_string.group(8))))
-
-KeyError: '17 E MAIN STREET'
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 2427, in sq_ft_search
-    return GSMLS.sq_ft_keyerror(mls_address, mls_db, tax_db, outer_address_list, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 2254, in sq_ft_keyerror
-    address_list = GSMLS.property_archive(mls_number, mls_address, **kwargs)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1445, in property_archive
-    new_window, sidebar_buttons = GSMLS.open_property_listing(driver, open_window_list, contact_num)
-                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:/Python 2.0/Projects/Real Life Projects/Real Estate Analysis/GSMLS.py", line 1334, in open_property_listing
-    sidebar_buttons = sidebar_table.find_all('div', {"class": "sidebar-button select"})
-                      ^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'NoneType' object has no attribute 'find_all'
