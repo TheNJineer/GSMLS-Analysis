@@ -23,7 +23,7 @@ https://www.youtube.com/watch?v=heXd6JA2TQc
         - the above command starts the zookeeper with the zookeeper config file
         - *** If you encounter the "Classpath is empty. Please build the project first e.g. by running ‘gradlew jarAll’ error"
         Use the solution in the following link: https://medium.com/@praveenkumarsingh/confluent-kafka-on-windows-how-to-fix-classpath-is-empty-cf7c31d9c787
-        - *** My current client port is 2128
+        - *** My current client port is 2128 or 2181
 
 - Start Kafka Server
     - Start new cmd line from the confluent-7.6.1 folder
