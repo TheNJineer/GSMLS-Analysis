@@ -61,37 +61,16 @@ GSMLS Workflow:
 'STREETNUMDISPLAY': 'string', 'SUBDIVISION': 'string', 'TAXID': 'string', 'TOWNCODE': 'int', 'WITHDRAWNDATE':'datetime,
 'YEARBUILT': 'int', 'ZIPCODE': 'string'}
 
-*** cleaning and transformation
-- rstrip the .(1111) from the Town column
-- calculate lot sqft from ACRES
-- change COUNTYCODE datatype to int after rstrip('*')
-- change all date columns to datetime from string
-- calculate the difference between the anticipated close date and actual close date
-- round the BATHSTOTAL to one decimal
-- calculate the time it takes from going under contract (pendingdate) to closing (closedate)
-- calculate net income for multi-units
-- impute NUMUNITS as 1 for residential homes
-- if the owner name has LLC, mark as an investment property
-- if theres a price change, calculate the change difference
-- Mark the instance as "Reject" if it has HighRise, OneFloor, TwnIntUn, TwnEndUn, FirstFlr, PlanUnit
-- Impute the sq_ft from the tax_id
-- Classify the subdivision based of the municipality a home is sold in (HARD)
-- Do sentiment analysis on the agent remarks
-    - Use the NLTK and Vader to run the analysis
-- Calculate the price per sqft
-    - If it's land, base on the lot size
-    - If its a house, base on the livable sqft
+Refactoring Tasks:
+1) Port into the kafka and start scripting the transformations (Download Apache Spark)
+2) The full metadata dict keeps getting saved to sql after every failure. Figure out a way to slice from previous failure
+to current failure
+3) Clean out duplicates from SQL
 
-Tasks:
-1) Create a function that adds columns to the df before publishing to kafka based on the return value of
-    return_target_columns
-    - Reorganize the columns names so the data can be properly appended when cleaned
-    - return columns should accept the df
-    - add the columns in the function then return the df
-    - change the column names in the function
-2) Figure out how to properly wait for the image page to load and scrape the images
-3) Format the logger WARNINGS to label what county/municipality this is happening at
-4) Figure out how to label townhouses and condos for later processing (We arent deleting)
+
+Update Tasks:
+1) Properly format the logger function and the tqdm bars
+3) Figure out how to label townhouses and condos for later processing (We arent deleting)
     - Change the RES to CON or TWNH
     - For ALL RES df
         - If "AssocFee" is not nan or not 0
@@ -99,14 +78,26 @@ Tasks:
     - For ALL XPY df
         - If "PROPERTYSTYLE" is in ['TwnIntUn', 'OneFloor', 'MultiFlr', 'TwnEndUn', 'FirstFlr']
         - There are multiple combinations of the condo/twnhouse types. How do I solve this?
-5) Learn how to  set up Kraft Kafka
+3) Learn how to  set up Kraft Kafka
+    - Get docker-compose file from work laptop
+    - Create docker compose of just kafka and jupyter notebook
+4) Sometimes after the file is downloaded, the 'Route' button is pressed. See why this is happening
+5) Move the datatype changes from from producer script to consumer script
+6) Understand all the necessary transformations needed for each column
+7) Create a run summary to be emailed when complete
+    - Include rows produced, years/qtr scrapped and errors encountered
+8) Use MongoDB to store the binary data of the images with it's metadata and labels
+9) Label homes bought by LLCs as "Investment - Bought" and sold by LLCs as "Investment - Sold". Otherwise "Retail"
+10) Calculate years in possession before sale to help with labelling
+11) Process the image links as a full string and send to kafka as part of the main data.
+Process and transform data to apply labels to pictures then save to MongoDB
+12) Scrape all the tax data too
+13) Get the NJ Bank Codes excel and turn into a database (in Apple Files)
 
 *** I DO NOT HAVE TO SCRAPE ADDITIONAL ADDRESSES
 - USE THE NJ TAX ASSESSMENT DATA TO FILL IN ANY INFORMATION GAPS
 - USE A COMBINATION OF THE CITY NAME, BLOCK AND LOT NUMBER AND STREET ADDRESS TO FILL IN
     - TOTAL ASSESSMENT, TAX RATE, TOTAL TAX, LOT SIZE, BLG DESCRIPTION, TAX ZONE, SQFT
-
-By.ID, 'downloadfiletype3'
 
 Keeping functions:
 - quarterly_sales_res

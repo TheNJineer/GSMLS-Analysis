@@ -1,3 +1,13 @@
+*** Starting Kafka
+Start the broker
+1) Open cmd from C:\Users\Omar\Desktop\Confluent\confluent-7.6.1
+2) bin\windows\kafka-server-start.bat etc\kafka\kraft\server.properties
+Start the producer
+2) bin\windows\kafka-console-producer.bat --broker-list localhost:9092 --topic res_properties
+Start the consumer
+3) bin\windows\kafka-console-consumer.bat --bootstrap-server localhost:9092 --topic res_properties --from-beginning
+
+
 1) In Apache Kafka, is it possible to update the amount of partitions to a topic even after the topic has been created?
 
 Yes, in Apache Kafka, it is possible to increase the number of partitions for a topic after it has been created.

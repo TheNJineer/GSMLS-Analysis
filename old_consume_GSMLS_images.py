@@ -52,7 +52,7 @@ try:
                 background_processes.add(task)
                 task.add_done_callback(background_processes.discard)
 
-        await asyncio.gather(*background_processes)
+        # await asyncio.gather(*background_processes)
         # Commit this batch once this is done looping
         image_consumer.commit()
 
