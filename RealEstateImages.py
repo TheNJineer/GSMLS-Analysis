@@ -123,6 +123,7 @@ class RealEstateImages:
 
         chunk_size = self.create_chunk_size()
 
+        # Include a column for Property Style. Some messages won't have this data available so set to "Unknown"
         target_columns = ['MLSNum', 'Address', 'Town', 'State', 'Zipcode', 'Block_ID', 'Lot_ID', 'Condition', 'Images']
         home_sections = ['Bathroom', 'Bedroom', 'Kitchen', 'Garage', 'Front', 'Backyard', 'Living Room']
 

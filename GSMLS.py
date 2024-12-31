@@ -1,5 +1,6 @@
 import json
 import re
+import selenium.common.exceptions
 import send2trash
 import time
 import os
@@ -26,11 +27,14 @@ from selenium.webdriver.common.action_chains import ActionChains as AC
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import UnexpectedAlertPresentException, WebDriverException
 from kafka import KafkaProducer
-from pprint import pprint
+from kafka.errors import NoBrokersAvailable
+from kafka.errors import KafkaTimeoutError
 
 
 # Custom class created to handle the console logging while using the tqdm progress bar
+# Subclass of the logging.Handler class
 class TqdmLoggingHandler(logging.Handler):
+
     def emit(self, record):
         msg = self.format(record)
         tqdm.write(msg)
@@ -40,7 +44,13 @@ class GSMLS:
     def __init__(self):
         self.counties = {}
         self.municipalities = {}
-        self.rows_counted = 0
+        self.rows_counted = {
+            'RES': 0,
+            'MUL': 0,
+            'LND': 0,
+            'RNT': 0,
+            'TAX': 0
+        }
         self.download_log = {
             'Year_': [],
             'Quarter': [],
@@ -124,7 +134,7 @@ class GSMLS:
         return clean_address
 
     @staticmethod
-    def click_target_tab(target_name, driver_var):
+    def click_target_tab(target_name, prop_type, driver_var):
 
         target_dict = {
             'County': 1,
@@ -133,8 +143,14 @@ class GSMLS:
             'Property_Type': 8
         }
 
+        GSMLS.explicit_page_load('Target Tabs', driver_var)
+
         # Locate and click the County tab
-        x_path = f'//*[@id="advance-search-fields"]/li[{target_dict[target_name]}]'
+        if prop_type == 'TAX' and target_name == 'Town':
+            x_path = f'//*[@id="advance-search-fields"]/li[2]'
+        else:
+            x_path = f'//*[@id="advance-search-fields"]/li[{target_dict[target_name]}]'
+
         property_tab = WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.XPATH, x_path)))
         property_tab.click()
@@ -169,6 +185,31 @@ class GSMLS:
         engine = create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/gsmls")
 
         return engine
+
+    @staticmethod
+    def create_producer(logger):
+
+        retries = 0
+
+        while retries <= 4:
+            for attempt in range(0,5):
+                try:
+                    producer = KafkaProducer(bootstrap_servers='localhost:9092',
+                                             key_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                                             value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                                             retries=3, acks='all')
+
+                    return producer
+
+                except NoBrokersAvailable as nba:
+                    logger.warning(f'{nba}')
+                    logger.warning(f"Kafka connection couldn't be established on attempt {attempt}. This will be retry #{attempt + 1}")
+                    time.sleep(3)
+
+                    if retries > 4:
+                        break
+
+        raise NoBrokersAvailable
 
     def create_state_dictionary(self, driver_var):
 
@@ -229,7 +270,8 @@ class GSMLS:
         # Request the download and close the page
         download_button.click()
         driver.switch_to.window(window_id)
-        close_page = driver_var.find_element(By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")
+        close_page = WebDriverWait(driver_var, 5).until(
+            EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")))
         close_page.click()
 
         return filename
@@ -260,35 +302,61 @@ class GSMLS:
             'Advanced Search': ["//header[@class='gsmls_header']//h2[1]",
                                 "//div[@id='adv-uncheck-all']", "//li[normalize-space()='* ® County']"],
             'Results': [f"//h2[normalize-space()='{prop_dict[property_type]} Results']",
-                        "//div[@id='sub-navigation-container']", "//table[@class='df-table sticky sticky-gray']"],
+                        "//div[@id='sub-navigation-container']", "//table[@class='df-table sticky sticky-gray']",
+                        "//a[@class='last show']"],
             'Download': ["//h2[normalize-space()='Download']",
                          "//div[@id='sub-navigation-container']", "//form[@id='downloadoption']//section[1]//div[1]//div[1]"],
             'Media Page': ["//div[@id='menu-selectBox']//div[2]", "//div[@class='imagesReportTitle']",
-                           f'//*[@id="{prop_id}"]/div/form']
+                           f'//*[@id="{prop_id}"]/div/form'],
+            'Login': ["//div[@class='login-logo']", "//input[@id='usernametxt']", "//input[@id='passwordtxt']"],
+            'Target Tabs': ["//li[normalize-space()='* ® County']", "//li[normalize-space()='* ® Town']",
+                            "//li[normalize-space()='* ® Town Code']"]
         }
 
         if page_name in ['Garden State MLS', 'Advanced Search', 'Results', 'Download']:
             # Wait 1
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 15).until(
                 EC.text_to_be_present_in_element((By.XPATH, arg_dict[page_name][0]), page_name))
             # Wait 2
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 15).until(
+                EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][1])))
+            if page_name == 'Results' and property_type == 'TAX':
+                # Wait 3
+                WebDriverWait(driver_var, 15).until(
+                    EC.visibility_of_element_located((By.XPATH, "//div[@class='result-table map_adjust']")))
+            else:
+                WebDriverWait(driver_var, 15).until(
+                    EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][2])))
+            if page_name == 'Results':
+                # Wait 4
+                # Additional check needed for Results page to make sure everything is loaded
+                WebDriverWait(driver_var, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, arg_dict[page_name][3])))
+
+        elif page_name in ['Login', 'Target Tabs']:
+            if page_name == 'Target Tabs':
+                WebDriverWait(driver_var, 30).until(
+                    EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0])))
+            # Wait 1
+            WebDriverWait(driver_var, 30).until(
+                EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][0])))
+            # # Wait 2
+            WebDriverWait(driver_var, 30).until(
                 EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][1])))
             # Wait 3
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][2])))
 
         elif page_name == 'Media Page':
             assert window_id == driver_var.current_window_handle
-            # pprint(driver_var.page_source)
             # Wait 1
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 15).until(
                 EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0])))
             # # Wait 2
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 15).until(
                 EC.presence_of_element_located((By.XPATH, arg_dict[page_name][1])))
             # Wait 3
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 15).until(
                 EC.presence_of_element_located((By.XPATH, arg_dict[page_name][2])))
 
     def find_cities(self, county_id, page_source):
@@ -376,7 +444,12 @@ class GSMLS:
 
     def load_metadata(self):
 
-        metadata = pd.read_sql_table('gsmls_event_log', self.engine)
+        query = """
+                SELECT * FROM gsmls_event_log
+                ORDER BY id DESC
+                LIMIT 1;
+                """
+        metadata = pd.read_sql_query(query, self.engine)
         last_row = metadata.shape[0] - 1
 
         if metadata.empty:
@@ -401,6 +474,9 @@ class GSMLS:
         username, _, pw = GSMLS.get_us_pw(website)
 
         if website == 'GSMLS':
+
+            GSMLS.explicit_page_load('Login', driver_var)
+
             gsmls_id = driver_var.find_element(By.ID, 'usernametxt')
             gsmls_id.click()
             gsmls_id.send_keys(username)
@@ -417,7 +493,7 @@ class GSMLS:
             duplicate = soup.find('input',
                     {'class':'gs-btn-submit-sh gs-btn-submit-two tertiary-color ps-tertiary-color fs14 popup_button_0'})
             if type(duplicate) == bs4.element.Tag:
-                terminate_duplicate_session = WebDriverWait(driver_var, 5).until(
+                terminate_duplicate_session = WebDriverWait(driver_var, 10).until(
                                 EC.presence_of_element_located((By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input[1]')))
                 terminate_duplicate_session.click()
 
@@ -429,7 +505,7 @@ class GSMLS:
             # Check if there's a GSMLS popup notice. If so, close the message
             if type(notice_msg) == bs4.element.Tag:
                 try:
-                    ok_button = WebDriverWait(driver_var, 1).until(
+                    ok_button = WebDriverWait(driver_var, 10).until(
                                 EC.presence_of_element_located((By.XPATH, "//input[@value='OK']")))
                     ok_button.click()
                 except TimeoutException:
@@ -444,13 +520,15 @@ class GSMLS:
         # message_box = soup.find('div', {'id': 'message-box-container', 'class': 'active-container'})
 
         # if message_box:
-        no_results_found = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.XPATH, '//*[@id="message-box"]/div[2]/input')))
+        WebDriverWait(driver_var, 5).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@id='message-box']")))
+        no_results_found = WebDriverWait(driver_var, 10).until(
+            EC.element_to_be_clickable((By.XPATH, '//*[@id="message-box"]/div[2]/input')))
         no_results_found.click()
-        time.sleep(1)  # Built-in latency
+        # time.sleep(1)  # Built-in latency
 
     @staticmethod
-    def page_criteria(timeframe, driver_var):
+    def page_criteria(timeframe, prop_type, driver_var):
 
         # Locate and click the Status tab
         x_path = '//*[@id="advance-search-fields"]/li[2]'
@@ -464,19 +542,28 @@ class GSMLS:
 
         if timeframe == 'historic':
             # Click the radio symbols which return historic data
-            target_status = ['SD', 'WD', 'XD']
+            target_status = {'RES': ['SD', 'WD', 'XD'],
+                             'MUL': ['SD', 'WD', 'XD'],
+                             'LND': ['SD', 'WD', 'XD'],
+                             'RNT': ['RD', 'WD', 'XD']}
 
-            for target in target_status:
-                status = driver_var.find_element(By.ID, target)
-                status.click()  # Step 3: Check the sold status
+        elif timeframe == 'mixed':
+            # Click the radio symbols which return historic data
+            target_status = {'RES': ['S', 'W', 'X','SD', 'WD', 'XD'],
+                             'MUL': ['S', 'W', 'X','SD', 'WD', 'XD'],
+                             'LND': ['S', 'W', 'X','SD', 'WD', 'XD'],
+                             'RNT': ['R', 'W', 'X','RD', 'WD', 'XD']}
 
         elif timeframe == 'current':
             # Click the radio symbols which return historic data
-            target_status = ['S', 'W', 'X']
+            target_status = {'RES': ['S', 'W', 'X'],
+                             'MUL': ['S', 'W', 'X'],
+                             'LND': ['S', 'W', 'X'],
+                             'RNT': ['R', 'W', 'X']}
 
-            for target in target_status:
-                status = driver_var.find_element(By.ID, target)
-                status.click()  # Step 3: Check the sold status
+        for target in target_status[prop_type]:
+            status = driver_var.find_element(By.ID, target)
+            status.click()  # Step 3: Check the sold status
 
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
@@ -514,9 +601,20 @@ class GSMLS:
 
                 # Click the property type in the dropdown menu
                 GSMLS.click_property_type(type_, driver_var)
+
                 # Set the page criteria
                 # Make the timeframe an instance var that can dynamically change
-                GSMLS.page_criteria('historic', driver_var)
+                try:
+                    if kwargs['Year'] == datetime.now().year - 1:
+                        self.timeframe = 'mixed'
+                    elif kwargs['Year'] == datetime.now().year:
+                        self.timeframe = 'current'
+
+                    GSMLS.page_criteria(self.timeframe, type_, driver_var)
+                except selenium.common.exceptions.ElementNotInteractableException:
+                    # The TAX property type doesn't have an uncheck all option or set page criteria
+                    pass
+
                 # Set the dates
                 GSMLS.set_dates(date_range, type_, driver_var)
                 # If this is rent the property styles
@@ -535,9 +633,9 @@ class GSMLS:
                                 self.last_scraped_county = None
 
 
-                        GSMLS.click_target_tab('County', driver_var)
+                        GSMLS.click_target_tab('County', type_, driver_var)
                         GSMLS.set_county(2, county, driver_var)  # Set the county
-                        GSMLS.click_target_tab('Town', driver_var)
+                        GSMLS.click_target_tab('Town', type_, driver_var)
 
                         with tqdm(total=len(municipality.keys()), desc='Municipalities', colour='green', position=1) as muni_bar:
                             for city_id, city_name in municipality.items():
@@ -572,12 +670,14 @@ class GSMLS:
                                     GSMLS.no_results(driver_var)
                                     muni_bar.update(1)
                                     logger.info(f'There is no GSMLS sales data available for {city_name}')
-                                    GSMLS.click_target_tab('Town', driver_var)
+                                    GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
-                                elif "Only first 500 records will be displayed." in str(page_results1):
+                                elif "only first 500 records will be displayed" in str(page_results1):
                                     # Too many results were found, split the search dates
-                                    self.split_search_dates(qtr, date_range, type_, city_name, county, driver_var, **kwargs)
-                                    GSMLS.click_target_tab('Town', driver_var)
+                                    self.download_log['Results_Found'].append('Yes')
+                                    self.split_search_dates(kwargs['Year'], type_, city_name, county, driver_var, **kwargs)
+                                    self.download_log['Finished'][-1] = 'Yes'
+                                    GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
 
                                 else:
@@ -594,10 +694,10 @@ class GSMLS:
                                     self.download_log['Finished'][-1] = 'Yes'
                                     muni_bar.update(1)
                                     GSMLS.exit_results_page(driver_var)
-                                    GSMLS.click_target_tab('Town', driver_var)
+                                    GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
 
-                        GSMLS.click_target_tab('County', driver_var)
+                        GSMLS.click_target_tab('County', type_, driver_var)
                         GSMLS.set_county(2, county, driver_var)  # Set the county
                         counties_bar.update(1)
 
@@ -642,14 +742,16 @@ class GSMLS:
         """
 
         # Locate and click the County tab
-        x_path = '//*[@id="advance-search-fields"]/li[8]'
+        x_path = '//*[@id="advance-search-fields"]/li[11]'
         property_tab = WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.XPATH, x_path)))
         property_tab.click()
-        time.sleep(1)
 
-        for type_ in ['RES', 'MUL', 'LND']:
-            driver_var.find_element(By.ID, type_).click()
+        for type_ in ['1Story', '1.5Story', 'HalfDupl', '2Stories', '3+Story','Apartmt', 'Apartmnt',
+                      'Basement', 'Condo', 'Duplex', 'FirstFlr', 'FourPlex', 'HighRise', 'MultiFlr',
+                      'OneFloor', 'TwnEndUn', 'TwnIntUn', 'Triplex']:
+            WebDriverWait(driver_var, 10).until(
+                EC.presence_of_element_located((By.ID, type_))).click()
 
     @staticmethod
     def return_target_columns(df, ptypes: str):
@@ -658,7 +760,7 @@ class GSMLS:
 
             columns = ['MLSNUM', 'STATUS_SHORT', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                        'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'DAYSONMARKET', 'ORIGLISTPRICE',
-                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS_SHORT', 'ROOMS', 'BEDS','BATHSTOTAL',
+                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS_SHORT', 'ROOMS', 'BEDS','BATHSFULLTOTAL', 'BATHSHALFTOTAL','BATHSTOTAL',
                        'SQFTAPPROX', 'ACRES', 'LOTSIZE', 'ASSESSAMOUNTBLDG', 'ASSESSAMOUNTLAND', 'ASSESSTOTAL','SUBPROPTYPE',
                        'STYLEPRIMARY_SHORT', 'STYLE_SHORT', 'SUBDIVISION', 'TAXAMOUNT', 'TAXRATE', 'TAXYEAR','YEARBUILT',
                        'LISTDATE', 'PENDINGDATE', 'ANTICCLOSEDDATE', 'CLOSEDDATE', 'EXPIREDATE', 'WITHDRAWNDATE', 'OWNERSHIP_SHORT',
@@ -675,18 +777,19 @@ class GSMLS:
 
             columns = ['MLSNUM', 'STATUS_SHORT', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                        'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'DAYSONMARKET', 'ORIGLISTPRICE',
-                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS_SHORT', 'NUMUNITS', 'ROOMS', 'BEDS','BATHSTOTAL',
+                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS_SHORT', 'NUMUNITS', 'ROOMS', 'BEDS','BATHSFULLTOTAL',
+                       'BATHSHALFTOTAL','BATHSTOTAL',
                        'SQFTBLDG', 'ACRES', 'LOTSIZE', 'ASSESSAMOUNTBLDG', 'ASSESSAMOUNTLAND', 'ASSESSTOTAL',
                        'UNITSTYLE_SHORT', 'SUBDIVISION', 'TAXAMOUNT', 'TAXRATE', 'TAXYEAR','YEARBUILT',
                        'INCOMEGROSSOPERATING', 'EXPENSEOPERATING', 'INCOMENETOPERATING', 'EXPENSESINCLUDE_SHORT', 'UNIT1BEDS',
                        'UNIT1BATHS', 'UNIT1ROOMS', 'UNIT1OWNERTENANTPAYS_SHORT', 'UNIT2BEDS', 'UNIT2BATHS', 'UNIT2ROOMS',
                        'UNIT2OWNERTENANTPAYS_SHORT', 'UNIT3BEDS', 'UNIT3BATHS', 'UNIT3ROOMS', 'UNIT3OWNERTENANTPAYS_SHORT',
                        'UNIT4BEDS', 'UNIT4BATHS', 'UNIT4ROOMS', 'UNIT4OWNERTENANTPAYS_SHORT',
-                       'LISTDATE', 'PENDINGDATE', 'ANTICCLOSEDDATE', 'CLOSEDDATE', 'EXPIREDATE', 'WITHDRAWNDATE', 'OWNERSHIP_SHORT',
+                       'LISTDATE', 'PENDINGDATE', 'ANTICCLOSEDDATE', 'CLOSEDDATE', 'EXPIREDATE', 'WITHDRAWNDATE',
                        'EASEMENT_SHORT', 'PARKNBRAVAIL','DRIVEWAYDESC_SHORT', 'GARAGECAP', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
-                       'COOLSYSTEM_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT', 'EXTERIOR_SHORT', 'FIREPLACES', 'FLOORS_SHORT',
-                       'POOL_SHORT', 'ROOF_SHORT', 'SEWER_SHORT', 'SIDING_SHORT', 'BASEMENT_SHORT', 'BASEDESC_SHORT',
-                       'FLOODZONE', 'ZONING', 'APPFEE',  'ASSOCFEE', 'COMPBUY', 'COMPSELL', 'COMPTRANS', 'LISTTYPE_SHORT',
+                       'COOLSYSTEM_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT', 'EXTERIOR_SHORT',
+                       'ROOF_SHORT', 'SEWER_SHORT', 'SIDING_SHORT', 'BASEMENT_SHORT', 'BASEDESC_SHORT',
+                       'FLOODZONE', 'ZONING', 'COMPBUY', 'COMPSELL', 'COMPTRANS', 'LISTTYPE_SHORT',
                        'OFFICELIST', 'OFFICESELL', 'OFFICESELLNAME', 'AGENTSELLNAME', 'OWNERNAME', 'AGENTLIST', 'AGENTSELL',
                        'REMARKSAGENT', 'REMARKSPUBLIC', 'SHOWSPECIAL', 'BUSRELATION_SHORT']
 
@@ -696,9 +799,9 @@ class GSMLS:
 
             columns = ['MLSNUM', 'STATUS_SHORT', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                        'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'DAYSONMARKET', 'ORIGLISTPRICE',
-                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS_SHORT', 'NUMLOTSTS',
+                       'LISTPRICE', 'SALESPRICE', 'SP/LP%', 'LOANTERMS', 'NUMLOTS',
                        'ACRES', 'LOTSIZE', 'ASSESSAMOUNTBLDG', 'ASSESSAMOUNTLAND', 'ASSESSTOTAL',
-                       'SUBDIVISION', 'TAXAMOUNT', 'TAXRATE', 'TAXYEAR','YEARBUILT',
+                       'SUBDIVISION', 'TAXAMOUNT', 'TAXRATE', 'TAXYEAR',
                        'LISTDATE', 'PENDINGDATE', 'ANTICCLOSEDDATE', 'CLOSEDDATE', 'EXPIREDATE', 'WITHDRAWNDATE',
                        'FLOODZONE', 'ZONINGDESC_SHORT', 'BUILDINGSINCLUDED_SHORT', 'CURRENTUSE_SHORT', 'DEVRESTRICT_SHORT', 'DEVSTATUS_SHORT',
                        'EASEMENT_SHORT', 'IMPROVEMENTS_SHORT', 'LOTDESC_SHORT', 'PERCTEST_SHORT', 'ROADFRONTDESC_SHORT',
@@ -713,14 +816,14 @@ class GSMLS:
 
             columns = ['MLSNUM', 'STATUS_SHORT', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                        'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'DAYSONMARKET', 'RENTPRICEORIG',
-                       'LP', 'RENTMONTHPERLSE', 'RP/LP%', 'LEASETERMS_SHORT','ROOMS', 'BEDS','BATHSTOTAL',
+                       'LP', 'RENTMONTHPERLSE', 'RP/LP%', 'LEASETERMS_SHORT','ROOMS', 'BEDS','BATHSFULLTOTAL','BATHSHALFTOTAL', 'BATHSTOTAL',
                        'SQFTAPPROX', 'SUBDIVISION', 'YEARBUILT', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
                        'LOCATION_SHORT', 'PRERENTREQUIRE_SHORT', 'OWNERPAYS_SHORT', 'TENANTPAYS_SHORT',
                        'TENANTUSEOF_SHORT', 'RENTINCLUDES_SHORT', 'RENTTERMS_SHORT', 'LENGTHOFLEASE', 'AVAILABLE_SHORT',
                        'APPLIANCES_SHORT', 'LAUNDRYFAC',
                        'FURNISHINFO_SHORT', 'PETS_SHORT', 'PARKNBRAVAIL','DRIVEWAYDESC_SHORT',
                        'BASEMENT_SHORT', 'BASEDESC_SHORT', 'GARAGECAP', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
-                       'COOLSYSTEM_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT', 'FLOORS_SHORT', 'POOL_SHORT', 'SEWER_SHORT',
+                       'COOLSYSTEM_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT', 'FLOORS_SHORT', 'SEWER_SHORT',
                        'TENLANDCOMM_SHORT', 'REMARKSAGENT', 'REMARKSPUBLIC', 'SHOWSPECIAL']
 
             return df[columns]
@@ -746,41 +849,41 @@ class GSMLS:
             'LONGITUDE': [],
             'IMAGES': []
         }
+        if prop_type != 'TAX' and prop_type != 'LND':
+            # Use a checkpoint to make sure page is loaded
+            GSMLS.explicit_page_load('Results', driver_var, property_type=prop_type)
 
-        # Use a checkpoint to make sure page is loaded
-        GSMLS.explicit_page_load('Results', driver_var, property_type=prop_type)
+            # Step 1: Acquire the page source and find the main table holding the property information
+            page_source = driver_var.page_source
+            latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
+            soup = BeautifulSoup(page_source, 'html.parser')
+            first_table = soup.find('table', {'class': 'df-table sticky sticky-gray'})
+            main_table = first_table.find('tbody')
+            sold_listings = main_table.find_all('tr')
+            prop_id, first_media_idx = GSMLS.first_media_link(sold_listings, sold_listings_dictionary)
 
-        # Step 1: Acquire the page source and find the main table holding the property information
-        page_source = driver_var.page_source
-        latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
-        soup = BeautifulSoup(page_source, 'html.parser')
-        first_table = soup.find('table', {'class': 'df-table sticky sticky-gray'})
-        main_table = first_table.find('tbody')
-        sold_listings = main_table.find_all('tr')
-        prop_id, first_media_idx = GSMLS.first_media_link(sold_listings, sold_listings_dictionary)
+            main_window = driver_var.current_window_handle
 
-        main_window = driver_var.current_window_handle
+            # Step 2: Scrape the links for all high resolution images associated with each property
+            if type(first_media_idx) is int:
+                try:
+                    GSMLS.scrape_image_links(sold_listings_dictionary, driver_var, first_media_idx, prop_id)
+                    # Step 3: Switch to main property table window after scraping images
+                    driver_var.switch_to.window(main_window)
+                except TimeoutException:
+                    # Visibility of the 'imagesReportTitle' wasn't found. How do I fix this?
+                    logger.warning(f'The image urls for {municipality} in {year} were not scraped')
+                    pass
 
-        # Step 2: Scrape the links for all high resolution images associated with each property
-        if type(first_media_idx) is int:
-            try:
-                GSMLS.scrape_image_links(sold_listings_dictionary, driver_var, first_media_idx, prop_id)
-                # Step 3: Switch to main property table window after scraping images
-                driver_var.switch_to.window(main_window)
-            except TimeoutException:
-                # Visibility of the 'imagesReportTitle' wasn't found. How do I fix this?
-                logger.warning(f'The image urls for {municipality} in {year} were not scraped')
-                pass
+            # Step 4: Loop through all rows of the table to get target information
+            # We do not include the last index because it will result in an error
+            for result in sold_listings:
 
-        # Step 4: Loop through all rows of the table to get target information
-        # We do not include the last index because it will result in an error
-        for result in sold_listings:
-
-            sold_listings_dictionary['MLSNUM'].append(result.find('td', {'class': 'mlnum'}).a.get_text().strip())
-            address = result.find('td', {'class': 'address'}).find_all('a')[-1]
-            latlong = latlong_pattern.search(str(address))
-            sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
-            sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
+                sold_listings_dictionary['MLSNUM'].append(result.find('td', {'class': 'mlnum'}).a.get_text().strip())
+                address = result.find('td', {'class': 'address'}).find_all('a')[-1]
+                latlong = latlong_pattern.search(str(address))
+                sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
+                sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
 
         return sold_listings_dictionary
 
@@ -813,6 +916,14 @@ class GSMLS:
 
     def publish_data_2kafka(self, xls_file_name: str, soldlistings: dict, **kwargs):
 
+        topic_dict = {
+            'RES': 'res_properties',
+            'MUL': 'mul_properties',
+            'LND': 'lnd_properties',
+            'RNT': 'rnt_properties',
+            'TAX': 'tax_properties'
+        }
+
         base_path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
         kafka_data_prod = kwargs['data-producer']
 
@@ -820,11 +931,10 @@ class GSMLS:
             sold_df = pd.read_excel(os.path.join(base_path, xls_file_name + '.xls'), engine='xlrd')
             sold_df.columns = sold_df.columns.str.upper()
             sold_df = GSMLS.return_target_columns(sold_df, kwargs['Property_Type'])
-            sold_df = sold_df.astype({'MLSNUM': 'string'})
 
             # Merge the Latitude and Longitude data from the image df to the sold listings df
             if kwargs['Property_Type'] in ['RES', 'MUL', 'LND']:
-
+                sold_df = sold_df.astype({'MLSNUM': 'string'})
                 geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
                                          'LONGITUDE': soldlistings['LONGITUDE'], 'IMAGES': soldlistings['IMAGES']})
 
@@ -834,10 +944,17 @@ class GSMLS:
                 target_df['CONDITION'] = 'Unknown'
 
                 if kwargs['Property_Type'] in ['RES', 'MUL']:
-                    image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                       'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION', 'IMAGES']]
+                    if kwargs['Property_Type'] == 'RES':
+                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
+                                              'CONDITION', 'IMAGES']]
+                    elif kwargs['Property_Type'] == 'MUL':
+                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
+                                              'CONDITION', 'IMAGES']]
+
                     image_df = image_df.to_json(orient='split', date_format='iso')
-                    kafka_data_prod.send('prop_images', image_df)
+                    kafka_data_prod.send('prop_images', key=xls_file_name, value=image_df)
                     kafka_data_prod.flush()
 
             elif kwargs['Property_Type'] == 'RNT':
@@ -848,25 +965,25 @@ class GSMLS:
                 target_df = sold_df
 
             # Send to Kafka
-            self.rows_counted += len(sold_df)
-            self.download_log['Rows_Produced'][-1] = len(sold_df)
             target_df = target_df.to_json(orient='split', date_format='iso')
 
-            if kwargs['Property_Type'] == 'RES':
-                kafka_data_prod.send('res_properties', value=target_df)
-            elif kwargs['Property_Type'] == 'MUL':
-                kafka_data_prod.send('mul_properties', value=target_df)
-            elif kwargs['Property_Type'] == 'LND':
-                kafka_data_prod.send('lnd_properties', value=target_df)
-            elif kwargs['Property_Type'] == 'RNT':
-                kafka_data_prod.send('rnt_properties', value=target_df)
-            elif kwargs['Property_Type'] == 'TAX':
-                kafka_data_prod.send('tax_properties', value=target_df)
+            try:
+                result = kafka_data_prod.send(topic_dict[kwargs['Property_Type']], key=xls_file_name, value=target_df)
+                result_metadata = result.get(timeout=10)
 
-            kafka_data_prod.flush()
-            self.download_log['Date_Produced'][-1] = (str(datetime.now()))
+            except KafkaTimeoutError as kte:
+                kwargs['logger'].warning(f"Kafka Producer Error: {xls_file_name} was not produced to {topic_dict[kwargs['Property_Type']]}")
+                kwargs['logger'].warning(f'{kte}')
+                kwargs['logger'].info(f'Re-attempting to send {xls_file_name}')
+                self.publish_data_2kafka(xls_file_name, soldlistings, **kwargs)
 
-            GSMLS.sendfile2trash(xls_file_name)
+            else:
+                kwargs['logger'].info(f'{xls_file_name} was produced to "{result_metadata.topic}" in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"')
+                self.rows_counted[kwargs['Property_Type']] += len(sold_df)
+                self.download_log['Rows_Produced'][-1] = len(sold_df)
+                self.download_log['Date_Produced'][-1] = (str(datetime.now()))
+                GSMLS.sendfile2trash(xls_file_name)
+
 
     def save_metadata(self):
 
@@ -876,67 +993,66 @@ class GSMLS:
 
     @staticmethod
     def scrape_image_links(dict_var, driver_var, link_var, prop_id):
-        try:
-            # Step 1: Find the respective media link and open it
-            # print('Before media:', driver_var.window_handles)
-            current_windows = driver_var.window_handles
-            media_link = WebDriverWait(driver_var, 10).until(
-                EC.presence_of_element_located((By.XPATH, f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[4]/a')))
-            media_link.click()
-            media_window = [window for window in driver_var.window_handles if window not in current_windows][-1]
 
-            # Step 2: Switch to new media links window
-            driver_var.switch_to.window(media_window)
-            WebDriverWait(driver_var, 10).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
-            # driver_var.fullscreen_window()
-            GSMLS.explicit_page_load('Media Page', driver_var, prop_id=prop_id, window_id=media_window)
+        # Step 1: Find the respective media link and open it
+        # print('Before media:', driver_var.window_handles)
+        current_windows = driver_var.window_handles
+        media_link = WebDriverWait(driver_var, 10).until(
+            EC.presence_of_element_located((By.XPATH, f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[4]/a')))
+        media_link.click()
+        media_window = [window for window in driver_var.window_handles if window not in current_windows][-1]
 
-            # Step 3: Scrape the listing IDs
-            soup = BeautifulSoup(driver_var.page_source, 'html.parser')
-            outercontainer = soup.find('div', {'id': 'outerContainer'}).find('form').find('input', {'name': 'sysIds'})
-            sys_ids = outercontainer['value'].split(',')
+        # Step 2: Switch to new media links window
+        driver_var.switch_to.window(media_window)
+        WebDriverWait(driver_var, 10).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        # driver_var.fullscreen_window()
+        GSMLS.explicit_page_load('Media Page', driver_var, prop_id=prop_id, window_id=media_window)
 
-            # Step 3: Scrape the webpage and all associated high res image links starting from the first image link
-            for listing_id in sys_ids[link_var - 1:]:
-                image_dictionary = {}
+        # Step 3: Scrape the listing IDs
+        soup = BeautifulSoup(driver_var.page_source, 'html.parser')
+        outercontainer = soup.find('div', {'id': 'outerContainer'}).find('form').find('input', {'name': 'sysIds'})
+        sys_ids = outercontainer['value'].split(',')
 
+        # Step 3: Scrape the webpage and all associated high res image links starting from the first image link
+        for listing_id in sys_ids[link_var - 1:]:
+
+            image_dictionary = {}
+            try:
                 GSMLS.explicit_page_load('Media Page', driver_var, prop_id=listing_id, window_id=media_window)
 
-                soup = BeautifulSoup(driver_var.page_source, 'html.parser')
-                images_list = soup.find_all('div', {'class': 'imageReportContainer'})
+            except TimeoutException:
+                pass
 
-                if len(images_list) > 0:
-                    raw_property_address = soup.find('div', {'class': 'imagesReportTitle'}).get_text(strip=True).split('•')[1].strip()
-                    clean_address = GSMLS.clean_address(raw_property_address)
-                    for image_num, image in enumerate(images_list):
-                        # The high res image is in the value attribute of the first input tag
-                        # img_link =
-                        image_dictionary[f"{clean_address} - {image.img['alt']} - {image_num}"] = image.input['value']
+            soup = BeautifulSoup(driver_var.page_source, 'html.parser')
+            images_list = soup.find_all('div', {'class': 'imageReportContainer'})
 
-                    dict_var['IMAGES'].append(image_dictionary)
-                elif len(images_list) == 0:
-                    dict_var['IMAGES'].append('None')
+            if len(images_list) > 0:
+                raw_property_address = soup.find('div', {'class': 'imagesReportTitle'}).get_text(strip=True).split('•')[1].strip()
+                clean_address = GSMLS.clean_address(raw_property_address)
+                for image_num, image in enumerate(images_list):
+                    # The high res image is in the value attribute of the first input tag
+                    # img_link =
+                    image_dictionary[f"{clean_address} - {image.img['alt']} - {image_num}"] = image.input['value']
 
-                if listing_id != sys_ids[-1]:
-                    try:
-                        # Step 4: Find 'NEXT' link to cycle through the list of property pictures
-                        next_button = WebDriverWait(driver_var, 10).until(
-                            EC.presence_of_element_located((By.XPATH, "//a[normalize-space()='Next']")))
-                        next_button.click()
-                    except UnexpectedAlertPresentException:
-                        # This alert is raised when the 'Next' button is clicked and there are no more properties left in the list
-                        alert = Alert(driver_var)
-                        alert.accept()
-                        driver_var.close()
-                else:
+                dict_var['IMAGES'].append(image_dictionary)
+            elif len(images_list) == 0:
+                dict_var['IMAGES'].append('None')
+
+            if listing_id != sys_ids[-1]:
+                try:
+                    # Step 4: Find 'NEXT' link to cycle through the list of property pictures
+                    next_button = WebDriverWait(driver_var, 10).until(
+                        EC.presence_of_element_located((By.XPATH, "//a[normalize-space()='Next']")))
+                    next_button.click()
+                except UnexpectedAlertPresentException:
+                    # This alert is raised when the 'Next' button is clicked and there are no more properties left in the list
+                    alert = Alert(driver_var)
+                    alert.accept()
                     driver_var.close()
-
-        except WebDriverException as w:
-            print(f'{w}')
-        except BaseException as b:
-            print(f'{b}')
+            else:
+                driver_var.close()
 
     def scrape_municipalities(self, county_id, driver_var):
 
@@ -1047,11 +1163,10 @@ class GSMLS:
                             EC.presence_of_element_located((By.XPATH, '//*[@id="logout"]')))
         sign_out_button.click()
 
-    def split_search_dates(self, quarter: int, date_range: list, type_, city_name, county, driver_var, **kwargs):
+    def split_search_dates(self, year, type_, city_name, county, driver_var, **kwargs):
         """
 
-        :param quarter:
-        :param date_range:
+        :param year:
         :param type_:
         :param city_name:
         :param county:
@@ -1063,36 +1178,28 @@ class GSMLS:
         # Too many results were found, exit the alert popup and continue with script
         GSMLS.too_many_results(driver_var)
 
-        # Parse the date range for the first and last month, as well as the year
-        year = date_range[0].split('/')[-1]
-        first_month = int(date_range[0].split('/')[0])
-        last_month = int(date_range[0].split('/')[0])
+        time_periods = {
+            1: [f'01/01/{year}', f'03/31/{year}'],
+            2: [f'04/01/{year}', f'06/30/{year}'],
+            3: [f'07/01/{year}', f'09/30/{year}'],
+            4: [f'10/01/{year}', f'12/31/{year}']
+        }
 
-        for month in range(first_month, last_month + 1):
+        for qtr, daterange in time_periods.items():
 
-            # Get the last day of the month for the target month
-            last_day = GSMLS.last_day_of_month(month)
-            if len(str(month)) == 1:
-                start_date, end_date = f'{"0" + str(month)}/01/{year}', f'{"0" + str(month)}/{last_day}/{year}'
-                GSMLS.set_dates([start_date, end_date], type_, driver_var)
-
-            elif len(str(month)) == 2:
-                start_date, end_date = f'{month}/01/{year}', f'{month}/{last_day}/{year}'
-                GSMLS.set_dates([start_date, end_date], type_, driver_var)
+            GSMLS.set_dates([daterange[0], daterange[1]], type_, driver_var)
 
             GSMLS.show_results(driver_var)
-            self.download_log['Results_Found'].append('Yes')
-            filename = self.download_sales_data(city_name, self.counties[county], quarter, kwargs['Year'], kwargs['Property_Type'], driver_var)
-            additional_info = GSMLS.format_data_for_kafka(driver_var, kwargs['Year'], city_name, kwargs['Property_Type'], kwargs['logger'])
+            filename = self.download_sales_data(city_name, self.counties[county], qtr, year, kwargs['Property_Type'], driver_var, kwargs['Main_Window'])
+            additional_info = GSMLS.format_data_for_kafka(driver_var, year, city_name, kwargs['Property_Type'], kwargs['logger'])
             self.publish_data_2kafka(filename, additional_info, **kwargs)
-            self.download_log['Finished'][-1] = 'Yes'
             GSMLS.exit_results_page(driver_var)
 
     @staticmethod
     def too_many_results(driver_var):
 
         no_button = WebDriverWait(driver_var, 30).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@value='No']")))
+            EC.presence_of_element_located((By.XPATH, "//*[@id='message-box']/div[2]/input[2]")))
         no_button.click()
         time.sleep(1)  # Built-in latency
 
@@ -1102,9 +1209,7 @@ class GSMLS:
         logger = kwargs['logger']
         f_handler = kwargs['f_handler']
         c_handler = kwargs['c_handler']
-        change_count = 0
-        kwargs['data-producer'] = KafkaProducer(bootstrap_servers='localhost:9092',
-                                                value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+        kwargs['data-producer'] = GSMLS.create_producer(logger)
 
         try:
             # Step 1: Login to the GSMLS
@@ -1144,37 +1249,19 @@ class GSMLS:
                             continue
 
                     time_periods = {
-                        1 : [f'01/01/{year}', f'03/31/{year}'],
-                        2 : [f'04/01/{year}', f'06/30/{year}'],
-                        3 : [f'07/01/{year}', f'09/30/{year}'],
-                        4 : [f'10/01/{year}', f'12/31/{year}']
-                    }
+                        1234 : [f'01/01/{year}', f'12/31/{year}']}
+
                     with tqdm(total=len(time_periods), desc='Qtr', colour='blue', position=1) as quarters_bar:
                         for qtr, date_range in time_periods.items():
 
                             kwargs['Qtr'] = qtr
                             kwargs['Dates'] = date_range
                             kwargs['Year'] = year
-                            # if year < datetime.now().year:
-                            #     # change to if daterange[0] is > today's date minus 1 year: change to current
-                            #     if change_count == 0:
-                            #         GSMLS.page_criteria('current', driver_var)
-                            #         change_count += 1
-                            #     else:
-                            #         pass
 
-                            # Step 5: Scrape the quarterly sales data
-                            if self.last_scraped_qtr is not None:
-                                if qtr < self.last_scraped_qtr:
-                                    quarters_bar.update(1)
-                                    time.sleep(0.2)
-                                    continue
-                                else:
-                                    self.last_scraped_qtr = None
-
-                            # GSMLS.set_dates(date_range, driver_var)
                             self.quarterly_sales_res(driver_var, **kwargs)
+                            kwargs['data-producer'].flush()
                             quarters_bar.update(1)
+
                     year_bar.update(1)
 
             # Step 5: Sign out
@@ -1242,8 +1329,13 @@ if __name__ == '__main__':
         except AssertionError:
             quit_program = True
             # Send a text message saying the program has been completed and summarize results
+            break
 
-        finally:
+        except NoBrokersAvailable:
+            quit_program = True
+            break
+
+        else:
             # Create the driver to automate GSMLS Server Requests
             driver = webdriver.Edge(service=Service(), options=options)
             obj.load_metadata()

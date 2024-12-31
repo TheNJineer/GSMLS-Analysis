@@ -61,38 +61,52 @@ GSMLS Workflow:
 'STREETNUMDISPLAY': 'string', 'SUBDIVISION': 'string', 'TAXID': 'string', 'TOWNCODE': 'int', 'WITHDRAWNDATE':'datetime,
 'YEARBUILT': 'int', 'ZIPCODE': 'string'}
 
-Refactoring Tasks:
-1) Port into the kafka and start scripting the transformations (Download Apache Spark)
-2) The full metadata dict keeps getting saved to sql after every failure. Figure out a way to slice from previous failure
-to current failure
-3) Clean out duplicates from SQL
-
 
 Update Tasks:
 1) Properly format the logger function and the tqdm bars
-3) Figure out how to label townhouses and condos for later processing (We arent deleting)
-    - Change the RES to CON or TWNH
-    - For ALL RES df
-        - If "AssocFee" is not nan or not 0
-        - If "StylePrimary_short" is in ['TwnIntUn', 'OneFloor', 'MultiFlr', 'TwnEndUn', 'FirstFlr']
-    - For ALL XPY df
-        - If "PROPERTYSTYLE" is in ['TwnIntUn', 'OneFloor', 'MultiFlr', 'TwnEndUn', 'FirstFlr']
-        - There are multiple combinations of the condo/twnhouse types. How do I solve this?
-3) Learn how to  set up Kraft Kafka
-    - Get docker-compose file from work laptop
-    - Create docker compose of just kafka and jupyter notebook
-4) Sometimes after the file is downloaded, the 'Route' button is pressed. See why this is happening
-5) Move the datatype changes from from producer script to consumer script
-6) Understand all the necessary transformations needed for each column
+3) Create a function using Regex to create a dictionary/histogram of the municipality subsection names. Track the min/max
+    latitudes and longitudes as well as the subsection names
+5) Need to track the amount of rows produced for each topic, not just overall DONE
 7) Create a run summary to be emailed when complete
     - Include rows produced, years/qtr scrapped and errors encountered
+    - Turn Log_Parse.py into a function and put at the end of the obj.main()
+    - Create an emailed summary for each loop of a property type has been scraped
+    - Create one function that sends an email after these conditions are met:
+          - Create an emailed summary for each loop of a property type has been scraped
+          - Create a run summary to be emailed when complete
+          - Create a one-hour heart beat saying the status/health of the producer, and server and the last scraped data
 8) Use MongoDB to store the binary data of the images with it's metadata and labels
-9) Label homes bought by LLCs as "Investment - Bought" and sold by LLCs as "Investment - Sold". Otherwise "Retail"
-10) Calculate years in possession before sale to help with labelling
-11) Process the image links as a full string and send to kafka as part of the main data.
-Process and transform data to apply labels to pictures then save to MongoDB
-12) Scrape all the tax data too
-13) Get the NJ Bank Codes excel and turn into a database (in Apple Files)
+11) Process and transform data to apply labels to pictures then save to MongoDB
+14) Change the "CONDITION" and "POTENTIAL INVESTMENT" column value to "Fixer Upper" and True if criteria is met
+    - Use a combination of the difference between original list price & list price, SP/OLP%, loan_terms, days to close
+18) Download and install Apache Airflow
+19) *** THERE'S DATA MISSING!!! FIGURE OUT HOW TO ENSURE ALL DATA IS BEING RECEIVED!!!
+20) TimeoutErrors occuring on the format_data_for_kafka and no_results() figure this out
+***21) Clean the data from all topics and create local backups
+22) Increase the brokers running and the replication factors
+***23) Include Basement_Short, StylePrimary_Short, SUBPROPTYPE, Water_Short in parse_property_attr()
+***24) Create a function to turn the POOL_SHORT column into Boolean values
+25) Create new columns:
+    - AGE_OF_PROPERTY (after tax data enrichment)
+    - Calculate years in possession before sale to help with labelling (Column name: Time off market)
+    - Create a function that imputes sqftapprox by querying all listings that match that tax id. If none exist, then impute using
+    the NJ Tax Assessment DB
+    - Get the NJ Bank Codes excel and turn into a database (in Apple Files)
+    *** - Create function that uses NLTK Sentiment Analysis on the Listing Remarks column
+    - Can I create a column that quantifies how many previous sales the property has
+    - Rechange these column datatypes at the end: ['TOWNCODE', 'ASSESSAMOUNTBLDG', 'APPFEE']
+    - Change the column name "OWNERNAME" to "SELLERNAME"
+
+26) Create a main function that consists of 3 sub functions:
+    1) Consumes the data from Kafka
+    2) Initializes the cleaning and transformations
+    3) Stores in PostgreSQL
+27) Create the parse_property_attr and fill_na_value dicts for MUL properties
+    - Create sets of columns names and check the difference between RES and MUL to know how to modify
+28) Create list of functions needed to clean the rent data
+29) Create a list of functions needed to clean the LND data
+30) Create a list of functinos needed to clean the tax data
+31) Finish function to store image htmls and metadata into MongoDB
 
 *** I DO NOT HAVE TO SCRAPE ADDITIONAL ADDRESSES
 - USE THE NJ TAX ASSESSMENT DATA TO FILL IN ANY INFORMATION GAPS

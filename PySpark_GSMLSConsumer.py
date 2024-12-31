@@ -106,13 +106,15 @@ schema = StructType([
 
 spark = SparkSession.builder \
 	.appName("GSMLSConsumer") \
+	.master("spark://localhost:7077") \
+	.config("spark.hadoop.home.dir", "/opt/hadoop") \
 	.config('spark.jars.packages', 'org.apache.spark:spark-sql-kafka-0-10_2.13:3.5.3') \
 	.getOrCreate()
 
 pydf = spark \
 	.readStream \
 	.format("kafka") \
-	.option("kafka.bootstrap.servers", "9092") \
+	.option("kafka.bootstrap.servers", "9094") \
 	.option("subscribe", "res_properties") \
 	.option("startingOffsets", "earliest") \
 	.option("maxOffsetsPerTrigger", 100) \

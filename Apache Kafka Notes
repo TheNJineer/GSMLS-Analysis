@@ -6,6 +6,16 @@ Start the producer
 2) bin\windows\kafka-console-producer.bat --broker-list localhost:9092 --topic res_properties
 Start the consumer
 3) bin\windows\kafka-console-consumer.bat --bootstrap-server localhost:9092 --topic res_properties --from-beginning
+*** Stopping the server bin\windows\kafka-server-stop.bat
+*** Altering topics
+4) Increasing partitons: bin\windows\kafka-topics.bat --bootstrap-server <broker-address> --alter --topic <topic-name> --partitions 3
+5) Increasing replication factor: bin\windows\kafka-topics.bat --bootstrap-server localhost:9092 --describe --topic <topic-name>
+*** My replication factor cannot be greater than the number of brokers available
+6) Increasing retention: bin\windows\kafka-configs.bat --bootstrap-server localhost:9092 --entity-type topics --entity-name <topic-name> --alter --add-config retention.ms=2592000000 (30 days)
+7) Increasing retention bytes: bin\windows\kafka-configs.bat --bootstrap-server localhost:9092 --entity-type topics --entity-name <topic-name> --alter --add-config retention.bytes=10737418240 (10 GB)
+
+
+
 
 
 1) In Apache Kafka, is it possible to update the amount of partitions to a topic even after the topic has been created?
