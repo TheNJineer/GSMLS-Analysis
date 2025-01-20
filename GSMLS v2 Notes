@@ -1,5 +1,8 @@
 ***The main focus is to have GSMLS.py as the producer of data and nothing else
 All transformations and data imputations will happen in another script
+***However, until I have the hardware and resources, each year of dat will be produced them
+consumed in a synchronous manner
+***Add a local postgresql connection to excel
 
 ETL Pipeline:
 1a) GSMLS Produces data and pictures
@@ -33,41 +36,9 @@ GSMLS Workflow:
 11) Format all the results into a pandas database
 12) Produce data to Kafka
 
-*** change these column names for the ALL XPY df:
-{'SQFTPRICE': 'SQFTAPPROX', 'SPLP': 'SP/LP%'}
-
-*** add these columns to the df:
-{'TAXAMOUNT': 40, TAXRATE: 42, TAXRATEYEAR: 43, 'COOLSYSTEM_SHORT': 53, 'BASEDESC': 55}
-
-***change these column names for the ALL RES df:
-{'LISTTYPE_SHORT': ''LISTTYPE', 'LOANTERMS_SHORT': 'LOANTERMS', 'STATUS_SHORT': 'STATUS',
-'OFFICESELLNAME': 'SELLOFFICENAME', 'AGENTSELLNAME': 'SELLAGENTNAME',
-'STYLEPRIMARY_SHORT': 'PROPERTYSTYLE', 'BASEMENT_SHORT': 'BASEMENT',
-'BASEDESC_SHORT': 'BASEDESC', 'BUSRELATION_SHORT': 'BUSRELATION', 'COOLSYSTEM_SHORT': 'COOLSYSTEM'}
-
-***add these columns to the df:
-{'BUILDINGNUM': 56, 'BUSRELATION': 57, 'EXPENSEOPERATING': 58,
-'INCOMEGROSSOPERATING': 59, 'NUMUNITS': 60, 'PREVLISTPRICE': 61, 'PRICECHANGEDATE': 62, 'PROPERTYTYPE': 30}
-
-***make sure these columns datatypes are changed:
-{'ACRES': 'float', 'AGENTLIST': 'string', 'ANTICCLOSEDDATE': 'datetime',
-'BATHSTOTAL': 'float', 'BEDS': 'int', 'CLOSEDDATE': 'datetime', 'COUNTYCODE': 'int',
-'DAYSONMARKET': 'int', 'EXPENSEOPERATING': 'int', 'EXPIREDATE': 'datetime', 'GARAGECAP': 'int',
-'INCOMEGROSSOPERATING': 'int', 'LISTDATE': 'datetime', 'LISTPRICE': 'int', 'LOANTERMS': 'string',
-'LOTSIZE': 'string', 'MLSNUM': 'string', 'NUMUNITS': 'int', 'OFFICELIST': 'string', 'OFFICESELL': 'string',
-'ORIGLISTPRICE': 'int', 'OWNERNAME': 'string', 'PARKNBRAVAIL': 'int', 'PENDINGDATE': 'datetime',
-'PREVLISTPRICE': 'int', 'PRICECHANGEDATE': 'datetime', 'PROPERTYSTYLE': 'string', 'PROPERTYTYPE': 'string',
-'REMARKSAGENT': 'string', 'REMARKSPUBLIC': 'string', 'ROOMS':'int, 'SALESPRICE':'int', 'SHOWSPECIAL': 'string',
-'STREETNUMDISPLAY': 'string', 'SUBDIVISION': 'string', 'TAXID': 'string', 'TOWNCODE': 'int', 'WITHDRAWNDATE':'datetime,
-'YEARBUILT': 'int', 'ZIPCODE': 'string'}
-
-
-Update Tasks:
-1) Properly format the logger function and the tqdm bars
-3) Create a function using Regex to create a dictionary/histogram of the municipality subsection names. Track the min/max
-    latitudes and longitudes as well as the subsection names
-5) Need to track the amount of rows produced for each topic, not just overall DONE
-7) Create a run summary to be emailed when complete
+PRIORITY LIST:
+2) Create a run summary to be emailed when complete
+    - Renew the Gmail API
     - Include rows produced, years/qtr scrapped and errors encountered
     - Turn Log_Parse.py into a function and put at the end of the obj.main()
     - Create an emailed summary for each loop of a property type has been scraped
@@ -75,6 +46,41 @@ Update Tasks:
           - Create an emailed summary for each loop of a property type has been scraped
           - Create a run summary to be emailed when complete
           - Create a one-hour heart beat saying the status/health of the producer, and server and the last scraped data
+3) Put print statements in the function
+    - Adjust the print statements; make them cleaner
+    - Add tqdm bars to the consume data function
+    - Add tqdm bars into each of the property cleaning main functions (accept the tdqm manager as a function arg)
+4) Think amount using a context manager for the PostgreSQL connections
+    - Doesnt matter, I believe there's an issue with trying to properly handle nested bars
+5) Create a function which dynamically handles the errors and kills the program under specific circumstances
+7) Create a function which saves the pandas df to a shelve file in the event of a programatic error
+after commit the consumption to Kafka (IMPROVE)
+8) If there's no data returned in the consume_data function, return a string value that keeps the program moving
+9) UserWarning: the 'timedelta' type is not supported, and will be written as integer values (ns frequency) to the database.
+Create function which transforms this to the desired time
+10) Instead of going by each muni for LND, scrape by county the full year in one pass
+11) Properly store the property styles in MongoDB (IMPROVE)
+12) Put all data data consumption functions in GSMLS function
+
+
+response = requests.get(image_url)
+
+                        if response.status_code == 200:
+                            # stream the binary data into a png
+                            if section.title() in home_sections:
+                                imagedict[section].append({'Condition': 'Unknown', 'Directory': filename})
+                            else:
+                                imagedict['Other'].append({'Condition': 'Unknown', 'Directory': filename})
+                        else:
+                            # Say images wasn't downloaded
+                            property_data['Images'] = imagedict
+
+
+Update Tasks:
+1) Properly format the logger function and the tqdm bars
+2) Make sure the PostgreSQL connection is closed if the AssertionError or NoBrokerAvailable errors are raised
+3) Create a function using Regex to create a dictionary/histogram of the municipality subsection names. Track the min/max
+    latitudes and longitudes as well as the subsection names
 8) Use MongoDB to store the binary data of the images with it's metadata and labels
 11) Process and transform data to apply labels to pictures then save to MongoDB
 14) Change the "CONDITION" and "POTENTIAL INVESTMENT" column value to "Fixer Upper" and True if criteria is met
@@ -82,31 +88,15 @@ Update Tasks:
 18) Download and install Apache Airflow
 19) *** THERE'S DATA MISSING!!! FIGURE OUT HOW TO ENSURE ALL DATA IS BEING RECEIVED!!!
 20) TimeoutErrors occuring on the format_data_for_kafka and no_results() figure this out
-***21) Clean the data from all topics and create local backups
 22) Increase the brokers running and the replication factors
-***23) Include Basement_Short, StylePrimary_Short, SUBPROPTYPE, Water_Short in parse_property_attr()
-***24) Create a function to turn the POOL_SHORT column into Boolean values
 25) Create new columns:
     - AGE_OF_PROPERTY (after tax data enrichment)
-    - Calculate years in possession before sale to help with labelling (Column name: Time off market)
+    - Calculate years in possession before sale to help with labelling (Column name: Time off market) DONE
     - Create a function that imputes sqftapprox by querying all listings that match that tax id. If none exist, then impute using
     the NJ Tax Assessment DB
     - Get the NJ Bank Codes excel and turn into a database (in Apple Files)
     *** - Create function that uses NLTK Sentiment Analysis on the Listing Remarks column
     - Can I create a column that quantifies how many previous sales the property has
-    - Rechange these column datatypes at the end: ['TOWNCODE', 'ASSESSAMOUNTBLDG', 'APPFEE']
-    - Change the column name "OWNERNAME" to "SELLERNAME"
-
-26) Create a main function that consists of 3 sub functions:
-    1) Consumes the data from Kafka
-    2) Initializes the cleaning and transformations
-    3) Stores in PostgreSQL
-27) Create the parse_property_attr and fill_na_value dicts for MUL properties
-    - Create sets of columns names and check the difference between RES and MUL to know how to modify
-28) Create list of functions needed to clean the rent data
-29) Create a list of functions needed to clean the LND data
-30) Create a list of functinos needed to clean the tax data
-31) Finish function to store image htmls and metadata into MongoDB
 
 *** I DO NOT HAVE TO SCRAPE ADDITIONAL ADDRESSES
 - USE THE NJ TAX ASSESSMENT DATA TO FILL IN ANY INFORMATION GAPS

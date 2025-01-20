@@ -14,6 +14,10 @@ Start the consumer
 6) Increasing retention: bin\windows\kafka-configs.bat --bootstrap-server localhost:9092 --entity-type topics --entity-name <topic-name> --alter --add-config retention.ms=2592000000 (30 days)
 7) Increasing retention bytes: bin\windows\kafka-configs.bat --bootstrap-server localhost:9092 --entity-type topics --entity-name <topic-name> --alter --add-config retention.bytes=10737418240 (10 GB)
 
+Starting MongoDB:  cd C:\Program Files\MongoDB\Server\6.0\bin
+                    mongod --dbpath C:\Users\Omar\Desktop\MongoDB\data\db
+Stop MongoDB: Ctrl + C
+
 
 
 

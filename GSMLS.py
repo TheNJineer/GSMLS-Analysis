@@ -25,7 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
 from selenium.common.exceptions import TimeoutException
-from selenium.common.exceptions import UnexpectedAlertPresentException, WebDriverException
+from selenium.common.exceptions import UnexpectedAlertPresentException
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
@@ -181,7 +181,7 @@ class GSMLS:
     @staticmethod
     def create_engine():
 
-        username, base_url, pw = GSMLS.get_us_pw('PostgreSQL')
+        username, base_url, pw = GSMLS.get_us_pw('PostgreSQL-web')
         engine = create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/gsmls")
 
         return engine
@@ -226,7 +226,7 @@ class GSMLS:
     def download_complete(filename):
 
         download_folder = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
-        for _ in range(1,11):
+        for _ in range(1,16):
             abspath_ = os.path.join(download_folder, filename + '.xls')
             if os.path.exists(abspath_):
                 return True
@@ -237,7 +237,44 @@ class GSMLS:
         # raise TimeoutError(f'{filename} did not download in a timely manner')
 
     @staticmethod
-    def download_sales_data(city_name, county_name, qtr, year, prop_type, driver_var, window_id):
+    def download_error(driver_var, logger):
+
+        # Search for the message box div and check if the container is active
+        try:
+            WebDriverWait(driver_var, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete")
+            WebDriverWait(driver_var, 5).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@id='message-box-container']")))
+            WebDriverWait(driver_var, 5).until(
+                EC.visibility_of_element_located((By.XPATH, "//h2[normalize-space()='Error']")))
+        except TimeoutException:
+            pass
+
+        soup = BeautifulSoup(driver_var.page_source, 'html.parser')
+        message_box_active = soup.find('div', {'id': 'message-box-container', 'class': 'active-container'})
+
+        if message_box_active is not None:
+            message_type = message_box_active.find('h2', {'class': 'message-title'}).get_text()
+            box_message = message_box_active.find('div', {'class': 'message'})
+            message_text = box_message.get_text()
+
+            if message_type == 'Error':
+                logger.warning(f'GSMLS Server Error Occurred: {message_text}')
+
+                # Close the message box and close page
+                WebDriverWait(driver_var, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//input[@value='Ok']"))).click()
+                GSMLS.explicit_page_load('Server Error', driver_var)
+                WebDriverWait(driver_var, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//a[@id='closect']"))).click()
+
+                return True
+
+        else:
+            return False
+
+    @staticmethod
+    def download_sales_data(city_name, county_name, qtr, year, prop_type, driver_var, window_id, logger):
 
         GSMLS.explicit_page_load('Results', driver_var, property_type=prop_type)
 
@@ -254,8 +291,6 @@ class GSMLS:
         download_results.click()
 
         GSMLS.explicit_page_load('Download', driver_var)
-        download_button = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//a[normalize-space()='Download']")))
 
         # Locate the option to download as a xls file and name it
         excel_file_input = WebDriverWait(driver_var, 5).until(
@@ -268,13 +303,22 @@ class GSMLS:
         time.sleep(0.5)
 
         # Request the download and close the page
+        download_button = WebDriverWait(driver_var, 5).until(
+            EC.presence_of_element_located((By.XPATH, "//a[normalize-space()='Download']")))
         download_button.click()
+        error_result = GSMLS.download_error(driver, logger)
+
         driver.switch_to.window(window_id)
+        time.sleep(1)
         close_page = WebDriverWait(driver_var, 5).until(
             EC.presence_of_element_located((By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")))
         close_page.click()
 
-        return filename
+        if error_result is True:
+            return 'Server Error'
+
+        elif error_result is False:
+            return filename
 
     @staticmethod
     def exit_results_page(driver_var):
@@ -301,6 +345,9 @@ class GSMLS:
                                  "//div[@id='navigation-container']", "//h2[normalize-space()='FIND WHAT YOU NEED']"],
             'Advanced Search': ["//header[@class='gsmls_header']//h2[1]",
                                 "//div[@id='adv-uncheck-all']", "//li[normalize-space()='* ® County']"],
+            'Pre-Results': ["//header[@class='gsmls_header']//h2[1]",
+                            "//a[normalize-space()='Search']", "//li[normalize-space()='* ® County']",
+                            "//a[normalize-space()='Download']"],
             'Results': [f"//h2[normalize-space()='{prop_dict[property_type]} Results']",
                         "//div[@id='sub-navigation-container']", "//table[@class='df-table sticky sticky-gray']",
                         "//a[@class='last show']"],
@@ -310,10 +357,14 @@ class GSMLS:
                            f'//*[@id="{prop_id}"]/div/form'],
             'Login': ["//div[@class='login-logo']", "//input[@id='usernametxt']", "//input[@id='passwordtxt']"],
             'Target Tabs': ["//li[normalize-space()='* ® County']", "//li[normalize-space()='* ® Town']",
-                            "//li[normalize-space()='* ® Town Code']"]
+                            "//li[normalize-space()='* ® Town Code']"],
+            'Server Error': ["//h2[normalize-space()='ERROR']", "//a[normalize-space()='HomePage']", "//a[@id='closect']"]
         }
 
         if page_name in ['Garden State MLS', 'Advanced Search', 'Results', 'Download']:
+            # Wait for the page to completely load
+            WebDriverWait(driver_var, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete")
             # Wait 1
             WebDriverWait(driver_var, 15).until(
                 EC.text_to_be_present_in_element((By.XPATH, arg_dict[page_name][0]), page_name))
@@ -337,15 +388,15 @@ class GSMLS:
             if page_name == 'Target Tabs':
                 WebDriverWait(driver_var, 30).until(
                     EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0])))
-            # Wait 1
-            WebDriverWait(driver_var, 30).until(
-                EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][0])))
-            # # Wait 2
-            WebDriverWait(driver_var, 30).until(
-                EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][1])))
-            # Wait 3
-            WebDriverWait(driver_var, 30).until(
-                EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][2])))
+
+            for path_var in arg_dict[page_name]:
+                WebDriverWait(driver_var, 30).until(
+                    EC.visibility_of_element_located((By.XPATH, path_var)))
+
+        elif page_name in ['Pre-Results', 'Server Error']:
+            for path_var in arg_dict[page_name]:
+                WebDriverWait(driver_var, 30).until(
+                    EC.visibility_of_element_located((By.XPATH, path_var)))
 
         elif page_name == 'Media Page':
             assert window_id == driver_var.current_window_handle
@@ -353,11 +404,14 @@ class GSMLS:
             WebDriverWait(driver_var, 15).until(
                 EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0])))
             # # Wait 2
-            WebDriverWait(driver_var, 15).until(
-                EC.presence_of_element_located((By.XPATH, arg_dict[page_name][1])))
-            # Wait 3
-            WebDriverWait(driver_var, 15).until(
-                EC.presence_of_element_located((By.XPATH, arg_dict[page_name][2])))
+            try:
+                # There are times when the ImageReportTitle Xpath doesn't show up and there no images
+                for path_var in arg_dict[page_name]:
+                    WebDriverWait(driver_var, 15).until(
+                        EC.presence_of_element_located((By.XPATH, path_var)))
+
+            except TimeoutException:
+                pass
 
     def find_cities(self, county_id, page_source):
         """
@@ -649,9 +703,8 @@ class GSMLS:
                                         self.last_scraped_muni = None
 
                                 GSMLS.set_city(2, city_id, driver_var)  # Set the city
-                                GSMLS.show_results(driver_var)  # Click the Show Results button
-                                time.sleep(2)
-                                page_results1 = driver_var.page_source
+                                GSMLS.explicit_page_load('Pre-Results', driver_var)
+                                zero_results, too_many_results = GSMLS.show_results(driver_var)  # Click the Show Results button
 
                                 self.download_log['Year_'].append(kwargs['Year'])
                                 self.download_log['Quarter'].append(qtr)
@@ -663,7 +716,7 @@ class GSMLS:
                                 self.download_log['Date_Produced'].append(str(datetime.now()))
                                 self.download_log['Property_Type'].append(type_)
 
-                                if "Your search returned 0 records" in str(page_results1):
+                                if zero_results is True:
                                     # No results found
                                     self.download_log['Results_Found'].append('No')
                                     self.download_log['Finished'][-1] = 'Yes'
@@ -672,13 +725,14 @@ class GSMLS:
                                     logger.info(f'There is no GSMLS sales data available for {city_name}')
                                     GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
-                                elif "only first 500 records will be displayed" in str(page_results1):
+                                elif too_many_results is True:
                                     # Too many results were found, split the search dates
                                     self.download_log['Results_Found'].append('Yes')
                                     self.split_search_dates(kwargs['Year'], type_, city_name, county, driver_var, **kwargs)
                                     self.download_log['Finished'][-1] = 'Yes'
                                     GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
+                                    GSMLS.set_dates(date_range, type_, driver_var)
 
                                 else:
                                     # Results were found
@@ -686,11 +740,15 @@ class GSMLS:
                                     # and formatted before being produced to Apache Kafka
                                     self.download_log['Results_Found'].append('Yes')
                                     filename = self.download_sales_data(city_name, self.counties[county], qtr,
-                                                                        kwargs['Year'], kwargs['Property_Type'], driver_var, kwargs['Main_Window'])
-                                    time.sleep(1.5)  # Built-in latency to allow page to load
-                                    additional_info = GSMLS.format_data_for_kafka(driver_var, kwargs['Year'],
-                                                                                  city_name, kwargs['Property_Type'], logger)
-                                    self.publish_data_2kafka(filename, additional_info, **kwargs)
+                                                                        kwargs['Year'], kwargs['Property_Type'],
+                                                                        driver_var, kwargs['Main_Window'], logger)
+
+                                    if filename != 'Server Error':
+                                        GSMLS.explicit_page_load('Results', driver_var, property_type=kwargs['Property_Type'])
+                                        additional_info = GSMLS.format_data_for_kafka(driver_var, kwargs['Year'],
+                                                                                      city_name, kwargs['Property_Type'], logger)
+                                        self.publish_data_2kafka(filename, additional_info, **kwargs)
+
                                     self.download_log['Finished'][-1] = 'Yes'
                                     muni_bar.update(1)
                                     GSMLS.exit_results_page(driver_var)
@@ -816,11 +874,12 @@ class GSMLS:
 
             columns = ['MLSNUM', 'STATUS_SHORT', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                        'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'DAYSONMARKET', 'RENTPRICEORIG',
-                       'LP', 'RENTMONTHPERLSE', 'RP/LP%', 'LEASETERMS_SHORT','ROOMS', 'BEDS','BATHSFULLTOTAL','BATHSHALFTOTAL', 'BATHSTOTAL',
+                       'LP', 'RENTMONTHPERLSE', 'RP/LP%', 'RENTEDDATE', 'LEASETERMS_SHORT','ROOMS', 'BEDS',
+                       'BATHSFULLTOTAL','BATHSHALFTOTAL', 'BATHSTOTAL',
                        'SQFTAPPROX', 'SUBDIVISION', 'YEARBUILT', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
                        'LOCATION_SHORT', 'PRERENTREQUIRE_SHORT', 'OWNERPAYS_SHORT', 'TENANTPAYS_SHORT',
                        'TENANTUSEOF_SHORT', 'RENTINCLUDES_SHORT', 'RENTTERMS_SHORT', 'LENGTHOFLEASE', 'AVAILABLE_SHORT',
-                       'APPLIANCES_SHORT', 'LAUNDRYFAC',
+                       'AMENITIES_SHORT', 'APPLIANCES_SHORT', 'LAUNDRYFAC',
                        'FURNISHINFO_SHORT', 'PETS_SHORT', 'PARKNBRAVAIL','DRIVEWAYDESC_SHORT',
                        'BASEMENT_SHORT', 'BASEDESC_SHORT', 'GARAGECAP', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
                        'COOLSYSTEM_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT', 'FLOORS_SHORT', 'SEWER_SHORT',
@@ -933,34 +992,40 @@ class GSMLS:
             sold_df = GSMLS.return_target_columns(sold_df, kwargs['Property_Type'])
 
             # Merge the Latitude and Longitude data from the image df to the sold listings df
-            if kwargs['Property_Type'] in ['RES', 'MUL', 'LND']:
+            if kwargs['Property_Type'] in ['RES', 'MUL', 'LND', 'RNT']:
                 sold_df = sold_df.astype({'MLSNUM': 'string'})
-                geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
-                                         'LONGITUDE': soldlistings['LONGITUDE'], 'IMAGES': soldlistings['IMAGES']})
+
+                if kwargs['Property_Type'] == 'LND':
+                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
+                                             'LONGITUDE': soldlistings['LONGITUDE']})
+                else:
+                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
+                                             'LONGITUDE': soldlistings['LONGITUDE'], 'IMAGES': soldlistings['IMAGES']})
 
                 target_df = pd.merge(sold_df, geo_data, on='MLSNUM')
                 target_df['MLS'] = 'GSMLS'
                 target_df['QTR'] = kwargs['Qtr']
                 target_df['CONDITION'] = 'Unknown'
+                target_df['PROP_CLASS'] = kwargs['Property_Type']
 
-                if kwargs['Property_Type'] in ['RES', 'MUL']:
+                if kwargs['Property_Type'] in ['RES', 'MUL', 'RNT']:
                     if kwargs['Property_Type'] == 'RES':
                         image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                               'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
-                                              'CONDITION', 'IMAGES']]
+                                              'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
                     elif kwargs['Property_Type'] == 'MUL':
                         image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                               'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
-                                              'CONDITION', 'IMAGES']]
+                                              'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
+
+                    elif kwargs['Property_Type'] == 'RNT':
+                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
+                                              'RENTEDDATE', 'IMAGES', 'PROP_CLASS']]
 
                     image_df = image_df.to_json(orient='split', date_format='iso')
                     kafka_data_prod.send('prop_images', key=xls_file_name, value=image_df)
-                    kafka_data_prod.flush()
 
-            elif kwargs['Property_Type'] == 'RNT':
-                target_df = sold_df
-                target_df['QTR'] = kwargs['Qtr']
-                target_df['CONDITION'] = 'Unknown'
             elif kwargs['Property_Type'] == 'TAX':
                 target_df = sold_df
 
@@ -1007,7 +1072,7 @@ class GSMLS:
         WebDriverWait(driver_var, 10).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
         )
-        # driver_var.fullscreen_window()
+
         GSMLS.explicit_page_load('Media Page', driver_var, prop_id=prop_id, window_id=media_window)
 
         # Step 3: Scrape the listing IDs
@@ -1019,11 +1084,8 @@ class GSMLS:
         for listing_id in sys_ids[link_var - 1:]:
 
             image_dictionary = {}
-            try:
-                GSMLS.explicit_page_load('Media Page', driver_var, prop_id=listing_id, window_id=media_window)
 
-            except TimeoutException:
-                pass
+            GSMLS.explicit_page_load('Media Page', driver_var, prop_id=listing_id, window_id=media_window)
 
             soup = BeautifulSoup(driver_var.page_source, 'html.parser')
             images_list = soup.find_all('div', {'class': 'imageReportContainer'})
@@ -1153,6 +1215,34 @@ class GSMLS:
             EC.presence_of_element_located((By.CLASS_NAME, 'show')))
         show_results.click()
 
+        # Search for the message box div and check if the container is active
+        try:
+            WebDriverWait(driver_var, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete")
+            WebDriverWait(driver_var, 5).until(
+                EC.presence_of_element_located((By.XPATH, "//div[@id='message-box-container']")))
+            WebDriverWait(driver_var, 5).until(
+                EC.visibility_of_element_located((By.XPATH, "//h2[normalize-space()='Alert']")))
+        except TimeoutException:
+            pass
+
+        soup = BeautifulSoup(driver_var.page_source, 'html.parser')
+        message_box_active = soup.find('div', {'id': 'message-box-container', 'class':'active-container'})
+
+        if message_box_active is not None:
+            box_message = message_box_active.find('div', {'class': 'message'})
+            message_text = box_message.get_text()
+
+            if "500 records" in message_text:
+                return False, True
+
+            if "0 records" in message_text:
+                return True, False
+
+        else:
+            return False, False
+
+
     @staticmethod
     def sign_out(driver_var):
 
@@ -1189,11 +1279,14 @@ class GSMLS:
 
             GSMLS.set_dates([daterange[0], daterange[1]], type_, driver_var)
 
-            GSMLS.show_results(driver_var)
-            filename = self.download_sales_data(city_name, self.counties[county], qtr, year, kwargs['Property_Type'], driver_var, kwargs['Main_Window'])
-            additional_info = GSMLS.format_data_for_kafka(driver_var, year, city_name, kwargs['Property_Type'], kwargs['logger'])
-            self.publish_data_2kafka(filename, additional_info, **kwargs)
-            GSMLS.exit_results_page(driver_var)
+            zero_results, too_many_results = GSMLS.show_results(driver_var)
+
+            if (zero_results and too_many_results) is False:
+                filename = self.download_sales_data(city_name, self.counties[county], qtr, year, kwargs['Property_Type'],
+                                                    driver_var, kwargs['Main_Window'], kwargs['logger'])
+                additional_info = GSMLS.format_data_for_kafka(driver_var, year, city_name, kwargs['Property_Type'], kwargs['logger'])
+                self.publish_data_2kafka(filename, additional_info, **kwargs)
+                GSMLS.exit_results_page(driver_var)
 
     @staticmethod
     def too_many_results(driver_var):
@@ -1201,7 +1294,6 @@ class GSMLS:
         no_button = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, "//*[@id='message-box']/div[2]/input[2]")))
         no_button.click()
-        time.sleep(1)  # Built-in latency
 
     @logger_decorator
     def main(self, driver_var=None, **kwargs):
@@ -1229,8 +1321,6 @@ class GSMLS:
 
             GSMLS.page_search(1, page_results, driver_var)
             GSMLS.explicit_page_load('Advanced Search', driver_var)
-            # GSMLS.res_property_styles(driver_var)
-            # GSMLS.page_criteria('historic', driver_var)
 
             # Step 4: Create the time periods for which to search for data
             years = range(1995, datetime.now().year + 1)
@@ -1303,12 +1393,14 @@ if __name__ == '__main__':
     # save_location1 = 'C:\\Users\\jibreel.q.hameed\\Desktop\\Selenium Temp Folder'
     save_location2 = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'  # May need to be changed
     edge_profile_path = 'C:\\Users\\Omar\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default'
+    custom_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
     options = Options()
     # Change this directory to the new one: ('C:\\Users\\Omar\\Desktop\\Python Temp Folder')
     s = {"savefile.default_directory": save_location2,
          "download.default_directory": save_location2,
          "download.prompt_for_download": False}
-    options.add_argument(f"user-data-dir]={edge_profile_path}")
+    options.add_argument(f"user-data-dir={edge_profile_path}")
+    options.add_argument(f"user-agent={custom_user_agent}")
     # options.add_experimental_option("detach", True)
     options.add_experimental_option("prefs", s)
     # options.add_argument("--headless=new")
