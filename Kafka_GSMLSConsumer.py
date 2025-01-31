@@ -1,24 +1,29 @@
 import os
-import sys
-import shelve
-from kafka import KafkaConsumer
+
+from Tools.demo.sortvisu import steps
+from kafka import KafkaConsumer, KafkaProducer
 import json
 import pandas as pd
 import re
 from tqdm import tqdm
 from sqlalchemy import create_engine
+from kafka.errors import KafkaTimeoutError
+from kafka.errors import MessageSizeTooLargeError
+from RealEstateImages import RealEstateImages
+from sqlalchemy.exc import DataError
 
 class KafkaGSMLSConsumer:
 
-    def __init__(self, connection):
+    def __init__(self, connection, producer_):
         self.connection = connection
+        self.producer = producer_
         self.prop_dict = {
-            # 'RES': {'topic':'res_properties', 'functions': 14},
-            # 'MUL': {'topic':'mul_properties', 'functions': 13},
-            'LND': {'topic':'lnd_properties', 'functions': 12},
-            # 'RNT': {'topic':'rnt_properties', 'functions': 8},
-            # 'TAX': {'topic':'tax_properties', 'functions': 6},
-            # 'IMAGES': {'topic':'prop_images', 'functions': 0},
+            'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
+            'MUL': {'topic':'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
+            'LND': {'topic':'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
+            'RNT': {'topic':'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
+            'TAX': {'topic':'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
+            'IMAGES': {'topic':'prop_images', 'functions': 0, 'clean_type': None},
         }
 
     @staticmethod
@@ -109,12 +114,14 @@ class KafkaGSMLSConsumer:
             return df_var.astype({'TOWNCODE': 'int64', 'ASSESSAMOUNTBLDG': 'float64', 'YEAR': 'int64',
                                   'ASSESSAMOUNTLAND': 'float64', 'ASSESSTOTAL': 'float64', 'QTR': 'int64',
                                   'TAXAMOUNT': 'float64', 'ORIGLISTPRICE': 'int64', 'LISTPRICE': 'int64',
-                                  'SALESPRICE': 'int64', 'PARKNBRAVAIL': 'int64'})
+                                  'SALESPRICE': 'int64'})
 
         elif prop_type == 'RNT':
             update_bar.update(1)
-            return df_var.astype({'TOWNCODE': 'int64', 'YEAR': 'int64','QTR': 'int64',
-                                  'YEARBUILT': 'float64', 'SQFTAPPROX': 'float64'})
+            return df_var.astype({'TOWNCODE': 'int64', 'YEAR': 'int64','QTR': 'int64', 'BEDS':'int64',
+                                  'YEARBUILT': 'float64', 'SQFTAPPROX': 'float64', 'RENTMONTHPERLSE': 'int64',
+                                  'GARAGECAP': 'int64', 'LP': 'int64', 'RENTPRICEORIG': 'int64',
+                                  'LENGTHOFLEASE': 'int64'})
 
         elif prop_type == 'TAX':
             update_bar.update(1)
@@ -123,12 +130,14 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def checkpoint(df_var, topic):
 
-        current_wd = os.getcwd()
-        os.chdir('F:\\Real Estate Investing')
+        current_wd_ = os.getcwd()
+        os.chdir('F:\\Real Estate Investing\\Kafka_Data_Backups')
 
-        with shelve.open('Kafka_Consumer_Checkpoint') as writer:
-            writer[topic] = df_var
-            writer.sync()
+        df_var.to_excel(f'{topic}.xlsx', index=False)
+
+        os.chdir(current_wd_)
+
+
 
     @staticmethod
     def combine_listing_remarks(df_var, update_bar):
@@ -258,7 +267,7 @@ class KafkaGSMLSConsumer:
             return df_var.drop(columns=['ACRES', 'REMARKSPUBLIC', 'REMARKSAGENT', 'SHOWSPECIAL', 'TAXRATE',
                                         'TAXYEAR', 'BUILDINGSINCLUDED_SHORT', 'CURRENTUSE_SHORT', 'DEVSTATUS_SHORT',
                                         'IMPROVEMENTS_SHORT', 'LOTDESC_SHORT','ROADSURFACEDESC_SHORT', 'SITEPARTICULARS_SHORT',
-                                        'SEWERINFO_SHORT', 'WATERINFO_SHORT', 'ZONINGDESC_SHORT', 'IMAGES'])
+                                        'SEWERINFO_SHORT', 'WATERINFO_SHORT', 'ZONINGDESC_SHORT', 'PROP_CLASS'])
 
         if prop_type == 'RNT':
             update_bar.update(1)
@@ -313,7 +322,7 @@ class KafkaGSMLSConsumer:
                              'LISTPRICE': ['0', 'int64'], 'LOANTERMS_SHORT': ['Unknown', 'string'],
                              'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
                              'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0', 'int64'], 'OWNERNAME': ['Not Available', 'string'],
+                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
                              'PARKNBRAVAIL': ['0.0', 'float64'], 'EASEMENT_SHORT': ['N', 'string'],
                              'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'ASSOCFEE': ['0.0', 'float64'],
                              'POOL_SHORT': ['N', 'string'], 'STYLEPRIMARY_SHORT': ['Unknown', 'string'], 'SUBPROPTYPE': ['U', 'string'],
@@ -345,7 +354,7 @@ class KafkaGSMLSConsumer:
                              'LISTPRICE': ['0', 'int64'], 'LOANTERMS_SHORT': ['Unknown', 'string'],
                              'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
                              'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0', 'int64'], 'OWNERNAME': ['Not Available', 'string'],
+                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
                              'PARKNBRAVAIL': ['0.0', 'float64'], 'EASEMENT_SHORT': ['N', 'string'],
                              'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'UNITSTYLE_SHORT': ['Unknown', 'string'],
                              'REMARKSAGENT': ['None', 'string'], 'REMARKSPUBLIC': ['None', 'string'],
@@ -384,7 +393,7 @@ class KafkaGSMLSConsumer:
                              'LISTDATE': ['00/00/0000 00:00:00', 'string'], 'LISTPRICE': ['0', 'int64'],
                              'LOANTERMS': ['Unknown', 'string'], 'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
                              'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0', 'int64'], 'OWNERNAME': ['Not Available', 'string'],
+                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
                              'EASEMENT_SHORT': ['N', 'string'],
                              'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'REMARKSAGENT': ['None', 'string'],
                              'REMARKSPUBLIC': ['None', 'string'], 'SALESPRICE': ['0.0', 'float64'], 'SHOWSPECIAL': ['None', 'string'],
@@ -412,21 +421,21 @@ class KafkaGSMLSConsumer:
             datatype_dict = {'MLSNUM': ['000000', 'string'], 'STREETNUMDISPLAY': ['0', 'string'],
                              'ZIPCODE': ['00000', 'string'], 'TOWNCODE': ['0', 'string'], 'COUNTYCODE': ['00', 'string'],
                              'TAXID': ['0000-00000-0000-00000-0000', 'string'], 'DAYSONMARKET': ['0.0', 'float64'],
-                             'RENTPRICEORIG': ['0', 'int64'], 'LP': ['0', 'int64'], 'RENTMONTHPERLSE': ['0', 'int64'],
-                             'RP/LP%': ['0', 'int64'], 'LEASETERMS_SHORT': ['Unknown', 'string'],'ROOMS': ['0', 'int64'],
-                             'BEDS': ['0', 'int64'],'BATHSFULLTOTAL': ['0.0', 'float64'],'BATHSHALFTOTAL': ['0.0', 'float64'],
+                             'RENTPRICEORIG': ['0.0', 'float64'], 'LP': ['0.0', 'float64'], 'RENTMONTHPERLSE': ['0.0', 'float64'],
+                             'RP/LP%': ['0', 'int64'], 'LEASETERMS_SHORT': ['Unknown', 'string'],'ROOMS': ['0.0', 'string'],
+                             'BEDS': ['0.0', 'float64'],'BATHSFULLTOTAL': ['0.0', 'float64'],'BATHSHALFTOTAL': ['0.0', 'float64'],
                              'BATHSTOTAL': ['0.0', 'float64'], 'SQFTAPPROX': ['0', 'string'], 'SUBDIVISION': ['Unknown', 'string'],
                              'YEARBUILT': ['0', 'string'], 'PROPERTYTYPEPRIMARY_SHORT': ['Unknown', 'string'],
                              'PROPSUBTYPERN': ['Unknown', 'string'], 'LOCATION_SHORT': ['Unknown', 'string'],
                              'PRERENTREQUIRE_SHORT': ['Unknown', 'string'], 'OWNERPAYS_SHORT': ['Unknown', 'string'],
                              'TENANTPAYS_SHORT': ['Unknown', 'string'], 'TENANTUSEOF_SHORT': ['Unknown', 'string'],
                              'RENTINCLUDES_SHORT': ['Unknown', 'string'], 'RENTTERMS_SHORT': ['Unknown', 'string'],
-                             'LENGTHOFLEASE': ['0', 'int64'], 'AVAILABLE_SHORT': ['Unknown', 'string'],
+                             'LENGTHOFLEASE': ['0.0', 'float64'], 'AVAILABLE_SHORT': ['Unknown', 'string'],
                              'AMENITIES_SHORT': ['Unknown', 'string'], 'APPLIANCES_SHORT': ['Unknown', 'string'],
                              'LAUNDRYFAC': ['Unknown', 'string'], 'FURNISHINFO_SHORT': ['Unknown', 'string'],
                              'PETS_SHORT': ['Unknown', 'string'], 'PARKNBRAVAIL': ['0.0', 'float64'],
                              'DRIVEWAYDESC_SHORT': ['Unknown', 'string'], 'BASEMENT_SHORT': ['Unknown', 'string'],
-                             'BASEDESC_SHORT': ['Unknown', 'string'], 'GARAGECAP': ['0', 'int64'],
+                             'BASEDESC_SHORT': ['Unknown', 'string'], 'GARAGECAP': ['0.0', 'float64'],
                              'HEATSRC_SHORT': ['Unknown', 'string'], 'HEATSYSTEM_SHORT': ['Unknown', 'string'],
                              'COOLSYSTEM_SHORT': ['Unknown', 'string'], 'WATER_SHORT': ['Unknown', 'string'],
                              'UTILITIES_SHORT': ['Unknown', 'string'], 'FLOORS_SHORT': ['Unknown', 'string'],
@@ -579,6 +588,11 @@ class KafkaGSMLSConsumer:
 
         update_bar.update(1)
         return df_var
+
+    @staticmethod
+    def load_checkpoint(topic):
+
+        return pd.read_excel(f'{topic}.xlsx')
 
     @staticmethod
     def original_lp_diff(df_var, update_bar):
@@ -873,6 +887,36 @@ class KafkaGSMLSConsumer:
 
         return int(str(value).split('/')[2][:4])
 
+    def produce_images(self, df_var, prop_type):
+
+        if prop_type in ['RES', 'MUL', 'RNT']:
+            if prop_type == 'RES':
+                image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
+                                      'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
+            elif prop_type == 'MUL':
+                image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
+                                      'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
+
+            elif prop_type == 'RNT':
+                image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
+                                      'RENTEDDATE', 'IMAGES', 'PROP_CLASS']]
+
+            prepared_image_df = image_df.to_json(orient='split', date_format='iso')
+            try:
+                results = self.producer.send('prop_images', value=prepared_image_df)
+                result_metadata = results.get(timeout=10)
+
+            except MessageSizeTooLargeError:
+                self.reduce_df_size(image_df, 500)
+
+            except KafkaTimeoutError:
+                print(f'Images have not been produced to {result_metadata.topic} in Kafka')
+
+            print('Images have been produced to Kafka')
+
     @staticmethod
     def reorder_columns(df_var, prop_type, update_bar):
 
@@ -951,7 +995,7 @@ class KafkaGSMLSConsumer:
                             'LATITUDE': 13,
                             'LONGITUDE': 14,
                                  },
-                         'TAX': {}
+                         'TAX': {'LCR': df_var.shape[1] - 1}
                          }
         if location_dict[prop_type] != {}:
             for col, value in location_dict[prop_type].items():
@@ -975,8 +1019,7 @@ class KafkaGSMLSConsumer:
                     .pipe(KafkaGSMLSConsumer.fixer_upper, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.original_lp_diff, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
-                    .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar)
-                    .pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=update_bar))
+                    .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
     @staticmethod
     def mul_property_cleaning(df_var, prop_type, update_bar):
@@ -992,8 +1035,7 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.fixer_upper, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.original_lp_diff, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=update_bar))
+                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
     @staticmethod
     def lnd_property_cleaning(df_var, prop_type, update_bar):
@@ -1008,8 +1050,7 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.investment_label, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.original_lp_diff, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=update_bar))
+                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
     @staticmethod
     def rnt_property_cleaning(df_var, prop_type, update_bar):
@@ -1020,8 +1061,24 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.parse_property_attr, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=update_bar))
+                .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
+
+    def reduce_df_size(self, df_var, step: int):
+
+        for idx, i in enumerate(range(0, len(df_var), step)):
+            slice_df = df_var[i:i + step]
+
+            prepared_image_df = slice_df.to_json(orient='split', date_format='iso')
+            try:
+                results = self.producer.send('prop_images', value=prepared_image_df)
+                result_metadata = results.get(timeout=10)
+                print(f'Image data produced to Kafka: Block {idx}')
+            except MessageSizeTooLargeError:
+                self.reduce_df_size(df_var, step // 5)
+
+            except KafkaTimeoutError:
+                print(f'Images have not been produced to {result_metadata.topic} in Kafka')
+
 
     @staticmethod
     def tax_property_cleaning(df_var, prop_type, update_bar):
@@ -1149,6 +1206,42 @@ class KafkaGSMLSConsumer:
         update_bar.update(1)
         return df_var
 
+    def submit2sql(self, df_var, topic, prop_type, cleaning_bar):
+
+        step = 500
+
+        for idx, row in enumerate(range(0, len(df_var), step)):
+
+            slice_df = df_var[row:row + step]
+
+            if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
+                final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=cleaning_bar)
+                try:
+                    final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                except DataError:
+                    print(f'DataError has been detected in Block {idx}. Now submitting data by individual row...')
+                    self.submit2sql_dataerror(final_df, topic)
+            else:
+                try:
+                    slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                except DataError:
+                    print(f'DataError has been detected in Block {idx}. Now submitting data by individual row...')
+                    self.submit2sql_dataerror(slice_df, topic)
+
+        print(f"{topic} has successfully been stored in PostgreSQL")
+
+    def submit2sql_dataerror(self, df_var, topic):
+
+        for idx, row in df_var.iterrows():
+
+            temp_df = pd.DataFrame(data=row.values.reshape(1,-1), index=[idx], columns=row.index)
+
+            try:
+                temp_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+            except DataError as de:
+                print(f'A DataError has occurred: {de}')
+                continue
+
     def main(self):
 
         data_consumer = KafkaGSMLSConsumer.create_consumer()
@@ -1161,30 +1254,23 @@ class KafkaGSMLSConsumer:
             cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
             temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
             KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
+            # temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
-            if prop_type == 'RES':
-                final_df = temp_df.pipe(KafkaGSMLSConsumer.res_property_cleaning, prop_type=prop_type, update_bar=cleaning_bar)
-
-            elif prop_type == 'MUL':
-                final_df = temp_df.pipe(KafkaGSMLSConsumer.mul_property_cleaning, prop_type=prop_type, update_bar=cleaning_bar)
-
-            elif prop_type == 'LND':
-                final_df = temp_df.pipe(KafkaGSMLSConsumer.lnd_property_cleaning, prop_type=prop_type, update_bar=cleaning_bar)
-
-            elif prop_type == 'RNT':
-                final_df = temp_df.pipe(KafkaGSMLSConsumer.rnt_property_cleaning, prop_type=prop_type, update_bar=cleaning_bar)
-
-            elif prop_type == 'TAX':
-                final_df = temp_df.pipe(KafkaGSMLSConsumer.tax_property_cleaning, prop_type=prop_type, update_bar=cleaning_bar)
+            if prop_type != 'IMAGES':
+                final_df = temp_df.pipe(topic_data['clean_type'], prop_type=prop_type, update_bar=cleaning_bar)
 
             else:
                 final_df = temp_df
 
             if prop_type != 'IMAGES':
-                final_df.to_sql(topic_data['topic'], con=self.connection, if_exists='append', index=False, chunksize=1000)
-                print(f"{topic_data['topic']} has successfully been stored in PostgreSQL")
+
+                if prop_type in ['RES', 'MUL', 'RNT']:
+                    self.produce_images(final_df, prop_type)
+
+                self.submit2sql(final_df, topic_data['topic'], prop_type, cleaning_bar)
+
             else:
-                final_df.to_excel(f"{topic_data['topic']}.xlsx", index=False)
+                # RealEstateImages(final_df).main()
                 print(f"{topic_data['topic']} has successfully been stored in Excel")
 
             topics_bar.update(1)
@@ -1198,9 +1284,13 @@ if __name__ == '__main__':
     engine = create_engine(f"postgresql+psycopg2://postgres:Xy14RNw02SmD@database-1.chuq28s6itob.us-east-2.rds.amazonaws.com:5432/gsmls")
 
     current_wd = os.getcwd()
-    os.chdir('F:\\Real Estate Investing')
+    os.chdir('F:\\Real Estate Investing\\Kafka_Data_Backups')
+
+    producer = KafkaProducer(bootstrap_servers='localhost:9092',
+                             value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                             retries=3, acks='all')
 
     with engine.connect() as conn:
-        obj = KafkaGSMLSConsumer(conn)
+        obj = KafkaGSMLSConsumer(conn, producer)
         obj.main()
     os.chdir(current_wd)

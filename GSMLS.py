@@ -29,6 +29,7 @@ from selenium.common.exceptions import UnexpectedAlertPresentException
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
+from kafka.errors import MessageSizeTooLargeError
 
 
 # Custom class created to handle the console logging while using the tqdm progress bar
@@ -461,6 +462,79 @@ class GSMLS:
             if text == button:
                 return idx + 1
 
+    @staticmethod
+    def first_media_link(bs4_obj, soldlistings):
+        """
+        Find the first media link in the searches to scrape the hi res images
+        :param bs4_obj:
+        :param soldlistings:
+        :return:
+        """
+
+        for idx, item in enumerate(bs4_obj):
+
+            try:
+                media_link = item.find('td', {'class': 'media'}).a
+                if media_link.get_text().strip() != '':
+                    prop_id = item.find('td', {'class': 'item-number'})['data-seq']
+                    return prop_id, idx + 1
+                elif media_link.get_text().strip() == '':
+                    soldlistings['IMAGES'].append('None')
+                    continue
+
+
+            except AttributeError:
+                soldlistings['IMAGES'].append('None')
+                continue
+
+        return None, None
+
+    @staticmethod
+    def format_data_for_kafka(driver_var, year, municipality, prop_type, logger):
+
+        sold_listings_dictionary = {
+            'MLSNUM': [],
+            'LATITUDE': [],
+            'LONGITUDE': [],
+            'IMAGES': []
+        }
+        if prop_type != 'TAX':
+            # Use a checkpoint to make sure page is loaded
+            GSMLS.explicit_page_load('Results', driver_var, property_type=prop_type)
+
+            # Step 1: Acquire the page source and find the main table holding the property information
+            page_source = driver_var.page_source
+            latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
+            soup = BeautifulSoup(page_source, 'html.parser')
+            first_table = soup.find('table', {'class': 'df-table sticky sticky-gray'})
+            main_table = first_table.find('tbody')
+            sold_listings = main_table.find_all('tr')
+            prop_id, first_media_idx = GSMLS.first_media_link(sold_listings, sold_listings_dictionary)
+
+            main_window = driver_var.current_window_handle
+
+            # Step 2: Scrape the links for all high resolution images associated with each property
+            if type(first_media_idx) is int:
+                try:
+                    GSMLS.scrape_image_links(sold_listings_dictionary, driver_var, first_media_idx, prop_id)
+                    # Step 3: Switch to main property table window after scraping images
+                    driver_var.switch_to.window(main_window)
+                except TimeoutException:
+                    # Visibility of the 'imagesReportTitle' wasn't found. How do I fix this?
+                    logger.warning(f'The image urls for {municipality} in {year} were not scraped')
+                    pass
+
+            # Step 4: Loop through all rows of the table to get target information
+            # We do not include the last index because it will result in an error
+            for result in sold_listings:
+
+                sold_listings_dictionary['MLSNUM'].append(result.find('td', {'class': 'mlnum'}).a.get_text().strip())
+                address = result.find('td', {'class': 'address'}).find_all('a')[-1]
+                latlong = latlong_pattern.search(str(address))
+                sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
+                sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
+
+        return sold_listings_dictionary
 
     @staticmethod
     def get_us_pw(website):
@@ -619,6 +693,103 @@ class GSMLS:
             status = driver_var.find_element(By.ID, target)
             status.click()  # Step 3: Check the sold status
 
+    @staticmethod
+    def page_search(search_type: int, page_results, driver_var):
+        """
+        Click the quick search menu to start scraping the sales data
+        :param search_type:
+        :param page_results:
+        :param driver_var:
+        :return:
+        """
+
+        # Click the Search tab
+        soup = BeautifulSoup(page_results, 'html.parser')
+        target = soup.find('li', {"class": "nav-header", "id": "2"})
+        submenu_id = target.find('a', {"href": "#", "class": "has-submenu"})['id']
+        main_search = WebDriverWait(driver_var, 5).until(
+            EC.presence_of_element_located((By.ID, submenu_id)))
+        main_search.click()
+
+        # Click the Advanced Search sub-menu
+        quicksearch_menu = target.find('li', {"id": f"2_{search_type}"})
+        quicksearch_menu_id = quicksearch_menu.find('a', {"href": "#", "class": "disabled has-submenu"})['id']
+        extended_search_menu = WebDriverWait(driver_var, 5).until(
+            EC.presence_of_element_located((By.ID, quicksearch_menu_id)))
+        extended_search_menu.click()
+
+        # Click the XPY option which allows the access of RES, MUL and LND sales data
+        xpy_search = WebDriverWait(driver_var, 5).until(
+                EC.presence_of_element_located((By.ID, f'2_{search_type}_1')))
+        xpy_search.click()
+
+    def publish_data_2kafka(self, xls_file_name: str, soldlistings: dict, **kwargs):
+
+        topic_dict = {
+            'RES': 'res_properties',
+            'MUL': 'mul_properties',
+            'LND': 'lnd_properties',
+            'RNT': 'rnt_properties',
+            'TAX': 'tax_properties'
+        }
+
+        base_path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
+        kafka_data_prod = kwargs['data-producer']
+
+        if GSMLS.download_complete(xls_file_name):
+            sold_df = pd.read_excel(os.path.join(base_path, xls_file_name + '.xls'), engine='xlrd')
+            sold_df.columns = sold_df.columns.str.upper()
+            sold_df = GSMLS.return_target_columns(sold_df, kwargs['Property_Type'])
+
+            # Merge the Latitude and Longitude data from the image df to the sold listings df
+            if kwargs['Property_Type'] in ['RES', 'MUL', 'LND', 'RNT']:
+                sold_df = sold_df.astype({'MLSNUM': 'string'})
+
+                if kwargs['Property_Type'] == 'LND':
+                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
+                                             'LONGITUDE': soldlistings['LONGITUDE']})
+                else:
+                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
+                                             'LONGITUDE': soldlistings['LONGITUDE'], 'IMAGES': soldlistings['IMAGES']})
+
+                target_df = pd.merge(sold_df, geo_data, on='MLSNUM')
+                target_df['MLS'] = 'GSMLS'
+                target_df['QTR'] = kwargs['Qtr']
+                target_df['CONDITION'] = 'Unknown'
+                target_df['PROP_CLASS'] = kwargs['Property_Type']
+
+            elif kwargs['Property_Type'] == 'TAX':
+                target_df = sold_df
+
+            # Send to Kafka
+            target_df = target_df.to_json(orient='split', date_format='iso')
+
+            try:
+                result = kafka_data_prod.send(topic_dict[kwargs['Property_Type']], key=xls_file_name, value=target_df)
+                result_metadata = result.get(timeout=10)
+
+            except KafkaTimeoutError as kte:
+                kwargs['logger'].warning(
+                    f"Kafka Producer Error: {xls_file_name} was not produced to {topic_dict[kwargs['Property_Type']]}")
+                kwargs['logger'].warning(f'{kte}')
+                kwargs['logger'].info(f'Re-attempting to send {xls_file_name}')
+                self.publish_data_2kafka(xls_file_name, soldlistings, **kwargs)
+                GSMLS.sendfile2trash(xls_file_name)
+
+            except MessageSizeTooLargeError:
+
+                GSMLS.reduce_df_size(kafka_data_prod, target_df, 500,
+                                     topic_dict[kwargs['Property_Type']], xls_file_name, kwargs['logger'])
+                GSMLS.sendfile2trash(xls_file_name)
+
+            else:
+                kwargs['logger'].info(
+                    f'{xls_file_name} was produced to "{result_metadata.topic}" in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"')
+                self.rows_counted[kwargs['Property_Type']] += len(sold_df)
+                self.download_log['Rows_Produced'][-1] = len(sold_df)
+                self.download_log['Date_Produced'][-1] = (str(datetime.now()))
+                GSMLS.sendfile2trash(xls_file_name)
+
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
         Method that downloads all the sold homes for each city after each quarter.
@@ -730,9 +901,9 @@ class GSMLS:
                                     self.download_log['Results_Found'].append('Yes')
                                     self.split_search_dates(kwargs['Year'], type_, city_name, county, driver_var, **kwargs)
                                     self.download_log['Finished'][-1] = 'Yes'
+                                    GSMLS.set_dates(date_range, type_, driver_var)
                                     GSMLS.click_target_tab('Town', type_, driver_var)
                                     GSMLS.set_city(2, city_id, driver_var)
-                                    GSMLS.set_dates(date_range, type_, driver_var)
 
                                 else:
                                     # Results were found
@@ -742,9 +913,10 @@ class GSMLS:
                                     filename = self.download_sales_data(city_name, self.counties[county], qtr,
                                                                         kwargs['Year'], kwargs['Property_Type'],
                                                                         driver_var, kwargs['Main_Window'], logger)
+                                    GSMLS.explicit_page_load('Results', driver_var,
+                                                             property_type=kwargs['Property_Type'])
 
                                     if filename != 'Server Error':
-                                        GSMLS.explicit_page_load('Results', driver_var, property_type=kwargs['Property_Type'])
                                         additional_info = GSMLS.format_data_for_kafka(driver_var, kwargs['Year'],
                                                                                       city_name, kwargs['Property_Type'], logger)
                                         self.publish_data_2kafka(filename, additional_info, **kwargs)
@@ -758,38 +930,27 @@ class GSMLS:
                         GSMLS.click_target_tab('County', type_, driver_var)
                         GSMLS.set_county(2, county, driver_var)  # Set the county
                         counties_bar.update(1)
+                        kwargs['data-producer'].flush()
 
                 properties_bar.update(1)
 
     @staticmethod
-    def page_search(search_type: int, page_results, driver_var):
-        """
-        Click the quick search menu to start scraping the sales data
-        :param search_type:
-        :param page_results:
-        :param driver_var:
-        :return:
-        """
+    def reduce_df_size(producer, df_var, step: int, topic, file_name, logger):
 
-        # Click the Search tab
-        soup = BeautifulSoup(page_results, 'html.parser')
-        target = soup.find('li', {"class": "nav-header", "id": "2"})
-        submenu_id = target.find('a', {"href": "#", "class": "has-submenu"})['id']
-        main_search = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.ID, submenu_id)))
-        main_search.click()
+        for idx, i in enumerate(range(0, len(df_var), step)):
+            slice_df = df_var[i:i + step]
 
-        # Click the Advanced Search sub-menu
-        quicksearch_menu = target.find('li', {"id": f"2_{search_type}"})
-        quicksearch_menu_id = quicksearch_menu.find('a', {"href": "#", "class": "disabled has-submenu"})['id']
-        extended_search_menu = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.ID, quicksearch_menu_id)))
-        extended_search_menu.click()
+            prepared_df = slice_df.to_json(orient='split', date_format='iso')
+            try:
+                results = producer.send(topic, value=prepared_df)
+                result_metadata = results.get(timeout=10)
+                logger.info(f'Block {idx} of {file_name} was produced to "{result_metadata.topic}" '
+                            f'in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"')
+            except MessageSizeTooLargeError:
+                GSMLS.reduce_df_size(producer, df_var, step // 5, topic, file_name, logger)
 
-        # Click the XPY option which allows the access of RES, MUL and LND sales data
-        xpy_search = WebDriverWait(driver_var, 5).until(
-                EC.presence_of_element_located((By.ID, f'2_{search_type}_1')))
-        xpy_search.click()
+            except KafkaTimeoutError:
+                logger.warning(f'Property data for {file_name} has not been produced to {result_metadata.topic} in Kafka')
 
     @staticmethod
     def res_property_styles(driver_var):
@@ -895,160 +1056,9 @@ class GSMLS:
                        'TOTALASSESSMENT', 'ASSESSMENT2', 'ASSESSMENT1', 'YEARBUILT', 'BUILDINGDESC', 'BUILDINGCLASSCODE', 'ACRES',
                        'ADDITIONALLOTS', 'DEEDBOOK', 'DEEDPAGE', 'OWNER', 'OWNERS','MAILNUM', 'MAILDIR', 'MAILSTREET',
                        'MAILMODE', 'MAILCITY', 'MAILSTATE', 'MAILZIP', 'PRIOROWNER', 'PRIORSALEAMT', 'PRIORSALEDATE',
-                       'PRIORDEEDBOOK', 'PRIORDEEDPAGE', 'DATEMODIFIED']
+                       'PRIORDEEDBOOK', 'PRIORDEEDPAGE', 'DATEMODIFIED', 'LCR']
 
             return df[columns]
-
-    @staticmethod
-    def format_data_for_kafka(driver_var, year, municipality, prop_type, logger):
-
-        sold_listings_dictionary = {
-            'MLSNUM': [],
-            'LATITUDE': [],
-            'LONGITUDE': [],
-            'IMAGES': []
-        }
-        if prop_type != 'TAX' and prop_type != 'LND':
-            # Use a checkpoint to make sure page is loaded
-            GSMLS.explicit_page_load('Results', driver_var, property_type=prop_type)
-
-            # Step 1: Acquire the page source and find the main table holding the property information
-            page_source = driver_var.page_source
-            latlong_pattern = re.compile(r'navigate\((.*),(.*)\)')
-            soup = BeautifulSoup(page_source, 'html.parser')
-            first_table = soup.find('table', {'class': 'df-table sticky sticky-gray'})
-            main_table = first_table.find('tbody')
-            sold_listings = main_table.find_all('tr')
-            prop_id, first_media_idx = GSMLS.first_media_link(sold_listings, sold_listings_dictionary)
-
-            main_window = driver_var.current_window_handle
-
-            # Step 2: Scrape the links for all high resolution images associated with each property
-            if type(first_media_idx) is int:
-                try:
-                    GSMLS.scrape_image_links(sold_listings_dictionary, driver_var, first_media_idx, prop_id)
-                    # Step 3: Switch to main property table window after scraping images
-                    driver_var.switch_to.window(main_window)
-                except TimeoutException:
-                    # Visibility of the 'imagesReportTitle' wasn't found. How do I fix this?
-                    logger.warning(f'The image urls for {municipality} in {year} were not scraped')
-                    pass
-
-            # Step 4: Loop through all rows of the table to get target information
-            # We do not include the last index because it will result in an error
-            for result in sold_listings:
-
-                sold_listings_dictionary['MLSNUM'].append(result.find('td', {'class': 'mlnum'}).a.get_text().strip())
-                address = result.find('td', {'class': 'address'}).find_all('a')[-1]
-                latlong = latlong_pattern.search(str(address))
-                sold_listings_dictionary['LATITUDE'].append(latlong.group(1))
-                sold_listings_dictionary['LONGITUDE'].append(latlong.group(2))
-
-        return sold_listings_dictionary
-
-    @staticmethod
-    def first_media_link(bs4_obj, soldlistings):
-        """
-        Find the first media link in the searches to scrape the hi res images
-        :param bs4_obj:
-        :param soldlistings:
-        :return:
-        """
-
-        for idx, item in enumerate(bs4_obj):
-
-            try:
-                media_link = item.find('td', {'class': 'media'}).a
-                if media_link.get_text().strip() != '':
-                    prop_id = item.find('td', {'class': 'item-number'})['data-seq']
-                    return prop_id, idx + 1
-                elif media_link.get_text().strip() == '':
-                    soldlistings['IMAGES'].append('None')
-                    continue
-
-
-            except AttributeError:
-                soldlistings['IMAGES'].append('None')
-                continue
-
-        return None, None
-
-    def publish_data_2kafka(self, xls_file_name: str, soldlistings: dict, **kwargs):
-
-        topic_dict = {
-            'RES': 'res_properties',
-            'MUL': 'mul_properties',
-            'LND': 'lnd_properties',
-            'RNT': 'rnt_properties',
-            'TAX': 'tax_properties'
-        }
-
-        base_path = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'
-        kafka_data_prod = kwargs['data-producer']
-
-        if GSMLS.download_complete(xls_file_name):
-            sold_df = pd.read_excel(os.path.join(base_path, xls_file_name + '.xls'), engine='xlrd')
-            sold_df.columns = sold_df.columns.str.upper()
-            sold_df = GSMLS.return_target_columns(sold_df, kwargs['Property_Type'])
-
-            # Merge the Latitude and Longitude data from the image df to the sold listings df
-            if kwargs['Property_Type'] in ['RES', 'MUL', 'LND', 'RNT']:
-                sold_df = sold_df.astype({'MLSNUM': 'string'})
-
-                if kwargs['Property_Type'] == 'LND':
-                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
-                                             'LONGITUDE': soldlistings['LONGITUDE']})
-                else:
-                    geo_data = pd.DataFrame({'MLSNUM': soldlistings['MLSNUM'], 'LATITUDE': soldlistings['LATITUDE'],
-                                             'LONGITUDE': soldlistings['LONGITUDE'], 'IMAGES': soldlistings['IMAGES']})
-
-                target_df = pd.merge(sold_df, geo_data, on='MLSNUM')
-                target_df['MLS'] = 'GSMLS'
-                target_df['QTR'] = kwargs['Qtr']
-                target_df['CONDITION'] = 'Unknown'
-                target_df['PROP_CLASS'] = kwargs['Property_Type']
-
-                if kwargs['Property_Type'] in ['RES', 'MUL', 'RNT']:
-                    if kwargs['Property_Type'] == 'RES':
-                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
-                                              'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
-                    elif kwargs['Property_Type'] == 'MUL':
-                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
-                                              'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
-
-                    elif kwargs['Property_Type'] == 'RNT':
-                        image_df = target_df[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                              'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
-                                              'RENTEDDATE', 'IMAGES', 'PROP_CLASS']]
-
-                    image_df = image_df.to_json(orient='split', date_format='iso')
-                    kafka_data_prod.send('prop_images', key=xls_file_name, value=image_df)
-
-            elif kwargs['Property_Type'] == 'TAX':
-                target_df = sold_df
-
-            # Send to Kafka
-            target_df = target_df.to_json(orient='split', date_format='iso')
-
-            try:
-                result = kafka_data_prod.send(topic_dict[kwargs['Property_Type']], key=xls_file_name, value=target_df)
-                result_metadata = result.get(timeout=10)
-
-            except KafkaTimeoutError as kte:
-                kwargs['logger'].warning(f"Kafka Producer Error: {xls_file_name} was not produced to {topic_dict[kwargs['Property_Type']]}")
-                kwargs['logger'].warning(f'{kte}')
-                kwargs['logger'].info(f'Re-attempting to send {xls_file_name}')
-                self.publish_data_2kafka(xls_file_name, soldlistings, **kwargs)
-
-            else:
-                kwargs['logger'].info(f'{xls_file_name} was produced to "{result_metadata.topic}" in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"')
-                self.rows_counted[kwargs['Property_Type']] += len(sold_df)
-                self.download_log['Rows_Produced'][-1] = len(sold_df)
-                self.download_log['Date_Produced'][-1] = (str(datetime.now()))
-                GSMLS.sendfile2trash(xls_file_name)
-
 
     def save_metadata(self):
 
@@ -1095,8 +1105,7 @@ class GSMLS:
                 clean_address = GSMLS.clean_address(raw_property_address)
                 for image_num, image in enumerate(images_list):
                     # The high res image is in the value attribute of the first input tag
-                    # img_link =
-                    image_dictionary[f"{clean_address} - {image.img['alt']} - {image_num}"] = image.input['value']
+                    image_dictionary[f"{clean_address} - {image.get_text(strip=True)} - {image_num}"] = image.input['value']
 
                 dict_var['IMAGES'].append(image_dictionary)
             elif len(images_list) == 0:
@@ -1349,7 +1358,6 @@ class GSMLS:
                             kwargs['Year'] = year
 
                             self.quarterly_sales_res(driver_var, **kwargs)
-                            kwargs['data-producer'].flush()
                             quarters_bar.update(1)
 
                     year_bar.update(1)
@@ -1374,7 +1382,15 @@ class GSMLS:
 
         except AssertionError as AE:
             logger.warning(f'{AE}')
+            GSMLS.kill_logger(logger, f_handler, c_handler)
+            self.save_metadata()
             raise AssertionError
+
+        except KeyboardInterrupt:
+            # Press the stop button once in order for data to save
+            logger.info('User has ended the program')
+            GSMLS.kill_logger(logger, f_handler, c_handler)
+            raise KeyboardInterrupt
 
         except BaseException:
             exc = sys.exception()
@@ -1421,6 +1437,11 @@ if __name__ == '__main__':
         except AssertionError:
             quit_program = True
             # Send a text message saying the program has been completed and summarize results
+            break
+
+        except KeyboardInterrupt:
+            obj.save_metadata()
+            quit_program = True
             break
 
         except NoBrokersAvailable:
