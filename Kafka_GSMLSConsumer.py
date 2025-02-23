@@ -18,11 +18,11 @@ class KafkaGSMLSConsumer:
         self.connection = connection
         self.producer = producer_
         self.prop_dict = {
-            'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
-            'MUL': {'topic':'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
-            'LND': {'topic':'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
-            'RNT': {'topic':'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
-            'TAX': {'topic':'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
+            # 'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
+            # 'MUL': {'topic':'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
+            # 'LND': {'topic':'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
+            # 'RNT': {'topic':'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
+            # 'TAX': {'topic':'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
             'IMAGES': {'topic':'prop_images', 'functions': 0, 'clean_type': None},
         }
 
@@ -371,14 +371,14 @@ class KafkaGSMLSConsumer:
                              'COMPSELL': [None, 'string'], 'COMPTRANS': [None, 'string'], 'ZONING': [None, 'string'],
                              'UTILITIES_SHORT': ['Unknown', 'string'], 'WATER_SHORT': ['Unknown', 'string'],
                              'BATHSHALFTOTAL': ['0.0', 'float64'], 'BATHSFULLTOTAL': ['0.0', 'float64'],
-                             'INCOMEGROSSOPERATING': ['0', 'int64'], 'UNIT4BATHS': ['0', 'int64'], 'UNIT1ROOMS': ['0', 'int64'],
-                             'EXPENSEOPERATING': ['0', 'int64'], 'EXPENSESINCLUDE_SHORT': [None, 'string'],
+                             'INCOMEGROSSOPERATING': ['0.0', 'string'], 'UNIT4BATHS': ['0', 'int64'], 'UNIT1ROOMS': ['0', 'int64'],
+                             'EXPENSEOPERATING': ['0.0', 'string'], 'EXPENSESINCLUDE_SHORT': [None, 'string'],
                              'UNIT2BATHS': ['0', 'int64'], 'UNIT2ROOMS': ['0', 'int64'], 'UNIT3BEDS': ['0', 'int64'],
                              'UNIT3BATHS': ['0', 'int64'], 'UNIT4OWNERTENANTPAYS_SHORT': [None, 'string'],
                              'UNIT3OWNERTENANTPAYS_SHORT': [None, 'string'], 'UNIT1BEDS': ['0', 'int64'],
                              'UNIT3ROOMS': ['0', 'int64'], 'UNIT2BEDS': ['0', 'int64'],
                              'UNIT1OWNERTENANTPAYS_SHORT': [None, 'string'], 'UNIT4BEDS': ['0', 'int64'],
-                             'UNIT2OWNERTENANTPAYS_SHORT': [None, 'string'], 'INCOMENETOPERATING': ['0', 'int64'],
+                             'UNIT2OWNERTENANTPAYS_SHORT': [None, 'string'], 'INCOMENETOPERATING': ['0.0', 'string'],
                              'NUMUNITS': ['0', 'int64'], 'UNIT4ROOMS': ['0', 'int64'], 'UNIT1BATHS': ['0', 'int64'],
                              'LATITUDE': ['0E-20', 'string'], 'LONGITUDE': ['0E-20', 'string']
             }
@@ -902,7 +902,8 @@ class KafkaGSMLSConsumer:
             elif prop_type == 'RNT':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                       'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
-                                      'RENTEDDATE', 'IMAGES', 'PROP_CLASS']]
+                                      'RENTEDDATE', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
+                                   'IMAGES', 'PROP_CLASS']]
 
             prepared_image_df = image_df.to_json(orient='split', date_format='iso')
             try:
@@ -1132,7 +1133,7 @@ class KafkaGSMLSConsumer:
                                  'default_value': '0.0',
                                  'regex': False},
                     '(\d)\1{3,}': {'columns': ['YEARBUILT', 'SQFTBLDG', 'INCOMENETOPERATING', 'EXPENSEOPERATING', 'INCOMEGROSSOPERATING'],
-                                   'default_value': '0',
+                                   'default_value': '0.0',
                                    'regex': True}
                     },
             'LND': {'00:00:00': {'columns': ['ASSESSAMOUNTBLDG', 'ASSESSTOTAL', 'ASSESSAMOUNTLAND'],
@@ -1252,9 +1253,9 @@ class KafkaGSMLSConsumer:
             # handle the re-balancing of partitions for me
             data_consumer.subscribe([topic_data['topic']])
             cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
-            temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
-            KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
-            # temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+            # temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
+            # KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
+            temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
             if prop_type != 'IMAGES':
                 final_df = temp_df.pipe(topic_data['clean_type'], prop_type=prop_type, update_bar=cleaning_bar)
@@ -1270,7 +1271,7 @@ class KafkaGSMLSConsumer:
                 self.submit2sql(final_df, topic_data['topic'], prop_type, cleaning_bar)
 
             else:
-                # RealEstateImages(final_df).main()
+                RealEstateImages(final_df).main()
                 print(f"{topic_data['topic']} has successfully been stored in Excel")
 
             topics_bar.update(1)

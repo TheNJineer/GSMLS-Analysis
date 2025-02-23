@@ -17,20 +17,27 @@ class RealEstateImages:
         self.image_df = df_var
         self.image_dir = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\MLS Photos'
         self.home_sections = {
-            'Bathroom': re.compile('bathroom|bath|powder', flags=re.IGNORECASE),
-            'Bedroom': re.compile('bedroom|bed|bed room', flags=re.IGNORECASE),
-            'Kitchen': re.compile('kitchen', flags=re.IGNORECASE),
+            'Bathroom': re.compile('bath(\s)?room|bath|powder|master bath', flags=re.IGNORECASE),
+            'Bedroom': re.compile('bed(\s)?room|bed|master suite|master br|master bedrm', flags=re.IGNORECASE),
+            'Kitchen': re.compile('kitchen|breakfast', flags=re.IGNORECASE),
             'Garage': re.compile('garage', flags=re.IGNORECASE),
-            'Front': re.compile('front yard|front', flags=re.IGNORECASE),
-            'Backyard': re.compile('back(\s)?yard|rear|yard', flags=re.IGNORECASE),
-            'Living Room': re.compile('living(\sroom)?|family(\sroom)?', flags=re.IGNORECASE),
-            'Basement': re.compile('basement|recreation|rec', flags=re.IGNORECASE),
+            'Front': re.compile('front yard|front(\sexterior)?', flags=re.IGNORECASE),
+            'Entrance': re.compile('entrance', flags=re.IGNORECASE),
+            'Foyer': re.compile('foyer', flags=re.IGNORECASE),
+            'Laundry': re.compile('laundry(\sroom)?|washer|dryer', flags=re.IGNORECASE),
+            'Backyard': re.compile('back(\s)?yard|rear(\sexterior)?|yard', flags=re.IGNORECASE),
+            'Living Room': re.compile('living(\sroom)?|family(\sroom)?|liv rm|family rm', flags=re.IGNORECASE),
+            'Basement': re.compile('basement|recreation|rec|lower level', flags=re.IGNORECASE),
             'Attic': re.compile('attic', flags=re.IGNORECASE),
-            'Office': re.compile('office', flags=re.IGNORECASE),
+            'Office': re.compile('office|den', flags=re.IGNORECASE),
             'Deck': re.compile('deck|patio', flags=re.IGNORECASE),
+            'Pool': re.compile('pool', flags=re.IGNORECASE),
             'Driveway': re.compile('driveway|parking', flags=re.IGNORECASE),
             'Dining Room': re.compile('dining(\sroom)?', flags=re.IGNORECASE),
             'Porch': re.compile('porch', flags=re.IGNORECASE),
+            'Floor Plans': re.compile('floor plan(s)?', flags=re.IGNORECASE),
+            'Tax Map': re.compile('(tax\s)?map', flags=re.IGNORECASE),
+            'Sun Room': re.compile('sun(\s)?room', flags=re.IGNORECASE),
             'Alternates': re.compile('Image of listing|Image of listing.*', flags=re.IGNORECASE)
         }
 
@@ -131,16 +138,9 @@ class RealEstateImages:
     @staticmethod
     def date_and_condition(series):
 
-        prop_type = {
-            'RES': 'res_properties',
-            'MUL': 'mul_properties',
-            'RNT': 'rnt_properties'
-        }
-
         try:
 
             prop_class = series['PROP_CLASS']
-            mls_num = series['MLSNUM']
 
             if prop_class == 'RNT':
                 date = series['RENTEDDATE']
@@ -201,6 +201,7 @@ class RealEstateImages:
 
                 else:
                     res_style = series['STYLEPRIMARY_SHORT']
+
         except KeyError:
             res_style = np.nan
 
@@ -214,15 +215,29 @@ class RealEstateImages:
 
                 else:
                     mul_style = series['UNITSTYLE_SHORT']
+
         except KeyError:
             mul_style = np.nan
 
-        if isinstance(res_style, float) and isinstance(mul_style, float):
+        try:
+            if series['PROPSUBTYPERN']:
+                if isinstance(series['PROPSUBTYPERN'], float):
+                    rnt_style = np.nan
+
+                else:
+                    rnt_style = series['PROPSUBTYPERN']
+
+        except KeyError:
+            rnt_style = np.nan
+
+        if isinstance(res_style, float) and isinstance(mul_style, float) and isinstance(rnt_style, float):
             return None, None
         elif not isinstance(res_style, float) :
             return 'RES', RealEstateImages.style_type_split(res_style, prop_data)
         elif not isinstance(mul_style, float):
             return 'MUL', RealEstateImages.style_type_split(mul_style, prop_data)
+        elif not isinstance(rnt_style, float):
+            return 'RNT', RealEstateImages.style_type_split(rnt_style, prop_data)
 
     def sql_query(self, series):
 
@@ -274,11 +289,15 @@ class RealEstateImages:
                 if 'FixrUppr' in style_type_list:
                     prop_data['Condition'] = 'FIXER UPPER'
 
-                return 'Multi-fam'
+                return 'MultiFam'
 
         elif style_type in ['Cluster', 'UndrOver', 'TwoStory', 'ThreStry', 'OneStory']:
 
-            return 'Multi-fam'
+            return 'MultiFam'
+
+        elif style_type == 'Resident':
+
+            return 'Residential'
 
         elif style_type == 'SeeRem':
 
@@ -319,7 +338,7 @@ class RealEstateImages:
             target_row = row_data[1]
             target_date, condition = RealEstateImages.date_and_condition(target_row)
             # target_date, condition = self.sql_query(target_row)
-            if target_row['IMAGES'] == 'None' or isinstance(target_row['IMAGES'], float):
+            if (target_row['IMAGES'] == 'None') or isinstance(target_row['IMAGES'], float) or (image_pattern.findall(target_row['IMAGES']) == []):
                 continue
 
             for col in target_columns:

@@ -58,25 +58,15 @@ PRIORITY LIST:
 9) UserWarning: the 'timedelta' type is not supported, and will be written as integer values (ns frequency) to the database.
 Create function which transforms this to the desired time
 10) Instead of going by each muni for LND, scrape by county the full year in one pass
-12) Put all data data consumption functions in GSMLS function
 15) Add KeyboardIntercept as an excepted error for data to be saved
     - Figure out a way to have the KeyboardInterupt and AssertionError initiated and data still saved
     - KeyboardInts arent getting respected right now
-16) Find the '23X' value thats causing issues of the df being stored in PostgreSQL for the tax_properties
-- I fcked that tax_properties shelve up. Data may be lost
-- 2000 TAX data will need to be redownloaded
 20) check if tax data timedelta columns are in ns frequency
 *** The LOT data is currently bigint but the data could potentially have letters in it. Should this be changed to text datatype? (TAX)
-21) Add additional section regex patterns: Foyer, Laundry, Entrance, Floor Plans
-22)***Start scrapping the 'LCR' column for tax data. Its needed to match the tax data from the GSMLS to the to the NJ Tax Assessment Data
-For the data that doesnt have it, if the maildata matches the location data, fill in the LCR cells
-23) Create a label for North, Central, and South Jersey
-24) Give the Kafka_GSMLSConsumer the ability to mark a home as Newly Renovated as well as New Construction
-    - Create new regex patterns that are put in the fixer_upper function
-25) Create a boolean column for MUL data that accounts for 5+ units
-    - Create a separate function that says if x > 6, return True, else False
-26) Add the PropSubTypeRN and PropertyTypePrimary_short to the Kafka_GSMLSConsumer to
-add the columns to help label the images for RNT data
+*** GSMLS Tax data is updated after every sale and replaces the previous records. Cant rely on the time_of_posession data
+21) False positives for 'Fixer Upper' properties. Descriptions with 'molding' in it are being described as TLC because it's a partial match
+    Fix this! Make full match!
+22) Create a save point for after every county is scraped
 
 
 Update Tasks:
@@ -88,6 +78,7 @@ Update Tasks:
 11) Process and transform data to apply labels to pictures then save to MongoDB
 14) Change the "CONDITION" and "POTENTIAL INVESTMENT" column value to "Fixer Upper" and True if criteria is met
     - Use a combination of the difference between original list price & list price, SP/OLP%, loan_terms, days to close
+16) I fcked that tax_properties shelve up. Data may be lost, 2000 TAX data will need to be redownloaded
 18) Download and install Apache Airflow
 19) *** THERE'S DATA MISSING!!! FIGURE OUT HOW TO ENSURE ALL DATA IS BEING RECEIVED!!!
 20) TimeoutErrors occuring on the format_data_for_kafka and no_results() figure this out
@@ -100,6 +91,31 @@ Update Tasks:
     - Get the NJ Bank Codes excel and turn into a database (in Apple Files)
     *** - Create function that uses NLTK Sentiment Analysis on the Listing Remarks column
     - Can I create a column that quantifies how many previous sales the property has
+24) Give the Kafka_GSMLSConsumer the ability to mark a home as Newly Renovated as well as New Construction
+    - New Construction: 'recently constructed|new construction|(?:brand\s)new construction|recently renovated'
+    - Renovated: 'completely re/-?built|renovated|fully renovated'
+    - Create new regex patterns that are put in the fixer_upper function
+    - Will require new columns
+25) Create a boolean column for MUL data that accounts for 5+ units
+    - Create a separate function that says if x > 6, return True, else False
+    - Add new column in PostgresSQL before doing this
+23) Create a label for North, Central, and South Jersey
+    - Will require a new column
+26) Remove records from MongoDB which image arrays are empty
+27) Add patterns
+29) Create an instance variable that holds the window id numbers to easily switch back and forth to them
+28) Handle a "too many results" instance in too_many_results():
+    - split_search_dates handles this on a yearly level DONE
+    - Create functions which can handle it on quarterly DONE
+    - Create functions to handle it on a monthly level MANDORTY DONE NEXT!!!
+    ***Update the name of the file and key in these functions so data isnt overriden
+    in Kafka
+29) Create NJ_TOWNCODE column
+30) Create geomap account for API and finish function
+31) Remove duplicate records with the same MLSNUM in MongoDB
+
+//button[@id='listings'
+
 
 *** I DO NOT HAVE TO SCRAPE ADDITIONAL ADDRESSES
 - USE THE NJ TAX ASSESSMENT DATA TO FILL IN ANY INFORMATION GAPS
