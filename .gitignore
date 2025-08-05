@@ -5,3 +5,24 @@ NJTaxAssessment.py
 UniversalFunctions.py
 RPR.py
 pandas2sql.py
+Logs/
+Docker_Volumes/
+docker-compose.yaml
+GSMLSC & REI Notes.txt
+Apache Kakfa Notes.txt
+Transformation Notes.txt
+Transformation Notes
+GSMLSC & REI Notes
+GSMLS v2 Notes
+Apache Kafka Notes
+Apache Kafka Notes
+Apache Kafka Notes
+GSMLS v2 Notes
+Log_Parse.py
+Kafka_Consumer_Checkpoint.bak
+Kafka_Consumer_Checkpoint.dat
+Kafka_Consumer_Checkpoint.dir
+GSMLS v2 Notes
+Apache Kafka Notes
+tax_assessment_2_sql.py
+Skip_Folder/
