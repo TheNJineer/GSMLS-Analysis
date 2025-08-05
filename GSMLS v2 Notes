@@ -37,6 +37,20 @@ GSMLS Workflow:
 12) Produce data to Kafka
 
 PRIORITY LIST:
+*** Try scraping available, and under contract data later
+***1a) Modify Kafka_GSMLSConsumer to filter data before consuming
+    - Filter data based on the max date currently in the database. The listdate/closed date should be greater
+    than the max_date currently in the database?
+***1b) Modify the load_metadata function or the whole class for in the event the program fails, the last previous
+scraped date is still maintained since the database is updated dynamically (DONE)
+- Create a column in the event log called "scrape_from_date" which will be the date from the previous scrape???
+    - How will this work???
+    - Add a date_scraped column to all the gsmls databases so I know how to filter the data
+    - LOOK AT THE FUNCTION NOTES
+****1c) Add "SCRAPED_DATE" TO res_properties and subsequent db's so I know how to filter (DONE)
+****1d) Add a sys.exit() at the end and or return True so quit_program = True
+****1e) LAST BATCH OF PROP_IMAGES DIDNT SAVE IN MONGODB. TRY AGAIN!!!
+
 2) Create a run summary to be emailed when complete
     - Renew the Gmail API
     - Include rows produced, years/qtr scrapped and errors encountered
@@ -66,7 +80,7 @@ Create function which transforms this to the desired time
 *** GSMLS Tax data is updated after every sale and replaces the previous records. Cant rely on the time_of_posession data
 21) False positives for 'Fixer Upper' properties. Descriptions with 'molding' in it are being described as TLC because it's a partial match
     Fix this! Make full match!
-22) Create a save point for after every county is scraped
+22) Create a save point for after every county is scraped (DONE)
 
 
 Update Tasks:
@@ -102,19 +116,69 @@ Update Tasks:
 23) Create a label for North, Central, and South Jersey
     - Will require a new column
 26) Remove records from MongoDB which image arrays are empty
-27) Add patterns
-29) Create an instance variable that holds the window id numbers to easily switch back and forth to them
+27) Add patterns for virtually staged images
+29) Create an instance variable that holds the window id numbers to easily switch back and forth to them DONE
 28) Handle a "too many results" instance in too_many_results():
     - split_search_dates handles this on a yearly level DONE
     - Create functions which can handle it on quarterly DONE
-    - Create functions to handle it on a monthly level MANDORTY DONE NEXT!!!
+    - Create functions to handle it on a monthly level DONE
     ***Update the name of the file and key in these functions so data isnt overriden
-    in Kafka
+    in Kafka DONE
 29) Create NJ_TOWNCODE column
 30) Create geomap account for API and finish function
 31) Remove duplicate records with the same MLSNUM in MongoDB
+32) Finish figuring out out to scrape RPR results
+33) Add random time intervals in between scrapes to not flag as a bot
+35) Make the Time of Possessions floats so if one is found, np.nan can be used as a value
+36) Find the 'Google Suggested Location' (ie: 114 CEDARST, Nutley , NJ 07110) if properties can be found
+37) Update the idx == 2 block to scrape Current ToP in scrape_prop_overview
+38) in scrape_listings, if 'Current ToP' gives key error, scrape rpr
+39) Fix_quarter(): wrong column, change to 'QTR'
+40) Make note of the expired and withdrawn listing dates and ignore them when calculating the ToP
+(ie: 400 Lafayette St, Newark, NJ 07105. Current ToP works but not fore this scenario, looking for prior ToP)
+41) Make sure the listing_id_row and deed_rows are deleted after each iteration to not be used in the next one
+42) self.load_metadata should accept a arg called prop_type
+    - Change the query if prop_type arg is not None
+*** Focusing on scraping jus RES properties for now
+43) Properly process the "WD" and "XD" property data
+    - Set their DAYS_TO_CLOSE to -1 and parse their YEAR from the list date
+44) ***Take Salem County Salem City 2008 data out of db!!! Fake data
+45) Update the fixer upper label, it's marking the wrong properties as fixer uppers. Need to change the "mold" pattern, picking up molding
+    and creating false positives
+46) Fix the produce_image and reduce size functions. It's creating an extreme amount of duplicates (DONE)
+47) Make pattern for "exercise room/gym" (DONE)
+48) End the program after the last town in the last county of the latest year gets scraped
 
-//button[@id='listings'
+'43 PINE STREET, Midland Park Boro, NJ 07432' 13
+
+Row 2: 327 Stelton Road, Piscataway Twp, NJ 08854 - 1652376 was not found in GSMLS tax data for 2004
+Row 3: 14 DAVIS AVENUE - REDUCED, Piscataway Twp, NJ 08854 - 1653038 was not found in GSMLS tax data for 2004
+626 South Randolphville, Piscataway Twp, NJ 08854 - 1653769 was not found in NJ tax data
+Row 5: 626 South Randolphville, Piscataway Twp, NJ 08854 - 1653769 was not found in GSMLS tax data for 2004
+Row 6: 21 locust, Piscataway Twp, NJ 08854 - 1653789 was not found in GSMLS tax data for 2004
+Row 7: 5 DEVON DR, Piscataway Twp, NJ 08854-5215 - 1653837 was not found in GSMLS tax data for 2004
+Row 10: 6 Kroeger lane, Piscataway Twp, NJ 08854 - 1654160 was not found in GSMLS tax data for 2004
+Row 11: 106 CASTLE POINTE BLVD, Piscataway Twp, NJ 08854-5066 - 1654401 was not found in GSMLS tax data for 2004
+Row 13: 805 Plainfield Avenue, Piscataway Twp, NJ 08854 - 1654610 was not found in GSMLS tax data for 2004
+1119 South Washington, Piscataway Twp, NJ 08854 - 1654670 was not found in NJ tax data
+Row 14: 1119 South Washington, Piscataway Twp, NJ 08854 - 1654670 was not found in GSMLS tax data for 2004
+Row 15: 262 RETTA CT, Piscataway Twp, NJ 08854-6641 - 1655131 was not found in GSMLS tax data for 2004
+Row 16: 290 River Rd J-2, Piscataway Twp, NJ 08854 - 1655236 was not found in GSMLS tax data for 2004
+Row 17: 6 Hillside Ave., Piscataway Twp, NJ 08854 - 1659353 was not found in GSMLS tax data for 2004
+Row 18: 28 BALTIMORE AVE, Piscataway Twp, NJ 08854-2106 - 1656269 was not found in GSMLS tax data for 2004
+Row 19: 1039 Eva Street, Piscataway Twp, NJ 08854 - 1656339 was not found in GSMLS tax data for 2004
+Row 20: 312 Pegasus Road, Piscataway Twp, NJ 08854 - 1656466 was not found in GSMLS tax data for 2004
+Row 21: 105 Redbud Rd., Piscataway Twp, NJ 08854 - 1656844 was not found in GSMLS tax data for 2004
+Row 22: 59 eiseman, Piscataway Twp, NJ 08854 - 1656890 was not found in GSMLS tax data for 2004
+Row 23: 2408 JESSE WAY, Piscataway Twp, NJ 08854 - 1656966 was not found in GSMLS tax data for 2004
+Row 24: 224 BEXLEY LN, Piscataway Twp, NJ 08854-2183 - 1657329 was not found in GSMLS tax data for 2004
+Row 26: 290 River Rd F-11, Piscataway Twp, NJ 08854 - 1657778 was not found in GSMLS tax data for 2004
+Row 28: 849 Maple, Piscataway Twp, NJ 08854 - 1658244 was not found in GSMLS tax data for 2004
+Row 30: 35 WISTERIA, Piscataway Twp, NJ 08854- - 1658570 was not found in GSMLS tax data for 2004
+Row 31: 10 Barnett, Piscataway Twp, NJ 08854 - 1658999 was not found in GSMLS tax data for 2004
+Row 34: 308 Ventnor Court, Piscataway Twp, NJ 08854 - 1659923 was not found in GSMLS tax data for 2004
+Row 36: 120 Plainfield Avenue, Piscataway Twp, NJ 08854 - 1660143 was not found in GSMLS tax data for 2004
+
 
 
 *** I DO NOT HAVE TO SCRAPE ADDITIONAL ADDRESSES

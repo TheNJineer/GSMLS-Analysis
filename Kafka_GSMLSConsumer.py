@@ -18,7 +18,7 @@ class KafkaGSMLSConsumer:
         self.connection = connection
         self.producer = producer_
         self.prop_dict = {
-            # 'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
+            'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
             # 'MUL': {'topic':'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
             # 'LND': {'topic':'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
             # 'RNT': {'topic':'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
@@ -221,16 +221,23 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def convert_lot_size(df_var, update_bar):
 
-        df_var['ACRES'] = df_var['ACRES'].astype('float64')
-        df_var['LOTSIZE (SQFT)'] = df_var['ACRES'] * 43560
+        try:
+            df_var['ACRES'] = df_var['ACRES'].astype('float64')
+            df_var['LOTSIZE (SQFT)'] = df_var['ACRES'] * 43560
+        except ValueError:
+            df_var['ACRES'] = pd.to_numeric(df_var['ACRES'], errors='coerce')
+            df_var['LOTSIZE (SQFT)'] = df_var['ACRES'] * 43560
 
         temp_df_ = df_var.copy()
 
         for idx, row in temp_df_.iterrows():
 
-            if row['LOTSIZE (SQFT)'] == 0.0:
-                value = row['LOTSIZE']
-                df_var.loc[idx, 'LOTSIZE (SQFT)'] = KafkaGSMLSConsumer.fix_lotsize(value)
+            try:
+                if row['LOTSIZE (SQFT)'] == 0.0:
+                    value = row['LOTSIZE']
+                    df_var.loc[idx, 'LOTSIZE (SQFT)'] = KafkaGSMLSConsumer.fix_lotsize(value)
+            except TypeError:
+                df_var.loc[idx, 'LOTSIZE (SQFT)'] = 0.0
 
         update_bar.update(1)
         return df_var
@@ -1064,7 +1071,7 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
-    def reduce_df_size(self, df_var, step: int):
+    def reduce_df_size(self, df_var, step: int, block_num=None):
 
         for idx, i in enumerate(range(0, len(df_var), step)):
             slice_df = df_var[i:i + step]
@@ -1073,9 +1080,12 @@ class KafkaGSMLSConsumer:
             try:
                 results = self.producer.send('prop_images', value=prepared_image_df)
                 result_metadata = results.get(timeout=10)
-                print(f'Image data produced to Kafka: Block {idx}')
+                if block_num is None:
+                    print(f'Image data produced to Kafka: Block {idx}')
+                else:
+                    print(f'Image data produced to Kafka: Sub-Block {idx} of Block {block_num}')
             except MessageSizeTooLargeError:
-                self.reduce_df_size(df_var, step // 5)
+                self.reduce_df_size(slice_df, step // 50, idx)
 
             except KafkaTimeoutError:
                 print(f'Images have not been produced to {result_metadata.topic} in Kafka')
@@ -1253,9 +1263,9 @@ class KafkaGSMLSConsumer:
             # handle the re-balancing of partitions for me
             data_consumer.subscribe([topic_data['topic']])
             cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
-            # temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
-            # KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
-            temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+            temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
+            KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
+            # temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
             if prop_type != 'IMAGES':
                 final_df = temp_df.pipe(topic_data['clean_type'], prop_type=prop_type, update_bar=cleaning_bar)
@@ -1272,7 +1282,7 @@ class KafkaGSMLSConsumer:
 
             else:
                 RealEstateImages(final_df).main()
-                print(f"{topic_data['topic']} has successfully been stored in Excel")
+                print(f"{topic_data['topic']} has successfully been stored in MongoDB")
 
             topics_bar.update(1)
 
