@@ -16,6 +16,17 @@ determination (r2 Score) of 96.8% and mean absolute percentage error (MAPE) of 5
 classification algorithm has achieved a f1 Score of 85%. Efforts are being made daily to increase 
 their capabilities and improve results. 
 
+<b>Background</b>
+
+The current system (or lack thereof) for real estate agents to analyze their local and distance markets is inefficient and time consuming. To properly represent clients and meet their needs, an agent needs to spend many hours throughout the week tracking recent sales, inventory, home prices and conducting comparable sales analysis. With this information, an agent can thoroughly understand market dynamics, when, where and how a buyer should purchase a property or to sell a home. However, markets change on a weekly and monthly basis. This can be overwhelming for new and even established agents as New Jersey has 4-5 different private MLS services which organize and display their data with different methods. This inefficiency can lead to increased frustration and lack of understanding with one's job, increased inability to keep up with fast paced markets, decreased client satisfaction and loss of revenue (salary).
+
+The goal of this project is intended to achieve multiple objectives:
+- Create a system which automatically collects, cleans and stores real estate data on a weekly basis for each accessible MLS
+- Understand the relationship between a property’s sales price and it’s physical and locational characteristics
+- Determine if a property will be sold based on sales price and physical and locational characteristics
+- Create a dashboard to display market statistics as well as provide the ability to conduct data/market analysis on a state and municipal level
+- Obtain a deeper knowledge of the real estate market to not only be more informed, but also be a better asset to buyer and seller clients alike
+
 <b>Project Conclusions:</b>
 
 - The regression DNN captures the 96.8% of the sales price variance from the available data
