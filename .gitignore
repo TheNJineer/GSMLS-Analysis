@@ -1,3 +1,4 @@
+.gitignore
 .idea/
 *.log
 __pycache__/
@@ -13,16 +14,19 @@ Apache Kakfa Notes.txt
 Transformation Notes.txt
 Transformation Notes
 GSMLSC & REI Notes
-GSMLS v2 Notes
+GSMLS v2 Notes.txt
 Apache Kafka Notes
 Apache Kafka Notes
 Apache Kafka Notes
-GSMLS v2 Notes
+GSMLS v2 Notes.txt
 Log_Parse.py
 Kafka_Consumer_Checkpoint.bak
 Kafka_Consumer_Checkpoint.dat
 Kafka_Consumer_Checkpoint.dir
-GSMLS v2 Notes
+GSMLS v2 Notes.txt
 Apache Kafka Notes
 tax_assessment_2_sql.py
 Skip_Folder/
+GSMLS_old.py
+GSMLS Notes v2
+requirements.txt

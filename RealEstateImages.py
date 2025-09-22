@@ -15,6 +15,7 @@ from sqlalchemy import create_engine
 from collections import defaultdict
 import os
 import re
+from pymongo.errors import CursorNotFound
 
 
 # Custom class created to handle the console logging while using the tqdm progress bar
@@ -27,9 +28,13 @@ class TqdmLoggingHandler(logging.Handler):
 
 class RealEstateImages:
 
-    def __init__(self, df_var=None):
-        self.sql_conn = self.create_postgresql_conn()
+    def __init__(self, db_name='realEstate', col_name='propertyImages', sql_db='gsmls', df_var=None):
+        self.db_name = db_name
+        self.col_name = col_name
+        self.sql_conn = self.create_postgresql_conn(sql_db)
         self.mongo_db_conn = self.create_mongodb_conn()
+        self.database = self.check_for_database()
+        self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
         self.image_df = df_var
         self.image_dir = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\MLS Photos'
@@ -163,16 +168,14 @@ class RealEstateImages:
         imagedict['Front'].append(
             {'Condition': property_condition, 'URL': url, 'Directory': filename})
 
-    @staticmethod
-    def check_for_database(db_name, connection):
-        if db_name in connection.list_database_names():
-            print(f"The {db_name} database exists.")
-            return connection[db_name]
+    def check_for_database(self):
+        if self.db_name in self.mongo_db_conn.list_database_names():
+            print(f"Cursor connected to {self.db_name} database")
+
         else:
-            # Create a database
-            database = connection[db_name]
-            print(f"The {db_name} database has been created.")
-            return database
+            print(f"The {self.db_name} database previously didn't exists but has been created.")
+
+        return self.mongo_db_conn[self.db_name]
 
     @staticmethod
     def check_for_directory(directory):
@@ -183,16 +186,14 @@ class RealEstateImages:
             os.makedirs(directory)
             print(f'New directory created: {directory}')
 
-    @staticmethod
-    def check_for_collection(col_name, database):
-        if col_name in database.list_collection_names():
-            print(f"The {col_name} collection exists.")
-            return database[col_name]
+    def check_for_collection(self):
+        if self.col_name in self.database.list_collection_names():
+            print(f"The {self.col_name} collection exists.")
+
         else:
-            # Create a collection
-            table = database['propertyImages']
-            print(f"The {col_name} colletion has been created.")
-            return table
+            print(f"The {self.col_name} collection previously didn't exists but has been created.")
+
+        return self.database[self.col_name]
 
     @staticmethod
     def create_new_filename(filepath, mlsnum):
@@ -219,22 +220,117 @@ class RealEstateImages:
         return total_image_list
 
     @staticmethod
-    def create_postgresql_conn():
+    def create_postgresql_conn(db):
         # Create database connection
         # Adjust the database cursor to not load the whole database before chunking
         username, base_url, pw = RealEstateImages.get_us_pw('PostgreSQL-web')
-        return (create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/gsmls")
+        return (create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/{db}")
                 .connect().execution_options(stream_results=True))
 
     @staticmethod
     def create_mongodb_conn():
-        # Create database connection
-        # Adjust the database cursor to not load the whole database before chunking
         # username, base_url, pw = RealEstateImages.get_us_pw('MongoDB')
 
-        # return f'mongodb://{username}:{quote_plus(pw)}@localhost:27017/'
+        # Create a MongoDB connection
+        connection = pymongo.MongoClient('mongodb://localhost:27017/',
+                                         serverSelectionTimeoutMS=5000,# How long to wait when selecting a server (default 30s)
+                                         # socketTimeoutMS=20000,  # How long a socket read/write can block before failing
+                                         # connectTimeoutMS=10000,  # How long to wait when opening a new connection
+                                         maxPoolSize=100,  # Limit concurrent connections in the pool
+                                         waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
+                                         retryWrites=True,  # Enable automatic retries for certain write operations
+                                         retryReads=True,  # Enable automatic retries for certain read operations
+                                         heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
+                                         connect=True  # Force connection on client creation (fail fast if bad config)
+                                         )
 
-        return 'mongodb://localhost:27017/'
+        return connection
+
+    @logger_decorator
+    def database_cleanup(self, **kwargs):
+        """
+        Cleanup the database with the following actions:
+            - Deleting duplicate documents
+            - Update the date field to ISODate or Datetime formats
+            - Delete the "Image_Downloaded" field if it exists
+            - Use title case for the Address, Town and Condition fields
+            - Make the _id field the MLSNum
+
+        :return:
+        """
+
+        logger = kwargs['logger']
+        pipeline = [
+            {'$match': {"Date": {"$type": "string"}}},
+            {"$group": {"_id": {"mlsnum": "$MLSNum", "Date": "$Date", "Address": "$Address",
+                    "Town": "$Town", "Zipcode": "$Zipcode",
+                    "Condition": "$Condition", "Images": "$Images", "Geo_Data": "$Geo_Data"},  # Group common fields together
+                    "document_count": {"$count": {}},  # Count the number of duplicate documents
+                    "property_attr": {'$push': {"old_id": "$_id"}}}},  # List all the document ids of the duplicates
+            {"$sort": {"document_count": -1}}  # Sort documents in descending order
+            # {"$limit": 100}
+        ]
+
+        logger.info(f'Current document count for {self.db_name} collection: {self.collection.count_documents({})}')
+
+        while True:
+
+            try:
+                # The cursor will die if idle for 10+ minutes. Each document result takes about 6 seconds to go through
+                # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
+                # at 85 to account for time variances
+                for res in tqdm(self.collection.aggregate(pipeline, batchSize=85, allowDiskUse=True), desc='Records'):
+
+                    update_operation = {
+                        "$set": {},  # Dictionary to hold all update operations
+                        "$unset": {'Image_Downloaded': ''}  # Delete the fields if they exists
+                    }
+
+                    address = res['_id']['Address']
+                    condition = res['_id']['Condition']
+                    current_doc_count = res['document_count']
+                    date = res['_id']['Date']
+                    images = res['_id']['Images']
+                    old_id = res['property_attr'][-1]['old_id']
+                    targ_id = res['_id']['mlsnum']
+                    town = res['_id']['Town']
+                    query_filter = {"MLSNum": targ_id}
+                    zipcode = res['_id']['Zipcode']
+                    geo_data = res['_id'].get('Geo_data', None)
+
+                    # Log the current document information
+                    logger.info(f'Current document: {targ_id}')
+
+                    # Delete duplicate documents
+                    self.delete_duplicates(current_doc_count, targ_id, old_id, logger)
+
+                    # Update the longitude and latitude data
+                    self.update_geodata(targ_id, geo_data, update_operation)
+
+                    # Check _id datatype, if it's a str object, switch to the int
+                    RealEstateImages.update_mlsnum(targ_id, update_operation)
+
+                    # Check Date datatype
+                    RealEstateImages.update_date_datatype(date, update_operation)
+
+                    # Update the string values
+                    RealEstateImages.update_str_values(town, address, condition, zipcode, update_operation)
+
+                    # Update the Image value to remove empty arrays
+                    RealEstateImages.update_image_object(images, update_operation)
+
+                    # Update the document
+                    self.collection.update_one(query_filter, update_operation)
+
+            except CursorNotFound as cnf:
+                logger.warning(f'{cnf}')
+                logger.info('Starting new aggregate cursor')
+                continue
+            else:
+                logger.info('Database cleanup has been completed')
+                break
+
+
 
     @staticmethod
     def date_and_condition(series):
@@ -268,6 +364,24 @@ class RealEstateImages:
                                 address + ' - ' + 'Other' + f'_{image_num}.png')
 
         imagedict['Other'].append({'Condition': property_condition, 'URL': url, 'Directory': filename})
+
+    def delete_duplicates(self, doc_count, id_num, old_id, logger):
+
+        if int(doc_count) >= 2:
+
+            # Log how many documents will be deleted
+            print(f'MLSNum {id_num} has {doc_count} duplicate documents stored. '
+                  f'Program will delete {int(doc_count) - 1} documents')
+
+            for _ in range(int(doc_count) - 1):
+                self.collection.delete_one({"MLSNum": id_num})
+
+            logger.info(f'New document count for {id_num}: {self.collection.count_documents({"MLSNum": id_num})}')
+            logger.info(f"The last existing document ObjectID for {id_num} is {old_id}")
+
+        else:
+            logger.info(f"No duplicate documents for {id_num}")
+
 
     def generate_proxy(self, logger):
 
@@ -528,17 +642,82 @@ class RealEstateImages:
 
             return style_type
 
+    @staticmethod
+    def update_date_datatype(date_value, update_op):
+
+        if isinstance(date_value, float):
+            # Date value is nan
+            update_op['$set'].update({'Date': datetime.strptime('1970-12-31', '%Y-%m-%d')})
+        elif isinstance(date_value, str):
+            # Date is unknown
+            if date_value == '0000-00-00':
+                update_op['$set'].update({'Date': datetime.strptime('1970-12-31', '%Y-%m-%d')})
+            elif '/' in date_value:
+                update_op['$set'].update({'Date': datetime.strptime(date_value, '%m/%d/%Y %H:%M:%S')})
+            elif '-' in date_value:
+                date_str = date_value.split('T')[0]
+                update_op['$set'].update({'Date': datetime.strptime(date_str, '%Y-%m-%d')})
+
+    def update_geodata(self, mlsnum, field_val, update_op):
+
+        if field_val is None:
+
+            query = f"SELECT latitude, longitude FROM gsmls_imputed_data WHERE mlsnum = '{mlsnum}';"
+
+            data = pd.read_sql(query, self.sql_conn).squeeze()
+
+            if data.empty is False:
+                if data['latitude'] == '0E-20' and data['longitude'] == '0E-20':
+                    update_op['$set'].update({'Geo_Data': {'Latitude': None, 'Longitude': None}})
+                else:
+                    update_op['$set'].update({'Geo_Data': {'Latitude': data['latitude'], 'Longitude': data['longitude']}})
+
+    @staticmethod
+    def update_image_object(image_obj, update_op):
+
+        for category, value in image_obj.items():
+            if len(value) == 0:
+                update_op['$unset'].update({f'Images.{category}': ''})
+
+    @staticmethod
+    def update_mlsnum(id_num, update_op):
+
+        if isinstance(id_num, str):
+            update_op['$set'].update({'MLSNum': int(id_num)})
+
+    @staticmethod
+    def update_str_values(town_val, address_val, condition_val, zip_val, update_op):
+
+        if town_val == town_val.upper():
+            update_op['$set'].update({'Town': town_val.title()})
+
+        if address_val == address_val.upper():
+            update_op['$set'].update({'Address': address_val.title()})
+
+        if condition_val == condition_val.upper():
+            update_op['$set'].update({'Condition': condition_val.title()})
+
+        if isinstance(zip_val, float):
+            pass
+
+        elif len(zip_val) == 4:
+            update_op['$set'].update({'Zipcode': '0' + zip_val})
+
     @logger_decorator
     def download_images_main(self, **kwargs):
 
-        logger = kwargs['logger']
+        """
+        Queries each document and downloads the images stored in the Images field
 
-        # Create a MongoDB connection
-        connection = pymongo.MongoClient(self.mongo_db_conn)  # Insert connection url (ie:"mongodb://localhost:27017/")
+        :param kwargs:
+        :return:
+        """
+
+        logger = kwargs['logger']
 
         # Check if the database exists. If it doesn't, create it
         db_name = 'realEstate'
-        database = RealEstateImages.check_for_database(db_name, connection)
+        database = RealEstateImages.check_for_database(db_name, self.mongo_db_conn)
 
         # Check if a collection (table) exists. If it doesn't, create it
         col_name = 'propertyImages'
@@ -588,6 +767,10 @@ class RealEstateImages:
                 table.update_one(query_filter, outer_update_operation)
 
     def main(self):
+        """
+        Stores real estate property image data from a Pandas dataframe
+        :return:
+        """
         # Create a MongoDB connection
         connection = pymongo.MongoClient(self.mongo_db_conn)  # Insert connection url (ie:"mongodb://localhost:27017/")
 
@@ -694,6 +877,7 @@ if __name__ == "__main__":
     # image_data = pd.read_excel('prop_images.xlsx')
     # obj = RealEstateImages(image_data)
     # obj.main()
-    obj = RealEstateImages()
-    obj.download_images_main()
+    obj = RealEstateImages(sql_db='nj_tax_assessor')
+    # obj.download_images_main()
+    obj.database_cleanup()
     os.chdir(current_wd)
