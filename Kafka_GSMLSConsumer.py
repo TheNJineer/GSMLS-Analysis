@@ -1,5 +1,4 @@
 import os
-
 from Tools.demo.sortvisu import steps
 from kafka import KafkaConsumer, KafkaProducer
 import json
@@ -11,6 +10,7 @@ from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError
+
 
 class KafkaGSMLSConsumer:
 

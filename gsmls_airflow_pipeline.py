@@ -3,9 +3,9 @@ import json
 import pandas as pd
 from datetime import datetime
 from datetime import timedelta
-from utility_func import get_pw, logger_func
-from airflow.sdk import task, dag
-from airflow.providers.standard.operators.email import EmailOperator
+from utility_func import get_us_pw, logger_decorator
+from airflow.sdk import task, dag, PokeReturnValue
+from airflow.utils.email import send_email
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
 from kafka import KafkaClient, KafkaProducer, KafkaConsumer
@@ -15,9 +15,9 @@ from kafka.admin.client import KafkaAdminClient
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from sqlalchemy import create_engine
-from GSMLS import main as gsmls_main
-from GSMLS_KafkaConsumer import main as kafka_consumer
-from ImageConsumer import mongo_consumer
+from GSMLS import GSMLS
+from Kafka_GSMLSConsumer import KafkaGSMLSConsumer
+from RealEstateImages import RealEstateImages
 from kafka.errors import NoBrokersAvailable
 
 
@@ -71,38 +71,35 @@ def create_mongo_client():
 
 
 # Define DAG as decorator over final pipeline function
-@logger_func
+@logger_decorator
 @dag('GSMLS_Pipeline', description='', default_args=default_args, schedule=timedelta(days=7))
 def gsmls_pipeline(**kwargs):
+
+    logger = kwargs['logger']
 
     # Task 1: Check the health of Apache Kafka #Connection
     @task(task_id='check_kafka_connection')
     def check_kafka_connection(logger_):
 
         # Make sure these brokers are created in the #Docker Compose yaml
-        brokers_ready={1: False, 2: False, 3: False}
+        brokers_ready = {1: False, 2: False, 3: False}
         client_ready = False
 
         admin_client = KafkaClient(bootstrap_servers=['broker-1:9092', 'broker-2:9092', 'broker-3:9092'],
                                    client_id='health_check')
         admin_client.poll(timeout_ms=1000)
 
-        # Step 1: Broad-level check that the overall client is initialized
-        while client_ready is False:
-            if admin_client.ready() is True:
-                client_ready = True
-
-        # Step 2: Individual broker checks
+        # Step 1: Individual broker checks
         while (brokers_ready[1] | brokers_ready[2] | brokers_ready[3]) is False:
 
             for id_ in brokers_ready.keys():
 
-                conn_result = admin_client.is_ready(node=id_)
+                conn_result = admin_client.is_ready(node_id=id_)
                 brokers_ready[id_] = conn_result
 
             if list(brokers_ready.values()).count(True) < 3:
                 # Need this to be able to check if more than one node isn’t connected
-                unconnected_node= list(brokers_ready.values()).index(False)
+                unconnected_node = list(brokers_ready.values()).index(False)
                 logger_.info(f'Broker {unconnected_node} is not ready. Retrying connection')
 
         else:
@@ -132,7 +129,7 @@ def gsmls_pipeline(**kwargs):
 
     # Task 2: Check the health of MongoDB Connection and if database exists
     @task(task_id='check_mongo_connection')
-    def check_mongodb(client, logger_):
+    def check_mongodb(client, db_name, table_name, logger):
 
         retries = 0
 
@@ -141,25 +138,25 @@ def gsmls_pipeline(**kwargs):
             try:
                 conn_result = client.admin.command('ping')
             except ConnectionFailure as cf:
-                logger_.warning(f"{cf}")
+                logger.warning(f"{cf}")
                 time.sleep(3)
                 retries += 1
             else:
 
                 try:
-                    table_name_ = 'Table_name'
-                    table_result = 'Does the table exist?' # Check if table is available
-                    num_of_docs_ = 'How many documents exists in the table?' # Check the amount of documents
+                    database = client[db_name]
+                    table_result = table_name in database.list_collection_names()
+                    num_of_docs_ = database[table_name].count_documents({})
 
                     if conn_result is True and table_result is True:
-                        return True, num_of_docs_
+                        return True, database[table_name], num_of_docs_
 
                 except ConnectionFailure as cf:
-                    logger_.warning(f"{cf}")
-                    raise ConnectionFailure(f'Table {table_name_} does not exist')
+                    logger.warning(f"{cf}")
+                    raise ConnectionFailure(f'Table {table_name} does not exist')
 
         else:
-            return False, 0
+            raise ConnectionFailure(f'Table {table_name} does not exist')
 
     # Task 3: Create Kafka Producer and Consumer
     @task(task_id='create_producer_consumer')
@@ -174,7 +171,8 @@ def gsmls_pipeline(**kwargs):
     @task(task_id='postgres_data_count')
     def get_postgresql_rows(table_name_):
 
-        base, user, pw = get_pw('PostgreSQL')
+        # Use environment variables package and document
+        base, user, pw = get_us_pw('PostgreSQL')
         engine = create_engine(f'postgresql://{user}:{pw}@{base}:5432/{table_name_}')
 
         query = 'SELECT COUNT(*) FROM res_properties;'
@@ -185,21 +183,23 @@ def gsmls_pipeline(**kwargs):
 
     # Task 5: Send pipeline initiation email
     @task(task_id='send_status_email')
-    def send_email(table_name_, phase: str = 'Starting', **kwargs):
+    def status_email(table_name_, phase: str = 'Starting', **kwargs_):
 
-        kafka_status = kwargs['kafka_status']
-        mongo_status = kwargs['mongo_status']
-        postgres_count = kwargs['postgres_count']
-        mongo_count = kwargs['mongo_count']
+        # https://airflow.apache.org/docs/apache-airflow/stable/tutorial/taskflow.html
+
+        kafka_status = kwargs_['kafka_status']
+        mongo_status_ = kwargs_['mongo_status']
+        postgres_count = kwargs_['postgres_count']
+        mongo_count = kwargs_['mongo_count']
 
         if phase == 'Starting':
 
             subject = 'GSMLS Pipeline Has Started'
             message = f"""
-                        start_time: {datetime.now()},
-                        target_properties: {table_name_},
-                        kafka_status: {kafka_status},
-                        mongo_status: {mongo_status},
+                        start_time: {datetime.now()}
+                        target_properties: {table_name_}
+                        kafka_status: {kafka_status}
+                        mongo_status: {mongo_status_}
                         postgres_count: {postgres_count}
                         mongo_count: {mongo_count}
                         
@@ -213,27 +213,27 @@ def gsmls_pipeline(**kwargs):
 
             subject = 'GSMLS Pipeline Has Finished'
             message = f"""
-                        end_time: {datetime.now()},
-                        target_properties: {table_name_},
-                        kafka_status: {kafka_status},
-                        mongo_status: {mongo_status},
+                        end_time: {datetime.now()}
+                        target_properties: {table_name_}
+                        kafka_status: {kafka_status}
+                        mongo_status: {mongo_status_}
                         postgres_count: {postgres_count}
                         mongo_count: {mongo_count}
                     """
 
-        EmailOperator(
+        send_email(
             to='jqhholdingsllc@gmail.com',
             subject=subject,
             html_content=message
         )
 
     # Task 6: Create Kafka message sensor
-    @task(task_id='new_msg_available')
-    def new_msgs_available(topic, logger_):
+    @task.sensor(poke_interval=300, timeout=3600, mode='reschedule')
+    def new_msgs_available(topic: str, logger_) -> PokeReturnValue:
 
         offset_dict = {}
         # KafkaConsumer not thread safe, so I need to create one specifically for this task
-        cons = create_kafka_consumer('msg_check', 'msg_check')
+        cons = create_kafka_consumer(f'{topic} msg_check', f'{topic} msg_check')
 
         # Check the partitions in the consumer. Returns a set of partition ids
         partitions = cons.partitions_for_topic(topic)
@@ -265,9 +265,7 @@ def gsmls_pipeline(**kwargs):
                     offset_dict[tp] = True
 
             if True in list(offset_dict.values()):
-                return True
-
-    logger = kwargs['logger']
+                return PokeReturnValue(is_done=True)
 
     with TaskGroup(group_id='start_pipeline') as start_pipeline:
 
@@ -275,47 +273,46 @@ def gsmls_pipeline(**kwargs):
         kafka_conn = check_kafka_connection(logger)
         create_kafka_topics(kafka_conn)
         mongo_client = create_mongo_client()
-        mongo_conn, num_of_docs = check_mongodb(mongo_client, logger)
+        mongo_status, mongo_col, num_of_docs = check_mongodb(mongo_client, "realEstate", 'propertyImages', logger)
         producer, consumer = create_producer_consumer(logger)
         table_name, prop_count = get_postgresql_rows('res_properties')
-        # Does the email need to include the status of the topics as well?
-        send_email(table_name, phase='Starting', kafka_status=kafka_conn,
-                   mongo_status=mongo_conn, postgres_count=prop_count,
-                   mongo_count=num_of_docs)
+
+        kwargs['kafka_status'] = kafka_conn
+        kwargs['mongo_status'] = mongo_status
+        kwargs['postgres_count'] = prop_count
+        kwargs['mongo_count'] = num_of_docs
+        status_email(table_name, **kwargs)
 
     with TaskGroup(group_id='etl_pipeline') as etl_pipeline:
         # Make sure to create function or have existing functions return the objects
 
         # This function should create the class then run the producer.
-        # Needs to accept KafkaProducer obj and PostgreSQl table name
         # Task 5: Start the GSMLS message production
-        gsmls_producer = PythonOperator(
+        PythonOperator(
             task_id='gsmls_producer',
-            python_callable=gsmls_main,
-            op_kwargs={'producer':producer, 'table_name': 'res_properties'}
+            python_callable=GSMLS.main,
+            op_kwargs={'producer': producer, 'table_name': 'res_properties'}
         )
 
-        # Task 5a: Have a sensor here that says messages are in the topic
-        kafka_msg_sensor = new_msgs_available('res_properties', logger)
+        # The producer will publish data to both the data and image topics first
+        kafka_msg_sensor = new_msgs_available('res_properties', logger).override(task_id='res_msgs_avail')
+        kafka_img_sensor = new_msgs_available('prop_images', logger).override(task_id='image_msgs_avail')
 
         # Task 6: Start the GSMLS consumer
         gsmls_consumer = PythonOperator(
             task_id='gsmls_consumer',
-            python_callable=kafka_consumer # This function should create the class then run it
+            python_callable=KafkaGSMLSConsumer.main,  # This function should create the class then run it
+            op_kwargs={'producer': consumer, 'table_name': 'res_properties'}
         )
-
-        # Task 6a: Have a sensor here that says images are in the topic
-        kafka_img_sensor = new_msgs_available('prop_images', logger)
 
         # Task 7: Start the MongoDB consumer
         mongo_consumer = PythonOperator(
             task_id='mongo_consumer',
-            python_callable=mongo_consumer, # This function should create the class then run it
-            op_kwargs={'mongo_client':mongo_conn}
+            python_callable=RealEstateImages.main,  # This function should create the class then run it
+            op_kwargs={'mongo_client': mongo_col}
         )
 
         # ETL Pipeline dependencies
-        gsmls_producer()
         kafka_msg_sensor >> gsmls_consumer
         kafka_img_sensor >> mongo_consumer
 
@@ -323,16 +320,22 @@ def gsmls_pipeline(**kwargs):
 
         # Close KafkaProducer connection
         # Close KafkaConsumer connection
-        mongo_conn, num_of_docs = check_mongodb(mongo_client)
+        mongo_status, mongo_col, num_of_docs = check_mongodb(mongo_client, 'realEstate', 'propertyImages', logger)
         table_name, prop_count = get_postgresql_rows('res_properties')
-        # Close MongoDB connection
-        send_email(table_name, phase='Ending', kafka_status=kafka_conn,
-                   mongo_status=mongo_conn, postgres_count=prop_count,
-                   mongo_count=num_of_docs)
+        mongo_col.close()
+
+        kwargs['phase'] = 'Ending'
+        kwargs['kafka_status'] = False
+        kwargs['mongo_status'] = False
+        kwargs['postgres_count'] = prop_count
+        kwargs['mongo_count'] = num_of_docs
+        status_email(table_name, **kwargs)
 
     # Total pipeline dependencies
-    start_pipeline >> etl_pipeline >> ending_pipeline
+    start_pipeline() >> etl_pipeline() >> ending_pipeline()
+
 
 if __name__ == '__main__':
 
     gsmls_pipeline()
+
