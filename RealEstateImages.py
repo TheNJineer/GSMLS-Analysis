@@ -8,8 +8,6 @@ import time
 from datetime import datetime
 from datetime import timedelta
 import logging
-import asyncio
-import aiohttp
 import numpy as np
 from sqlalchemy import create_engine
 from collections import defaultdict
@@ -25,6 +23,7 @@ class TqdmLoggingHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
         tqdm.write(msg)
+
 
 class RealEstateImages:
 
@@ -148,7 +147,6 @@ class RealEstateImages:
                     self.default_image_capture(property_condition, address,
                                                image_num, url, imagedict)
 
-
     def capture_image_url(self, section_type, property_condition, address, image_num, url, imagedict):
 
         filename = os.path.join(self.image_dir, section_type, property_condition,
@@ -203,7 +201,6 @@ class RealEstateImages:
         filepath_list[-1] = str(mlsnum) + ' - ' + file_address
 
         return '\\'.join(filepath_list)
-
 
     @staticmethod
     def create_image_list(image_dict: dict):
@@ -260,15 +257,29 @@ class RealEstateImages:
         """
 
         logger = kwargs['logger']
+        # pipeline = [
+        #     {'$match': {"Date": {"$type": "string"}}},
+        #     {"$group": {"_id": {"mlsnum": "$MLSNum", "Date": "$Date", "Address": "$Address",
+        #             "Town": "$Town", "Zipcode": "$Zipcode",
+        #             "Condition": "$Condition", "Images": "$Images", "Geo_Data": "$Geo_Data"},  # Group common fields together
+        #             "document_count": {"$count": {}},  # Count the number of duplicate documents
+        #             "property_attr": {'$push': {"old_id": "$_id"}}}},  # List all the document ids of the duplicates
+        #     {"$sort": {"document_count": -1}}  # Sort documents in descending order
+        # ]
+
         pipeline = [
             {'$match': {"Date": {"$type": "string"}}},
-            {"$group": {"_id": {"mlsnum": "$MLSNum", "Date": "$Date", "Address": "$Address",
-                    "Town": "$Town", "Zipcode": "$Zipcode",
-                    "Condition": "$Condition", "Images": "$Images", "Geo_Data": "$Geo_Data"},  # Group common fields together
-                    "document_count": {"$count": {}},  # Count the number of duplicate documents
-                    "property_attr": {'$push': {"old_id": "$_id"}}}},  # List all the document ids of the duplicates
+            {"$group": {"_id": "$MLSNum"},
+             "Date": {'$push': "$Date"},
+             "Address": {'$push': "$Address"},
+             "Town": {'$push': "$Town"},
+             "Zipcode": {'$push': "$Zipcode"},
+             "Condition": {'$push': "$Condition"},
+             "Images": {'$push': "$Images"},
+             "Geo_Data": {'$push': {'$ifNull': ["$Geo_Data", "$$REMOVE"]}},  # If field doesn't exist then remove from results
+             "document_count": {"$count": {}},  # Count the number of duplicate documents
+             "property_attr": {'$push': {"old_id": "$_id"}}},  # List all the document ids of the duplicates
             {"$sort": {"document_count": -1}}  # Sort documents in descending order
-            # {"$limit": 100}
         ]
 
         logger.info(f'Current document count for {self.db_name} collection: {self.collection.count_documents({})}')
@@ -330,8 +341,6 @@ class RealEstateImages:
                 logger.info('Database cleanup has been completed')
                 break
 
-
-
     @staticmethod
     def date_and_condition(series):
 
@@ -381,7 +390,6 @@ class RealEstateImages:
 
         else:
             logger.info(f"No duplicate documents for {id_num}")
-
 
     def generate_proxy(self, logger):
 
@@ -552,9 +560,6 @@ class RealEstateImages:
             except AssertionError as error:
                 logger.warning(f'{error} on {url}. Max Retries: {max_retries}')
 
-
-
-
     @staticmethod
     def sleep_variation(image_num: int):
 
@@ -586,7 +591,6 @@ class RealEstateImages:
                 date = series['RENTEDDATE']
             else:
                 date = series['LISTDATE']
-
 
             query = f"SELECT * FROM {prop_type[prop_class]} WHERE \"MLSNUM\" = '{mls_num}';"
             data = pd.read_sql_query(query, con=self.sql_conn)
@@ -698,6 +702,9 @@ class RealEstateImages:
             update_op['$set'].update({'Condition': condition_val.title()})
 
         if isinstance(zip_val, float):
+            pass
+
+        elif isinstance(zip_val, int):
             pass
 
         elif len(zip_val) == 4:
@@ -869,6 +876,7 @@ class RealEstateImages:
 
             table.insert_one(dict(property_data))
             # del property_data
+
 
 if __name__ == "__main__":
 

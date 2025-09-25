@@ -1657,20 +1657,10 @@ class GSMLS:
             # Step 5: Sign out
             GSMLS.sign_out(driver_var)
 
-        except TimeoutException:
+        except (TimeoutException, TimeoutError, AttributeError):
             exc = sys.exception()
             logger.warning(f'{repr(traceback.format_exception(exc))}')
             logger.info('Selenium Webdriver Timeout has been experienced. Restarting program...')
-
-        except TimeoutError:
-            exc = sys.exception()
-            logger.warning(f'{repr(traceback.format_exception(exc))}')
-            logger.info("Property images haven't been downloaded. Restarting program...")
-
-        except AttributeError:
-            exc = sys.exception()
-            logger.warning(f'{repr(traceback.format_exception(exc))}')
-            logger.info('Attribute Error has been experienced. Restarting program...')
 
         except AssertionError as AE:
             logger.warning(f'{AE}')
@@ -1697,11 +1687,11 @@ class GSMLS:
     def airflow_gsmls_producer(self, **kwargs):
 
         website = 'https://mls.gsmls.com/member/'
-        driver, options = GSMLS.create_selenium_webdriver()
-
         quit_program = False
 
         while quit_program:
+
+            driver, options = GSMLS.create_selenium_webdriver()
 
             try:
                 driver.maximize_window()
@@ -1719,6 +1709,4 @@ class GSMLS:
                 break
 
             else:
-                # Create the driver to automate GSMLS Server Requests
-                driver = webdriver.Edge(service=Service(), options=options)
                 self.load_metadata()
