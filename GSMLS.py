@@ -9,14 +9,15 @@ import calendar
 import bs4.element
 import datetime
 import pandas as pd
-from bs4 import BeautifulSoup
 import sys, traceback
+import logging
+from bs4 import BeautifulSoup
 from tqdm import tqdm
 from tqdm.auto import trange
 from sqlalchemy import create_engine
-import logging
 from datetime import datetime
 from datetime import timedelta
+from utility_func import logger_decorator
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
@@ -32,15 +33,6 @@ from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
-
-
-# Custom class created to handle the console logging while using the tqdm progress bar
-# Subclass of the logging.Handler class
-class TqdmLoggingHandler(logging.Handler):
-
-    def emit(self, record):
-        msg = self.format(record)
-        tqdm.write(msg)
 
 
 class GSMLS:
@@ -67,49 +59,6 @@ class GSMLS:
         self.finished = None
         self.timeframe = timeframe
         self.load_metadata(first_run='Yes')
-
-    """ 
-    ______________________________________________________________________________________________________________
-                                   Use this section to house the decorator functions
-    ______________________________________________________________________________________________________________
-    """
-
-    @staticmethod
-    def logger_decorator(original_function):
-        def wrapper(*args, **kwargs):
-            logger = logging.getLogger(original_function.__name__)
-            logger.setLevel(logging.DEBUG)
-            logger.propagate = False
-
-            if not logger.handlers:
-                # Create the FileHandler() and StreamHandler() loggers
-                filepath = 'F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Logs'
-                log_filepath = os.path.join(filepath, original_function.__name__ + ' ' + str(datetime.today().date()) + '.log')
-                f_handler = logging.FileHandler(log_filepath)
-                f_handler.setLevel(logging.DEBUG)
-                c_handler = TqdmLoggingHandler()
-                c_handler.setLevel(logging.INFO)
-                # Create formatting for the loggers
-                formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                                              datefmt='%d-%b-%y %H:%M:%S')
-                # Set the formatter for each handler
-                f_handler.setFormatter(formatter)
-                c_handler.setFormatter(formatter)
-                logger.addHandler(f_handler)
-                logger.addHandler(c_handler)
-
-                kwargs['logger'] = logger
-                kwargs['f_handler'] = f_handler
-                kwargs['c_handler'] = c_handler
-
-            result = original_function(*args, **kwargs)
-
-            if result is None:
-                pass
-            else:
-                return result
-
-        return wrapper
 
     """ 
     ______________________________________________________________________________________________________________
