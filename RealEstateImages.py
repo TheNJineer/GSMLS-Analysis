@@ -14,15 +14,7 @@ from collections import defaultdict
 import os
 import re
 from pymongo.errors import CursorNotFound
-
-
-# Custom class created to handle the console logging while using the tqdm progress bar
-# Subclass of the logging.Handler class
-class TqdmLoggingHandler(logging.Handler):
-
-    def emit(self, record):
-        msg = self.format(record)
-        tqdm.write(msg)
+from utility_func import logger_decorator
 
 
 class RealEstateImages:
@@ -38,74 +30,30 @@ class RealEstateImages:
         self.image_df = df_var
         self.image_dir = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\MLS Photos'
         self.home_sections = {
-            'Bathroom': re.compile('bath(\s)?room|bath|powder|master bath', flags=re.IGNORECASE),
-            'Bedroom': re.compile('bed(\s)?room|bed|master suite|master br|master bedrm', flags=re.IGNORECASE),
+            'Bathroom': re.compile(r'bath(\s)?room|bath|powder|master bath', flags=re.IGNORECASE),
+            'Bedroom': re.compile(r'bed(\s)?room|bed|master suite|master br|master bedrm', flags=re.IGNORECASE),
             'Kitchen': re.compile('kitchen|breakfast', flags=re.IGNORECASE),
             'Garage': re.compile('garage', flags=re.IGNORECASE),
-            'Front': re.compile('front yard|front(\sexterior)?', flags=re.IGNORECASE),
+            'Front': re.compile(r'front yard|front(\sexterior)?', flags=re.IGNORECASE),
             'Entrance': re.compile('entrance', flags=re.IGNORECASE),
             'Foyer': re.compile('foyer', flags=re.IGNORECASE),
-            'Laundry': re.compile('laundry(\sroom)?|washer|dryer', flags=re.IGNORECASE),
-            'Backyard': re.compile('back(\s)?yard|rear(\sexterior)?|yard', flags=re.IGNORECASE),
-            'Living Room': re.compile('living(\sroom)?|family(\sroom)?|liv rm|family rm', flags=re.IGNORECASE),
+            'Laundry': re.compile(r'laundry(\sroom)?|washer|dryer', flags=re.IGNORECASE),
+            'Backyard': re.compile(r'back(\s)?yard|rear(\sexterior)?|yard', flags=re.IGNORECASE),
+            'Living Room': re.compile(r'living(\sroom)?|family(\sroom)?|liv rm|family rm', flags=re.IGNORECASE),
             'Basement': re.compile('basement|recreation|rec|lower level|bsmt', flags=re.IGNORECASE),
-            'Gym': re.compile('exercise(\sroom)?|gym(\sroom)?', flags=re.IGNORECASE),
+            'Gym': re.compile(r'exercise(\sroom)?|gym(\sroom)?', flags=re.IGNORECASE),
             'Attic': re.compile('attic', flags=re.IGNORECASE),
             'Office': re.compile('office|den', flags=re.IGNORECASE),
             'Deck': re.compile('deck|patio', flags=re.IGNORECASE),
             'Pool': re.compile('pool', flags=re.IGNORECASE),
             'Driveway': re.compile('driveway|parking', flags=re.IGNORECASE),
-            'Dining Room': re.compile('dining(\sroom)?', flags=re.IGNORECASE),
+            'Dining Room': re.compile(r'dining(\sroom)?', flags=re.IGNORECASE),
             'Porch': re.compile('porch', flags=re.IGNORECASE),
             'Floor Plans': re.compile('floor plan(s)?', flags=re.IGNORECASE),
-            'Tax Map': re.compile('(tax\s)?map', flags=re.IGNORECASE),
-            'Sun Room': re.compile('sun(\s)?room|solarium', flags=re.IGNORECASE),
+            'Tax Map': re.compile(r'(tax\s)?map', flags=re.IGNORECASE),
+            'Sun Room': re.compile(r'sun(\s)?room|solarium', flags=re.IGNORECASE),
             'Alternates': re.compile('Image of listing|Image of listing.*', flags=re.IGNORECASE)
         }
-
-    """ 
-        ______________________________________________________________________________________________________________
-                                       Use this section to house the decorator functions
-        ______________________________________________________________________________________________________________
-        """
-
-    @staticmethod
-    def logger_decorator(original_function):
-        def wrapper(*args, **kwargs):
-            logger = logging.getLogger(original_function.__name__)
-            logger.setLevel(logging.DEBUG)
-            logger.propagate = False
-
-            if not logger.handlers:
-                # Create the FileHandler() and StreamHandler() loggers
-                filepath = 'F:\\Real Estate Investing\\JQH Holding Company LLC\\MLS Photos\\Logs'
-                log_filepath = os.path.join(filepath,
-                                            original_function.__name__ + ' ' + str(datetime.today().date()) + '.log')
-                f_handler = logging.FileHandler(log_filepath)
-                f_handler.setLevel(logging.DEBUG)
-                c_handler = TqdmLoggingHandler()
-                c_handler.setLevel(logging.WARNING)
-                # Create formatting for the loggers
-                formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                                              datefmt='%d-%b-%y %H:%M:%S')
-                # Set the formatter for each handler
-                f_handler.setFormatter(formatter)
-                c_handler.setFormatter(formatter)
-                logger.addHandler(f_handler)
-                logger.addHandler(c_handler)
-
-                kwargs['logger'] = logger
-                kwargs['f_handler'] = f_handler
-                kwargs['c_handler'] = c_handler
-
-            result = original_function(*args, **kwargs)
-
-            if result is None:
-                pass
-            else:
-                return result
-
-        return wrapper
 
     """ 
     ______________________________________________________________________________________________________________
