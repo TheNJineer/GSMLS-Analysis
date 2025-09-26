@@ -17,7 +17,7 @@ from tqdm.auto import trange
 from sqlalchemy import create_engine
 from datetime import datetime
 from datetime import timedelta
-from utility_func import logger_decorator
+from utility_func import logger_decorator, get_us_pw
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
@@ -157,7 +157,7 @@ class GSMLS:
     @staticmethod
     def create_engine(db_name=None):
 
-        username, base_url, pw = GSMLS.get_us_pw('PostgreSQL-web')
+        username, base_url, pw = get_us_pw('PostgreSQL-web')
         if db_name is None:
             engine = create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/gsmls")
         else:
@@ -567,26 +567,6 @@ class GSMLS:
         return sold_listings_dictionary
 
     @staticmethod
-    def get_us_pw(website):
-        """
-
-        :param website:
-        :return:
-        """
-        # Saves the current directory in a variable in order to switch back to it once the program ends
-        previous_wd = os.getcwd()
-        os.chdir('F:\\Jibreel Hameed\\Kryptonite')
-
-        db = pd.read_excel('get_us_pw.xlsx', index_col=0)
-        username = db.loc[website, 'Username']
-        pw = db.loc[website, 'Password']
-        base_url = db.loc[website, 'Base URL']
-
-        os.chdir(previous_wd)
-
-        return username, base_url, pw
-
-    @staticmethod
     def kill_logger(logger_var, file_handler, console_handler):
 
         logger_var.removeHandler(file_handler)
@@ -603,7 +583,7 @@ class GSMLS:
     def load_metadata(self, first_run=None):
 
         query = """
-                SELECT * FROM gsmls_event_log
+                SELECT * FROM gsmls_event_log_new
                 ORDER BY id DESC
                 LIMIT 1;
                 """
@@ -644,7 +624,7 @@ class GSMLS:
         :param driver_var:
         :return:
         """
-        username, _, pw = GSMLS.get_us_pw(website)
+        username, _, pw = get_us_pw(website)
 
         GSMLS.explicit_page_load('Login', driver_var)
 
@@ -974,24 +954,6 @@ class GSMLS:
 
                 properties_bar.update(1)
 
-    def query_gsmls_data(self, year=None, month=None):
-        # Delete?
-        if year is None and month is None:
-            query = """SELECT * FROM res_properties
-                    WHERE \"STATUS_SHORT\" = 'SD';
-                    """
-
-        elif year is not None and month is None:
-            query = f"""SELECT * FROM res_properties
-                    WHERE \"STATUS_SHORT\" = 'SD' AND \"YEAR\" = '{year}';
-                    """
-        elif year is not None and month is not None:
-            query = f"""SELECT * FROM res_properties
-                    WHERE \"STATUS_SHORT\" = 'SD' AND \"YEAR\" = '{year}' AND \"MONTH\" = {month};
-                    """
-
-        return pd.read_sql_query(query, self.engine)
-
     @staticmethod
     def reduce_df_size(producer, df_var, step: int, topic, file_name, logger):
 
@@ -1123,7 +1085,7 @@ class GSMLS:
 
         metadata = pd.DataFrame(self.download_log)
         metadata.columns = metadata.columns.str.lower()
-        metadata.to_sql('gsmls_event_log', con=self.engine, if_exists='append', index=False)
+        metadata.to_sql('gsmls_event_log_new', con=self.engine, if_exists='append', index=False)
         self.download_log = GSMLS.create_download_log()
 
     @staticmethod
