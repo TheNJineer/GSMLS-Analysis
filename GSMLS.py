@@ -55,8 +55,7 @@ class GSMLS:
         self.last_scraped_county = None
         self.last_scraped_muni = None
         self.last_scraped_property_type = None
-        self.last_scraped_date = None
-        self.last_start_date = None
+        self.start_date = None
         self.finished = None
         self.timeframe = timeframe
         self.load_metadata(first_run='Yes')
@@ -224,17 +223,17 @@ class GSMLS:
     def create_timeframe_dict(self, year):
 
         if self.timeframe == 'historic':
-            return {1234 : [f"01/01/{year}", f"12/31/{year}"]}
+            return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
         elif self.timeframe in ['current', 'mixed']:
             # Get latest scraped date
-            next_scraped_day = datetime.strptime(self.last_scraped_date, "%Y-%m-%d") + timedelta(days=1)
-            next_scraped_day = next_scraped_day.strftime("%Y-%m-%d").split('-')
-            month, day = next_scraped_day[1], next_scraped_day[2]
+            start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split('-')
+            stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split('-')
+            start_month, start_day = start_date_list[1], start_date_list[2]
+            stop_month, stop_day, stop_year = stop_date_list[1], stop_date_list[2], stop_date_list[0]
 
             # Start scraping date from the day after the last scraped day
-            return {1234: [f"{month}/{day}/{year}", f"12/31/{year}"]}
-            # return {1234: [f"05/28/{year}", f"12/31/{year}"]}
+            return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
 
     @staticmethod
     def download_complete(filename):
@@ -646,61 +645,39 @@ class GSMLS:
 
     def load_metadata(self, first_run=None):
 
-        if first_run == 'Yes':
-
-            query = """
-                    SELECT * FROM gsmls_event_log
-                    ORDER BY id DESC
-                    LIMIT 1;
-                    """
-        else:
-            # Use this query to scrape the last municipality recorded and the time it was recorded successfully.
-            # This block will be accesses if the program raises an error and needs to pick up where it left off.
-            # As currently constructed, the program will use the date of most recent scrape which, if the program
-            # is run today and encounters an error, will say today is the last day of the scrape
-            # instead of the true previous date in which the date that municipality was scraped successfully.
-
-            query = """
-                    SELECT year_,  quarter, county, municipality, initiated, results_found, finished,  
-                    date_produced, property_type FROM gsmls_event_log
-                    WHERE municipality = (
-                            SELECT municipality FROM gsmls_event_log 
-                            WHERE id = (SELECT MAX(id) FROM gsmls_event_log)
-                            )
-                    ORDER BY date_produced DESC, municipality DESC
-                    LIMIT 2;
-            """
+        query = """
+                SELECT * FROM gsmls_event_log
+                ORDER BY id DESC
+                LIMIT 1;
+                """
 
         metadata = pd.read_sql_query(query, self.engine)
         last_row = metadata.shape[0] - 1
 
         if metadata.empty:
-
             pass
-
-        elif first_run == 'Yes':
-
-            self.last_start_date = metadata.loc[last_row, 'start_date']
-
-            if isinstance(self.last_start_date, pd.NaT):
-                self.last_start_date = metadata.loc[last_row, 'date_produced']
 
         else:
 
-            correct_date_row = last_row - 1
-            self.last_scraped_date = metadata.loc[correct_date_row, 'date_produced']
+            if first_run is None:
+                # Block is initiated on program start. Start date is the date of last run + 1 day
+                self.start_date = metadata.loc[last_row, 'date_produced'] + timedelta(days=1)
+            else:
+                # Block is initiated if program restarts without completion.
+                # Start date is the date of last scraped municipality
+                self.start_date = metadata.loc[last_row, 'start_date']
 
-        self.last_scraped_qtr = metadata.loc[last_row, 'quarter']
-        self.last_scraped_year = metadata.loc[last_row, 'year_']
-        self.last_scraped_county = metadata.loc[last_row, 'county']
-        self.last_scraped_muni = metadata.loc[last_row, 'municipality']
-        self.finished = metadata.loc[last_row, 'finished']
-        self.last_scraped_property_type = metadata.loc[last_row, 'property_type']
+            self.last_scraped_qtr = metadata.loc[last_row, 'quarter']
+            self.last_scraped_year = metadata.loc[last_row, 'year_']
+            self.last_scraped_county = metadata.loc[last_row, 'county']
+            self.last_scraped_muni = metadata.loc[last_row, 'municipality']
+            self.finished = metadata.loc[last_row, 'finished']
+            self.last_scraped_property_type = metadata.loc[last_row, 'property_type']
 
-        # All data from last run was scraped. Reset the value to scrape all new data
-        if self.last_scraped_county == 30 and self.last_scraped_muni == 'White Twp.' and self.finished == 'Yes':
-            self.last_scraped_muni = None
-            self.last_scraped_county = None
+            # All data from last run was scraped. Reset the value to scrape all new data
+            if self.last_scraped_county == 30 and self.last_scraped_muni == 'White Twp.' and self.finished == 'Yes':
+                self.last_scraped_muni = None
+                self.last_scraped_county = None
 
     @staticmethod
     def login(website, driver_var):
@@ -996,7 +973,7 @@ class GSMLS:
 
                                 GSMLS.set_city(2, city_id, driver_var)  # Set the city
                                 GSMLS.explicit_page_load('Pre-Results', driver_var)
-                                zero_results, too_many_results = GSMLS.show_results(driver_var)  # Click the Show Results button
+                                zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                                 self.download_log['Year_'].append(kwargs['Year'])
                                 self.download_log['Quarter'].append(qtr)
@@ -1005,7 +982,8 @@ class GSMLS:
                                 self.download_log['Initiated'].append('Yes')
                                 self.download_log['Finished'].append('No')
                                 self.download_log['Rows_Produced'].append(0)
-                                self.download_log['Date_Produced'].append(str(datetime.now()))
+                                self.download_log['Date_Produced'].append(datetime.now().date())
+                                self.download_log['Start_Date'].append(self.start_date)
                                 self.download_log['Property_Type'].append(type_)
 
                                 if zero_results is True:
