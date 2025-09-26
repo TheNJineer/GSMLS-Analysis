@@ -567,49 +567,6 @@ class GSMLS:
         return sold_listings_dictionary
 
     @staticmethod
-    def format_float_values(value):
-        # Delete?
-        if '$' in value and ',' in value:
-
-            return float(''.join(value.lstrip('$').split(',')))
-
-        elif ',' in value:
-
-            return float(''.join(value.split(',')))
-
-        elif value == '---':
-
-            return 0.0
-
-    @staticmethod
-    def geocode_map_query(address):
-        # Delete?
-        pass
-
-        return None, None
-
-    def get_gsmls_tax_info(self, citycode, streetnum, streetname):
-        """Use this function to return the sqft, yearbuilt, assessment total, bankcodes, time of possession"""
-        # Delete?
-        # I may need to slice the streetname because the full spelling may not match
-        # *** GSMLS Tax data is updated after every sale and replaces the previous records. Cant rely on the time_of_posession data
-        # *** Create a query that parses N,S,E,W directions out of the street name and properly searches the db
-        gsmls_tax_query = f"""SELECT * FROM tax_properties 
-                            WHERE \"CITYCODE\" = {citycode} 
-                            AND \"LOCNUM\" = '{streetnum}' AND \"LOCSTREET\" ILIKE '{streetname[:4]}%%';"""
-
-        return pd.read_sql_query(gsmls_tax_query, self.engine)
-
-    @staticmethod
-    def get_nj_tax_info(citycode, streetnum, streetname, tax_engine):
-        """Use this function to return the sqft, yearbuilt, assessment total, bankcodes, time of possession"""
-        # Delete?
-        nj_tax_query = f"""SELECT * FROM nj_tax_assessor_data 
-                        WHERE municipality = '{citycode}' AND property_location ILIKE '{streetnum} {streetname[:4]}%%';"""
-
-        return pd.read_sql_query(nj_tax_query, tax_engine)
-
-    @staticmethod
     def get_us_pw(website):
         """
 
@@ -689,58 +646,41 @@ class GSMLS:
         """
         username, _, pw = GSMLS.get_us_pw(website)
 
-        if website == 'GSMLS':
+        GSMLS.explicit_page_load('Login', driver_var)
 
-            GSMLS.explicit_page_load('Login', driver_var)
+        gsmls_id = driver_var.find_element(By.ID, 'usernametxt')
+        gsmls_id.click()
+        gsmls_id.send_keys(username)
+        password = driver_var.find_element(By.ID, 'passwordtxt')
+        password.click()
+        password.send_keys(pw)
+        login_button = driver_var.find_element(By.ID, 'login-btn')
+        login_button.click()
+        time.sleep(1.5)  # Built-in latency
+        page_results = driver_var.page_source
+        soup = BeautifulSoup(page_results, 'html.parser')
 
-            gsmls_id = driver_var.find_element(By.ID, 'usernametxt')
-            gsmls_id.click()
-            gsmls_id.send_keys(username)
-            password = driver_var.find_element(By.ID, 'passwordtxt')
-            password.click()
-            password.send_keys(pw)
-            login_button = driver_var.find_element(By.ID, 'login-btn')
-            login_button.click()
-            time.sleep(1.5)  # Built-in latency
-            page_results = driver_var.page_source
-            soup = BeautifulSoup(page_results, 'html.parser')
+        # Check if there's a duplicate session running. If so, terminate it
+        duplicate = soup.find('input',
+                {'class':'gs-btn-submit-sh gs-btn-submit-two tertiary-color ps-tertiary-color fs14 popup_button_0'})
+        if type(duplicate) == bs4.element.Tag:
+            terminate_duplicate_session = WebDriverWait(driver_var, 10).until(
+                            EC.presence_of_element_located((By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input[1]')))
+            terminate_duplicate_session.click()
 
-            # Check if there's a duplicate session running. If so, terminate it
-            duplicate = soup.find('input',
-                    {'class':'gs-btn-submit-sh gs-btn-submit-two tertiary-color ps-tertiary-color fs14 popup_button_0'})
-            if type(duplicate) == bs4.element.Tag:
-                terminate_duplicate_session = WebDriverWait(driver_var, 10).until(
-                                EC.presence_of_element_located((By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input[1]')))
-                terminate_duplicate_session.click()
+        time.sleep(1)
+        page_results = driver_var.page_source
+        soup = BeautifulSoup(page_results, 'html.parser')
+        notice_msg = soup.find('div', {'id': 'notice-box'})
 
-            time.sleep(1)
-            page_results = driver_var.page_source
-            soup = BeautifulSoup(page_results, 'html.parser')
-            notice_msg = soup.find('div', {'id': 'notice-box'})
-
-            # Check if there's a GSMLS popup notice. If so, close the message
-            if type(notice_msg) == bs4.element.Tag:
-                try:
-                    ok_button = WebDriverWait(driver_var, 10).until(
-                                EC.presence_of_element_located((By.XPATH, "//input[@value='OK']")))
-                    ok_button.click()
-                except TimeoutException:
-                    pass
-
-        elif website == 'RPR':
-
-            GSMLS.explicit_page_load('RPR Login', driver_var)
-
-            enter_mail = driver_var.find_element(By.ID, 'SignInEmail')
-            enter_mail.click()
-            AC(driver_var).key_down(Keys.CONTROL).send_keys('A').key_up(Keys.CONTROL).send_keys(username)
-            password = driver_var.find_element(By.ID, 'SignInPassword')
-            password.click()
-            password.send_keys(pw)
-            signin_button = driver_var.find_element(By.ID, 'SignInBtn')
-            signin_button.click()
-
-            GSMLS.explicit_page_load('RPR Main', driver_var)
+        # Check if there's a GSMLS popup notice. If so, close the message
+        if type(notice_msg) == bs4.element.Tag:
+            try:
+                ok_button = WebDriverWait(driver_var, 10).until(
+                            EC.presence_of_element_located((By.XPATH, "//input[@value='OK']")))
+                ok_button.click()
+            except TimeoutException:
+                pass
 
     @staticmethod
     def no_results(driver_var):
