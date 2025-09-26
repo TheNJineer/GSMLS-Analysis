@@ -290,7 +290,7 @@ def gsmls_pipeline(**kwargs):
         # Task 5: Start the GSMLS message production
         PythonOperator(
             task_id='gsmls_producer',
-            python_callable=GSMLS.main,
+            python_callable=GSMLS.airflow_gsmls_producer,
             op_kwargs={'producer': producer, 'table_name': 'res_properties'}
         )
 

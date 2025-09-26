@@ -1,5 +1,4 @@
 import os
-from Tools.demo.sortvisu import steps
 from kafka import KafkaConsumer, KafkaProducer
 import json
 import pandas as pd
