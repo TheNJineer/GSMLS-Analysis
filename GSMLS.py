@@ -37,7 +37,7 @@ from kafka.errors import MessageSizeTooLargeError
 
 class GSMLS:
 
-    def __init__(self,timeframe='current'):
+    def __init__(self, timeframe='current'):
         self.counties = {}
         self.municipalities = {}
         self.window_ids = {}
@@ -56,6 +56,7 @@ class GSMLS:
         self.last_scraped_muni = None
         self.last_scraped_property_type = None
         self.last_scraped_date = None
+        self.last_start_date = None
         self.finished = None
         self.timeframe = timeframe
         self.load_metadata(first_run='Yes')
@@ -66,7 +67,7 @@ class GSMLS:
     ______________________________________________________________________________________________________________
     """
 
-    def assign_timeframe(self,year):
+    def assign_timeframe(self, year):
 
         if year == datetime.now().year - 1:
             self.timeframe = 'mixed'
@@ -147,6 +148,7 @@ class GSMLS:
             'Results_Found': [],
             'Finished': [],
             'Rows_Produced': [],
+            'Start_Date': [],
             'Date_Produced': [],
             'Property_Type': [],
         }
@@ -226,14 +228,13 @@ class GSMLS:
 
         elif self.timeframe in ['current', 'mixed']:
             # Get latest scraped date
-            next_scraped_day = datetime.strptime(self.last_scraped_date, "%Y-%m-%d %H:%M:%S.%f") + timedelta(days=1)
+            next_scraped_day = datetime.strptime(self.last_scraped_date, "%Y-%m-%d") + timedelta(days=1)
             next_scraped_day = next_scraped_day.strftime("%Y-%m-%d").split('-')
             month, day = next_scraped_day[1], next_scraped_day[2]
 
             # Start scraping date from the day after the last scraped day
-
-            # return {1234: [f"{month}/{day}/{year}", f"12/31/{year}"]}
-            return {1234: [f"05/28/{year}", f"12/31/{year}"]}
+            return {1234: [f"{month}/{day}/{year}", f"12/31/{year}"]}
+            # return {1234: [f"05/28/{year}", f"12/31/{year}"]}
 
     @staticmethod
     def download_complete(filename):
@@ -368,7 +369,8 @@ class GSMLS:
                         "//div[@id='sub-navigation-container']", "//table[@class='df-table sticky sticky-gray']",
                         "//a[@class='last show']"],
             'Download': ["//h2[normalize-space()='Download']",
-                         "//div[@id='sub-navigation-container']", "//form[@id='downloadoption']//section[1]//div[1]//div[1]"],
+                         "//div[@id='sub-navigation-container']",
+                         "//form[@id='downloadoption']//section[1]//div[1]//div[1]"],
             'Property Report': ["//a[normalize-space()='Previous']", "//div[@class='report-cell title-color top-title']",
                                 "//div[@class='side-bar-padding']", f"//div[normalize-space()='{mlsnum}']"],
             'Media Page': ["//div[@id='menu-selectBox']//div[2]", "//div[@class='imagesReportTitle']",
@@ -376,26 +378,10 @@ class GSMLS:
             'Login': ["//div[@class='login-logo']", "//input[@id='usernametxt']", "//input[@id='passwordtxt']"],
             'Target Tabs': ["//li[normalize-space()='* ® County']", "//li[normalize-space()='* ® Town']",
                             "//li[normalize-space()='* ® Town Code']"],
-            'Quicksearch': ["//input[@id='qcksrchmlstxt']", "//table[@id='search-help-table']", "//a[@id='selcontact2']"],
-            'SIS': {
-                'search_bar_xpath': '//*[@id="root"]/div/div[2]/div[1]/div[1]',
-                'sis_logo_xpath': '//*[@id="root"]/div/div[1]/a',
-                'dashboard_xpath': '//*[@id="root"]/div/div[1]/div[1]'
-                    },
-            'SIS Results': ['//*[@id="root"]/div[2]/div[2]/div[1]/div[1]', "//div[@id='overview']",
-                            "//div[@id='listing-history']", "//div[@id='public-records']", "//div[@id='property-history']",
-                            "//div[normalize-space()='Property Hazards']"],
-            'Server Error': ["//h2[normalize-space()='ERROR']", "//a[normalize-space()='HomePage']", "//a[@id='closect']"],
-            'RPR Login': {
-                'email': "//input[@id='SignInEmail']",
-                'pw': "//input[@id='SignInPassword']"
-                    },
-            'RPR Main': {
-                'rpr_logo_post_xpath': '/html/body/rpr-app/rpr-layout/header/div/div/div/a',
-                'location_search': '/html/body/rpr-app/rpr-layout/main/rpr-home/div[1]/div/rpr-property-search-form/form/div/div[1]/div[2]/input',
-                'type_dropdwon': '/html/body/rpr-app/rpr-layout/main/rpr-home/div[1]/div/rpr-property-search-form/form/div/rpr-residential-dropdowns/rpr-type-status-form/div/div/div[1]/button',
-                'header_menu': '/html/body/rpr-app/rpr-layout/header/div/div/div/nav'
-            }
+            'Quicksearch': ["//input[@id='qcksrchmlstxt']", "//table[@id='search-help-table']",
+                            "//a[@id='selcontact2']"],
+            'Server Error': ["//h2[normalize-space()='ERROR']", "//a[normalize-space()='HomePage']",
+                             "//a[@id='closect']"]
         }
 
         if page_name in ['Garden State MLS', 'Advanced Search', 'Results', 'Download']:
@@ -583,7 +569,7 @@ class GSMLS:
 
     @staticmethod
     def format_float_values(value):
-
+        # Delete?
         if '$' in value and ',' in value:
 
             return float(''.join(value.lstrip('$').split(',')))
@@ -598,13 +584,14 @@ class GSMLS:
 
     @staticmethod
     def geocode_map_query(address):
+        # Delete?
         pass
 
         return None, None
 
     def get_gsmls_tax_info(self, citycode, streetnum, streetname):
         """Use this function to return the sqft, yearbuilt, assessment total, bankcodes, time of possession"""
-
+        # Delete?
         # I may need to slice the streetname because the full spelling may not match
         # *** GSMLS Tax data is updated after every sale and replaces the previous records. Cant rely on the time_of_posession data
         # *** Create a query that parses N,S,E,W directions out of the street name and properly searches the db
@@ -617,7 +604,7 @@ class GSMLS:
     @staticmethod
     def get_nj_tax_info(citycode, streetnum, streetname, tax_engine):
         """Use this function to return the sqft, yearbuilt, assessment total, bankcodes, time of possession"""
-
+        # Delete?
         nj_tax_query = f"""SELECT * FROM nj_tax_assessor_data 
                         WHERE municipality = '{citycode}' AND property_location ILIKE '{streetnum} {streetname[:4]}%%';"""
 
@@ -667,18 +654,19 @@ class GSMLS:
                     LIMIT 1;
                     """
         else:
-            # Use this query to scrape the last municipality recorded and the previous time it was recorded
-            # This block will be accesses if the program raises an error and needs to pick up where it left of
-            # As currently constructed, the program will use the date of most recent scrape instead of the previous one
-            # Use until better query is constructed
+            # Use this query to scrape the last municipality recorded and the time it was recorded successfully.
+            # This block will be accesses if the program raises an error and needs to pick up where it left off.
+            # As currently constructed, the program will use the date of most recent scrape which, if the program
+            # is run today and encounters an error, will say today is the last day of the scrape
+            # instead of the true previous date in which the date that municipality was scraped successfully.
 
             query = """
                     SELECT year_,  quarter, county, municipality, initiated, results_found, finished,  
-                    substr(date_produced, 0, 11)::DATE as date_produced, property_type FROM gsmls_event_log
+                    date_produced, property_type FROM gsmls_event_log
                     WHERE municipality = (
-	                        SELECT municipality FROM gsmls_event_log 
-	                        WHERE id = (SELECT MAX(id) FROM gsmls_event_log)
-	                        )
+                            SELECT municipality FROM gsmls_event_log 
+                            WHERE id = (SELECT MAX(id) FROM gsmls_event_log)
+                            )
                     ORDER BY date_produced DESC, municipality DESC
                     LIMIT 2;
             """
@@ -692,7 +680,10 @@ class GSMLS:
 
         elif first_run == 'Yes':
 
-            self.last_scraped_date = metadata.loc[last_row, 'date_produced']
+            self.last_start_date = metadata.loc[last_row, 'start_date']
+
+            if isinstance(self.last_start_date, pd.NaT):
+                self.last_start_date = metadata.loc[last_row, 'date_produced']
 
         else:
 
@@ -705,9 +696,6 @@ class GSMLS:
         self.last_scraped_muni = metadata.loc[last_row, 'municipality']
         self.finished = metadata.loc[last_row, 'finished']
         self.last_scraped_property_type = metadata.loc[last_row, 'property_type']
-        # Have load_data accept an arg saying first_run which will use the last scraped date from the db
-        # If arg != 'Yes' it will pull the 2nd to last unique date which came prior to today's date. Modify the
-        # query to pull the last data scraped from today's current run and the last scrape from the previous run
 
         # All data from last run was scraped. Reset the value to scrape all new data
         if self.last_scraped_county == 30 and self.last_scraped_muni == 'White Twp.' and self.finished == 'Yes':
@@ -991,7 +979,6 @@ class GSMLS:
                             else:
                                 self.last_scraped_county = None
 
-
                         GSMLS.click_target_tab('County', type_, driver_var)
                         GSMLS.set_county(2, county, driver_var)  # Set the county
                         GSMLS.click_target_tab('Town', type_, driver_var)
@@ -1070,7 +1057,7 @@ class GSMLS:
                 properties_bar.update(1)
 
     def query_gsmls_data(self, year=None, month=None):
-
+        # Delete?
         if year is None and month is None:
             query = """SELECT * FROM res_properties
                     WHERE \"STATUS_SHORT\" = 'SD';
