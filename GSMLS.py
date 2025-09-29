@@ -11,6 +11,7 @@ import datetime
 import pandas as pd
 import sys, traceback
 import logging
+from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from tqdm.auto import trange
@@ -191,7 +192,7 @@ class GSMLS:
         raise NoBrokersAvailable
 
     @staticmethod
-    def create_selenium_webdriver():
+    def create_selenium_webdriver(remote=False):
 
         # Add Selenium docker container to the docker-compose
         # Lookup how to create Remote drivers and create for Edge
@@ -207,7 +208,11 @@ class GSMLS:
         options.add_experimental_option("prefs", s)
         # options.add_argument("--headless=new")
 
-        return webdriver.Edge(service=Service(), options=options), options
+        if remote is True:
+            # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
+            return webdriver.Remote(command_executor='http://167.172.245.142:4444/wd/hub', options=options)
+        else:
+            return webdriver.Edge(service=Service(), options=options), options
 
     def create_state_dictionary(self, driver_var):
 
@@ -1502,12 +1507,13 @@ class GSMLS:
 
     def airflow_gsmls_producer(self, **kwargs):
 
+        load_dotenv()
         website = 'https://mls.gsmls.com/member/'
         quit_program = False
 
         while quit_program:
 
-            driver, options = GSMLS.create_selenium_webdriver()
+            driver, options = GSMLS.create_selenium_webdriver(remote=True)
 
             try:
                 driver.maximize_window()

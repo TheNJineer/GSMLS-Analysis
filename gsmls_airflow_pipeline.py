@@ -1,6 +1,7 @@
 import time
 import json
 import pandas as pd
+from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
 from utility_func import get_us_pw, logger_decorator
@@ -75,6 +76,7 @@ def create_mongo_client():
 @dag('GSMLS_Pipeline', description='', default_args=default_args, schedule=timedelta(days=7))
 def gsmls_pipeline(**kwargs):
 
+    load_dotenv()
     logger = kwargs['logger']
 
     # Task 1: Check the health of Apache Kafka #Connection
@@ -208,6 +210,7 @@ def gsmls_pipeline(**kwargs):
                         - Spark: http://167.172.245.142:8080 → Spark UI
                         - Mongo Express: http://167.172.245.142:8081 → MongoDB Web Based UI
                         - pgAdmin: http://167.172.245.142:5050 → PostgresSQL Web Based UI
+                        - Selenium Browser: http://167.172.245.142:7900 → Install VNC viewer for OS to view browser
                     """
         else:
 
