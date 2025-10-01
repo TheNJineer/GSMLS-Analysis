@@ -19,10 +19,11 @@ from utility_func import logger_decorator
 
 class RealEstateImages:
 
-    def __init__(self, db_name='realEstate', col_name='propertyImages', sql_db='gsmls', df_var=None):
+    def __init__(self, db_name='realEstate', col_name='propertyImages', remote=True, df_var=None):
+        self.remote = remote
         self.db_name = db_name
         self.col_name = col_name
-        self.sql_conn = self.create_postgresql_conn(sql_db)
+        self.sql_conn = self.create_postgresql_conn()
         self.mongo_db_conn = self.create_mongodb_conn()
         self.database = self.check_for_database()
         self.collection = self.check_for_collection()
@@ -164,30 +165,43 @@ class RealEstateImages:
 
         return total_image_list
 
-    @staticmethod
-    def create_postgresql_conn(db):
-        # Create database connection
-        # Adjust the database cursor to not load the whole database before chunking
-        username, base_url, pw = RealEstateImages.get_us_pw('PostgreSQL-web')
-        return (create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/{db}")
-                .connect().execution_options(stream_results=True))
+    def create_postgresql_conn(self):
 
-    @staticmethod
-    def create_mongodb_conn():
+        # Create database connection
+        if self.remote is False:
+            username, base_url, pw = RealEstateImages.get_us_pw('PostgreSQL-web')
+            return (create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/nj_tax_assessor")
+                    .connect().execution_options(stream_results=True))
+        else:
+            connection_str = os.getenv('POSTGRES_AWS_CONN')
+            return (create_engine(f"postgresql+psycopg2://{connection_str}:5432/nj_tax_assessor")
+                    .connect().execution_options(stream_results=True))
+
+    def create_mongodb_conn(self):
         # username, base_url, pw = RealEstateImages.get_us_pw('MongoDB')
 
         # Create a MongoDB connection
-        connection = pymongo.MongoClient('mongodb://localhost:27017/',
-                                         serverSelectionTimeoutMS=5000,# How long to wait when selecting a server (default 30s)
-                                         # socketTimeoutMS=20000,  # How long a socket read/write can block before failing
-                                         # connectTimeoutMS=10000,  # How long to wait when opening a new connection
-                                         maxPoolSize=100,  # Limit concurrent connections in the pool
-                                         waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
-                                         retryWrites=True,  # Enable automatic retries for certain write operations
-                                         retryReads=True,  # Enable automatic retries for certain read operations
-                                         heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
-                                         connect=True  # Force connection on client creation (fail fast if bad config)
-                                         )
+        if self.remote is False:
+            connection = pymongo.MongoClient('mongodb://localhost:27017/',
+                                             serverSelectionTimeoutMS=5000,# How long to wait when selecting a server (default 30s)
+                                             maxPoolSize=100,  # Limit concurrent connections in the pool
+                                             waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
+                                             retryWrites=True,  # Enable automatic retries for certain write operations
+                                             retryReads=True,  # Enable automatic retries for certain read operations
+                                             heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
+                                             connect=True  # Force connection on client creation (fail fast if bad config)
+                                             )
+        else:
+            connection_str = os.getenv('ME_CONFIG_MONGODB_URL')
+            connection = pymongo.MongoClient(host=connection_str,
+                                             serverSelectionTimeoutMS=5000,# How long to wait when selecting a server (default 30s)
+                                             maxPoolSize=100,  # Limit concurrent connections in the pool
+                                             waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
+                                             retryWrites=True,  # Enable automatic retries for certain write operations
+                                             retryReads=True,  # Enable automatic retries for certain read operations
+                                             heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
+                                             connect=True  # Force connection on client creation (fail fast if bad config)
+                                             )
 
         return connection
 
@@ -833,7 +847,7 @@ if __name__ == "__main__":
     # image_data = pd.read_excel('prop_images.xlsx')
     # obj = RealEstateImages(image_data)
     # obj.main()
-    obj = RealEstateImages(sql_db='nj_tax_assessor')
+    obj = RealEstateImages()
     # obj.download_images_main()
     obj.database_cleanup()
     os.chdir(current_wd)

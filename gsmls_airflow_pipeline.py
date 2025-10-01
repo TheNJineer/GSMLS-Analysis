@@ -1,14 +1,14 @@
 import time
 import json
 import pandas as pd
+import os
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
 from utility_func import get_us_pw, logger_decorator
-from airflow.sdk import task, dag, PokeReturnValue
+from airflow.sdk import task, dag, PokeReturnValue, TaskGroup
 from airflow.utils.email import send_email
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.utils.task_group import TaskGroup
 from kafka import KafkaClient, KafkaProducer, KafkaConsumer
 from kafka.admin import NewTopic
 from kafka.structs import TopicPartition
@@ -75,9 +75,6 @@ def create_mongo_client():
 @logger_decorator
 @dag('GSMLS_Pipeline', description='', default_args=default_args, schedule=timedelta(days=7))
 def gsmls_pipeline(**kwargs):
-
-    load_dotenv()
-    logger = kwargs['logger']
 
     # Task 1: Check the health of Apache Kafka #Connection
     @task(task_id='check_kafka_connection')
@@ -171,11 +168,14 @@ def gsmls_pipeline(**kwargs):
 
     # Task 4: Get row count of res_properties table
     @task(task_id='postgres_data_count')
-    def get_postgresql_rows(table_name_):
+    def get_postgresql_rows(table_name_, remote=True):
 
-        # Use environment variables package and document
-        base, user, pw = get_us_pw('PostgreSQL')
-        engine = create_engine(f'postgresql://{user}:{pw}@{base}:5432/{table_name_}')
+        if remote is True:
+            connection_str = os.getenv('POSTGRES_AWS_CONN')
+            engine = create_engine(f"postgresql+psycopg2://{connection_str}:5432/gsmls")
+        else:
+            base, user, pw = get_us_pw('PostgreSQL')
+            engine = create_engine(f'postgresql://{user}:{pw}@{base}:5432/{table_name_}')
 
         query = 'SELECT COUNT(*) FROM res_properties;'
 
@@ -195,7 +195,7 @@ def gsmls_pipeline(**kwargs):
         mongo_count = kwargs_['mongo_count']
 
         if phase == 'Starting':
-
+            ip_address = os.getenv('DIGITAL_OCEAN_IP')
             subject = 'GSMLS Pipeline Has Started'
             message = f"""
                         start_time: {datetime.now()}
@@ -206,11 +206,11 @@ def gsmls_pipeline(**kwargs):
                         mongo_count: {mongo_count}
                         
                         You can view the status and progress of your pipeline from the following ports:
-                        - Airflow: http://167.172.245.142:8085 → Airflow UI
-                        - Spark: http://167.172.245.142:8080 → Spark UI
-                        - Mongo Express: http://167.172.245.142:8081 → MongoDB Web Based UI
-                        - pgAdmin: http://167.172.245.142:5050 → PostgresSQL Web Based UI
-                        - Selenium Browser: http://167.172.245.142:7900 → Install VNC viewer for OS to view browser
+                        - Airflow: http://{ip_address}:8085 → Airflow UI
+                        - Spark: http://{ip_address}:8080 → Spark UI
+                        - Mongo Express: http://{ip_address}:8081 → MongoDB Web Based UI
+                        - pgAdmin: http://{ip_address}:5050 → PostgresSQL Web Based UI
+                        - Selenium Browser: http://{ip_address}:7900 → Install VNC viewer for OS to view browser
                     """
         else:
 
@@ -269,6 +269,9 @@ def gsmls_pipeline(**kwargs):
 
             if True in list(offset_dict.values()):
                 return PokeReturnValue(is_done=True)
+
+    load_dotenv()
+    logger = kwargs['logger']
 
     with TaskGroup(group_id='start_pipeline') as start_pipeline:
 

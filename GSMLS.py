@@ -38,7 +38,9 @@ from kafka.errors import MessageSizeTooLargeError
 
 class GSMLS:
 
-    def __init__(self, timeframe='current'):
+    def __init__(self, remote=True, timeframe='current'):
+        load_dotenv()
+        self.remote = remote
         self.counties = {}
         self.municipalities = {}
         self.window_ids = {}
@@ -155,14 +157,14 @@ class GSMLS:
 
         return clean_log
 
-    @staticmethod
-    def create_engine(db_name=None):
+    def create_engine(self):
 
-        username, base_url, pw = get_us_pw('PostgreSQL-web')
-        if db_name is None:
+        if self.remote is False:
+            username, base_url, pw = get_us_pw('PostgreSQL-web')
             engine = create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/gsmls")
         else:
-            engine = create_engine(f"postgresql+psycopg2://{username}:{pw}@{base_url}:5432/{db_name}")
+            connection_str = os.getenv('POSTGRES_AWS_CONN')
+            engine = create_engine(f"postgresql+psycopg2://{connection_str}:5432/gsmls")
 
         return engine
 
@@ -191,11 +193,8 @@ class GSMLS:
 
         raise NoBrokersAvailable
 
-    @staticmethod
-    def create_selenium_webdriver(remote=False):
+    def create_selenium_webdriver(self):
 
-        # Add Selenium docker container to the docker-compose
-        # Lookup how to create Remote drivers and create for Edge
         save_location = 'C:\\Users\\Omar\\Desktop\\Selenium Temp Folder'  # May need to be changed
         edge_profile_path = 'C:\\Users\\Omar\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default'
         custom_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
@@ -206,9 +205,8 @@ class GSMLS:
         options.add_argument(f"user-data-dir={edge_profile_path}")
         options.add_argument(f"user-agent={custom_user_agent}")
         options.add_experimental_option("prefs", s)
-        # options.add_argument("--headless=new")
 
-        if remote is True:
+        if self.remote is True:
             # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
             return webdriver.Remote(command_executor='http://167.172.245.142:4444/wd/hub', options=options)
         else:
@@ -621,15 +619,19 @@ class GSMLS:
                 self.last_scraped_muni = None
                 self.last_scraped_county = None
 
-    @staticmethod
-    def login(website, driver_var):
+    def login(self, website, driver_var):
         """
 
         :param website:
         :param driver_var:
         :return:
         """
-        username, _, pw = get_us_pw(website)
+
+        if self.remote is False:
+            username, _, pw = get_us_pw(website)
+        else:
+            username = os.getenv('GSMLS_USER')
+            pw = os.getenv('GSMLS_PASSWORD')
 
         GSMLS.explicit_page_load('Login', driver_var)
 
@@ -1507,7 +1509,6 @@ class GSMLS:
 
     def airflow_gsmls_producer(self, **kwargs):
 
-        load_dotenv()
         website = 'https://mls.gsmls.com/member/'
         quit_program = False
 
