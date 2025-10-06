@@ -48,13 +48,13 @@ def airflow_data_consumer(data_consumer, img_producer, table_name):
 
 
 # Define DAG as decorator over final pipeline function
-@logger_decorator
 @dag(
     "GSMLS_Pipeline",
     description="",
     default_args=default_args,
     schedule=timedelta(days=7),
 )
+@logger_decorator
 def gsmls_pipeline(**kwargs):
 
     # Task 1: Check the health of Apache Kafka #Connection
@@ -267,7 +267,7 @@ def gsmls_pipeline(**kwargs):
 
         # Task Dependencies, throw error if any of these don't work?
         kafka_conn = check_kafka_connection(logger)
-        create_kafka_topics(kafka_conn)
+        create_kafka_topics("res_properties", status=kafka_conn)
         mongo_client = create_mongodb_conn(remote=True)
         mongo_status, mongo_col, num_of_docs = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
@@ -303,7 +303,7 @@ def gsmls_pipeline(**kwargs):
         # Task 6: Start the GSMLS consumer
         gsmls_consumer = PythonOperator(
             task_id="gsmls_consumer",
-            python_callable=airflow_data_consumer,  # This function should create the class then run it
+            python_callable=airflow_data_consumer,
             op_kwargs={
                 "data_consumer": consumer,
                 "img_producer": image_producer,
@@ -314,7 +314,7 @@ def gsmls_pipeline(**kwargs):
         # Task 7: Start the MongoDB consumer
         mongo_consumer = PythonOperator(
             task_id="mongo_consumer",
-            python_callable=airflow_image_consumer,  # This function should create the class then run it
+            python_callable=airflow_image_consumer,
             op_kwargs={"remote_client": mongo_col},
         )
 
