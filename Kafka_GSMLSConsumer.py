@@ -244,10 +244,10 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def create_consumer():
 
-        return KafkaConsumer(client_id='Residential Consumer', group_id='Residential Consumer',
-                      bootstrap_servers='localhost:9092', auto_offset_reset='earliest',
-                      enable_auto_commit=False, value_deserializer=lambda v: v.decode('utf-8'),
-                      consumer_timeout_ms=120000)
+        return KafkaConsumer(client_id='residential_consumer', group_id='residential_consumer',
+                             bootstrap_servers=['broker-1:9092', 'broker-2:9092', 'broker-3:9092'],
+                             auto_offset_reset='earliest', enable_auto_commit=False,
+                             value_deserializer=lambda v: v.decode('utf-8'), consumer_timeout_ms=120000)
 
     @staticmethod
     def drop_columns(df_var, prop_type, update_bar):
@@ -1241,6 +1241,13 @@ class KafkaGSMLSConsumer:
         print(f"{topic} has successfully been stored in PostgreSQL")
 
     def submit2sql_dataerror(self, df_var, topic):
+        """
+        Submits data row by row in the event of  SQL error being thrown
+        during the submit2sql function.
+
+        :param df_var:
+        :param topic:
+        """
 
         for idx, row in df_var.iterrows():
 
@@ -1252,9 +1259,13 @@ class KafkaGSMLSConsumer:
                 print(f'A DataError has occurred: {de}')
                 continue
 
-    def main(self):
+    def main(self, remote_consumer=None):
 
-        data_consumer = KafkaGSMLSConsumer.create_consumer()
+        if remote_consumer is None:
+            data_consumer = KafkaGSMLSConsumer.create_consumer()
+        else:
+            data_consumer = remote_consumer
+
         topics_bar = tqdm(total=len(self.prop_dict.keys()), desc='Topics', colour='red')
 
         for prop_type, topic_data in self.prop_dict.items():
