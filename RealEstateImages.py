@@ -19,13 +19,13 @@ from utility_func import logger_decorator, create_sql_engine, create_mongodb_con
 class RealEstateImages:
 
     def __init__(
-        self, db_name="realEstate", col_name="propertyImages", remote=False, df_var=None
+        self, db_name="realEstate", col_name="propertyImages", remote=True, df_var=None
     ):
         self.remote = remote
         self.db_name = db_name
         self.col_name = col_name
         self.sql_conn = create_sql_engine("nj_tax_assessor", remote=remote)
-        if remote is False:
+        if self.remote is False:
             self.mongo_db_conn = create_mongodb_conn()
         else:
             self.mongo_db_conn = None
@@ -996,11 +996,6 @@ class RealEstateImages:
 
             table.insert_one(dict(property_data))
             # del property_data
-
-    def airflow_consumer(self, remote_client):
-
-        consumer = RealEstateImages(remote=True)
-        consumer.main(remote_client)
 
 
 if __name__ == "__main__":

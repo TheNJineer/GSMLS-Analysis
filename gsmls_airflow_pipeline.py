@@ -28,6 +28,25 @@ default_args = {
 }
 
 
+def airflow_gsmls_producer(data_producer, table_name):
+
+    obj = GSMLS()
+    obj.airflow_gsmls_producer(data_producer=data_producer, table_name=table_name)
+
+
+def airflow_image_consumer(remote_client):
+
+    consumer = RealEstateImages()
+    consumer.main(remote_client=remote_client)
+
+
+def airflow_data_consumer(data_consumer, img_producer, table_name):
+
+    engine = create_sql_engine("gsmls", remote=True)
+    img_consumer = KafkaGSMLSConsumer(connection=engine, producer_=img_producer)
+    img_consumer.main(remote_consumer=data_consumer)
+
+
 # Define DAG as decorator over final pipeline function
 @logger_decorator
 @dag(
@@ -269,8 +288,8 @@ def gsmls_pipeline(**kwargs):
         # Task 5: Start the GSMLS message production
         PythonOperator(
             task_id="gsmls_producer",
-            python_callable=GSMLS.airflow_gsmls_producer,
-            op_kwargs={"producer": data_producer, "table_name": "res_properties"},
+            python_callable=airflow_gsmls_producer,
+            op_kwargs={"data_producer": data_producer, "table_name": "res_properties"},
         )
 
         # The producer will publish data to both the data and image topics first
@@ -284,10 +303,10 @@ def gsmls_pipeline(**kwargs):
         # Task 6: Start the GSMLS consumer
         gsmls_consumer = PythonOperator(
             task_id="gsmls_consumer",
-            python_callable=KafkaGSMLSConsumer.main,  # This function should create the class then run it
+            python_callable=airflow_data_consumer,  # This function should create the class then run it
             op_kwargs={
-                "consumer": consumer,
-                "producer": image_producer,
+                "data_consumer": consumer,
+                "img_producer": image_producer,
                 "table_name": "res_properties",
             },
         )
@@ -295,8 +314,8 @@ def gsmls_pipeline(**kwargs):
         # Task 7: Start the MongoDB consumer
         mongo_consumer = PythonOperator(
             task_id="mongo_consumer",
-            python_callable=RealEstateImages.airflow_consumer,  # This function should create the class then run it
-            op_kwargs={"mongo_client": mongo_col},
+            python_callable=airflow_image_consumer,  # This function should create the class then run it
+            op_kwargs={"remote_client": mongo_col},
         )
 
         # ETL Pipeline dependencies

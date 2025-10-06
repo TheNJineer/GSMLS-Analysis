@@ -3,6 +3,9 @@ import logging
 import json
 import time
 import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
 from kafka import KafkaProducer, KafkaConsumer
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -38,18 +41,19 @@ def create_kafka_consumer(client_id, group_id):
     )
 
 
-def create_kafka_producer(client_id, logger=None):
+def create_kafka_producer(client_id, logger=None, remote=True):
     retries = 0
+
+    if remote is not True:
+        bootstrap_servers = ["localhost:9092"]
+    else:
+        bootstrap_servers = ["broker-1:9092", "broker-2:9092", "broker-3:9092"]
 
     while retries <= 4:
         for attempt in range(1):
             try:
                 producer = KafkaProducer(
-                    bootstrap_servers=[
-                        "broker-1:9092",
-                        "broker-2:9092",
-                        "broker-3:9092",
-                    ],
+                    bootstrap_servers=bootstrap_servers,
                     key_serializer=lambda v: json.dumps(v).encode("utf-8"),
                     value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                     retries=3,
@@ -105,6 +109,39 @@ def create_mongodb_conn(remote=False):
         )
 
     return connection
+
+
+def create_selenium_webdriver(remote=True):
+
+    options = Options()
+
+    if remote is True:
+        # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
+        load_dotenv()
+        ip_address = os.getenv("DIGITAL_OCEAN_IP")
+        return webdriver.Remote(
+            command_executor=f"http://{ip_address}:4444/wd/hub", options=options
+        )
+
+    else:
+        save_location = (
+            "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"  # May need to be changed
+        )
+        edge_profile_path = (
+            "C:\\Users\\Omar\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default"
+        )
+        custom_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+
+        s = {
+            "savefile.default_directory": save_location,
+            "download.default_directory": save_location,
+            "download.prompt_for_download": False,
+        }
+        options.add_argument(f"user-data-dir={edge_profile_path}")
+        options.add_argument(f"user-agent={custom_user_agent}")
+        options.add_experimental_option("prefs", s)
+
+        return webdriver.Edge(service=Service(), options=options)
 
 
 def create_sql_engine(database: str, remote=True):
