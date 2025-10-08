@@ -164,7 +164,7 @@ def gsmls_pipeline(**kwargs):
         return {'data_producer': data_prod, 'image_producer': image_prod, 'consumer': cons}
 
     # Task 4: Get row count of res_properties table
-    @task(task_id="postgres_data_count")
+    @task(task_id="postgres_data_count", multiple_outputs=True)
     def get_postgresql_rows(table_name_, remote=True):
 
         engine = create_sql_engine("gsmls", remote=remote)
@@ -173,7 +173,7 @@ def gsmls_pipeline(**kwargs):
 
         df = pd.read_sql(query, engine)
 
-        return table_name, int(df.loc[0].values[0])
+        return {'table_name': table_name, 'prop_count': int(df.loc[0].values[0])}
 
     # Task 5: Send pipeline initiation email
     @task(task_id="send_status_email")
@@ -275,13 +275,13 @@ def gsmls_pipeline(**kwargs):
             mongo_client, "realEstate", "propertyImages", logger
         )
         kafka_objects = create_producer_consumer(logger)
-        table_name, prop_count = get_postgresql_rows("res_properties")
+        postgresql_results1 = get_postgresql_rows("res_properties")
 
         kwargs["kafka_status"] = kafka_conn
         kwargs["mongo_status"] = mongo_start_results['mongo_status']
-        kwargs["postgres_count"] = prop_count
+        kwargs["postgres_count"] = postgresql_results1['prop_count']
         kwargs["mongo_count"] = mongo_start_results['num_of_docs']
-        status_email(table_name, **kwargs)
+        status_email(postgresql_results1['table_name'], **kwargs)
 
     # with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
     #     # Make sure to create function or have existing functions return the objects
@@ -291,11 +291,12 @@ def gsmls_pipeline(**kwargs):
     #     PythonOperator(
     #         task_id="gsmls_producer",
     #         python_callable=airflow_gsmls_producer,
-    #         op_kwargs={"data_producer": kafka_objects['data_producer'], "table_name": "res_properties"},
+    #         op_kwargs={"data_producer": kafka_objects['data_producer'],
+    #                   "table_name": postgresql_results1['table_name']},
     #     )
     #
     #     # The producer will publish data to both the data and image topics first
-    #     kafka_msg_sensor = new_msgs_available("res_properties", logger).override(
+    #     kafka_msg_sensor = new_msgs_available(postgresql_results1['table_name'], logger).override(
     #         task_id="res_msgs_avail"
     #     )
     #     kafka_img_sensor = new_msgs_available("prop_images", logger).override(
@@ -309,7 +310,7 @@ def gsmls_pipeline(**kwargs):
     #         op_kwargs={
     #             "data_consumer": kafka_objects['consumer'],
     #             "img_producer": kafka_objects['image_producer'],
-    #             "table_name": "res_properties",
+    #             "table_name": postgresql_results1['table_name'],
     #         },
     #     )
     #
@@ -331,13 +332,13 @@ def gsmls_pipeline(**kwargs):
     #     mongo_end_results = check_mongodb(
     #         mongo_client, "realEstate", "propertyImages", logger
     #     )
-    #     table_name, prop_count = get_postgresql_rows("res_properties")
+    #     postgresql_results2 = get_postgresql_rows("res_properties")
     #     mongo_end_results['mongo_col'].close()
     #
     #     kwargs["phase"] = "Ending"
     #     kwargs["kafka_status"] = False
     #     kwargs["mongo_status"] = False
-    #     kwargs["postgres_count"] = prop_count
+    #     kwargs["postgres_count"] = postgresql_results2['prop_count']
     #     kwargs["mongo_count"] = mongo_end_results['num_of_docs']
     #     status_email(table_name, **kwargs)
     #
