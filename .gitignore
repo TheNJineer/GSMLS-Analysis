@@ -8,7 +8,6 @@ RPR.py
 pandas2sql.py
 Logs/
 Docker_Volumes/
-docker-compose.yaml
 GSMLSC & REI Notes.txt
 Apache Kakfa Notes.txt
 Transformation Notes.txt
