@@ -5,8 +5,8 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
-from utility_func import logger_decorator, create_kafka_consumer
-from utility_func import create_sql_engine, create_kafka_producer, create_mongodb_conn
+from plugins.utility_func import logger_decorator, create_kafka_consumer
+from plugins.utility_func import create_sql_engine, create_kafka_producer, create_mongodb_conn
 from airflow.sdk import task, dag, PokeReturnValue, TaskGroup
 from airflow.utils.email import send_email
 from airflow.providers.standard.operators.python import PythonOperator
@@ -15,9 +15,9 @@ from kafka.admin import NewTopic
 from kafka.structs import TopicPartition
 from kafka.admin.client import KafkaAdminClient
 from pymongo.errors import ConnectionFailure
-from GSMLS import GSMLS
-from Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from RealEstateImages import RealEstateImages
+from plugins.GSMLS import GSMLS
+from plugins.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
+from plugins.RealEstateImages import RealEstateImages
 
 # Define default args
 default_args = {
