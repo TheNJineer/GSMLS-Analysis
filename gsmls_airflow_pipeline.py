@@ -91,7 +91,7 @@ def gsmls_pipeline(**kwargs):
 
     # Task 1a: Check if the correct topics have been created
     @task(task_id="create_topics")
-    def create_kafka_topics(topic: str, status: bool):
+    def create_kafka_topics(topic: str, status: bool, logger_):
 
         topic_list = ["prop_images", topic]
 
@@ -119,6 +119,8 @@ def gsmls_pipeline(**kwargs):
                     admin_client.create_topics(
                         new_topics=[topic_obj], validate_only=False
                     )
+
+                    logger_.info(f'Topic {topic} created in Apache Kafka topic list')
 
     # Task 2: Check the health of MongoDB Connection and if database exists
     @task(task_id="check_mongo_connection")
@@ -267,7 +269,7 @@ def gsmls_pipeline(**kwargs):
 
         # Task Dependencies, throw error if any of these don't work?
         kafka_conn = check_kafka_connection(logger)
-        create_kafka_topics("res_properties", status=kafka_conn)
+        create_kafka_topics("res_properties", status=kafka_conn, logger_=logger)
         mongo_client = create_mongodb_conn(remote=True)
         mongo_status, mongo_col, num_of_docs = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
@@ -281,66 +283,66 @@ def gsmls_pipeline(**kwargs):
         kwargs["mongo_count"] = num_of_docs
         status_email(table_name, **kwargs)
 
-    with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
-        # Make sure to create function or have existing functions return the objects
-
-        # This function should create the class then run the producer.
-        # Task 5: Start the GSMLS message production
-        PythonOperator(
-            task_id="gsmls_producer",
-            python_callable=airflow_gsmls_producer,
-            op_kwargs={"data_producer": data_producer, "table_name": "res_properties"},
-        )
-
-        # The producer will publish data to both the data and image topics first
-        kafka_msg_sensor = new_msgs_available("res_properties", logger).override(
-            task_id="res_msgs_avail"
-        )
-        kafka_img_sensor = new_msgs_available("prop_images", logger).override(
-            task_id="image_msgs_avail"
-        )
-
-        # Task 6: Start the GSMLS consumer
-        gsmls_consumer = PythonOperator(
-            task_id="gsmls_consumer",
-            python_callable=airflow_data_consumer,
-            op_kwargs={
-                "data_consumer": consumer,
-                "img_producer": image_producer,
-                "table_name": "res_properties",
-            },
-        )
-
-        # Task 7: Start the MongoDB consumer
-        mongo_consumer = PythonOperator(
-            task_id="mongo_consumer",
-            python_callable=airflow_image_consumer,
-            op_kwargs={"remote_client": mongo_col},
-        )
-
-        # ETL Pipeline dependencies
-        kafka_msg_sensor >> gsmls_consumer
-        kafka_img_sensor >> mongo_consumer
-
-    with TaskGroup(group_id="ending_pipeline") as ending_pipeline:
-
-        # Close KafkaProducer connection
-        # Close KafkaConsumer connection
-        mongo_status, mongo_col, num_of_docs = check_mongodb(
-            mongo_client, "realEstate", "propertyImages", logger
-        )
-        table_name, prop_count = get_postgresql_rows("res_properties")
-        mongo_col.close()
-
-        kwargs["phase"] = "Ending"
-        kwargs["kafka_status"] = False
-        kwargs["mongo_status"] = False
-        kwargs["postgres_count"] = prop_count
-        kwargs["mongo_count"] = num_of_docs
-        status_email(table_name, **kwargs)
-
-    # Total pipeline dependencies
-    start_pipeline >> etl_pipeline >> ending_pipeline
+    # with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
+    #     # Make sure to create function or have existing functions return the objects
+    #
+    #     # This function should create the class then run the producer.
+    #     # Task 5: Start the GSMLS message production
+    #     PythonOperator(
+    #         task_id="gsmls_producer",
+    #         python_callable=airflow_gsmls_producer,
+    #         op_kwargs={"data_producer": data_producer, "table_name": "res_properties"},
+    #     )
+    #
+    #     # The producer will publish data to both the data and image topics first
+    #     kafka_msg_sensor = new_msgs_available("res_properties", logger).override(
+    #         task_id="res_msgs_avail"
+    #     )
+    #     kafka_img_sensor = new_msgs_available("prop_images", logger).override(
+    #         task_id="image_msgs_avail"
+    #     )
+    #
+    #     # Task 6: Start the GSMLS consumer
+    #     gsmls_consumer = PythonOperator(
+    #         task_id="gsmls_consumer",
+    #         python_callable=airflow_data_consumer,
+    #         op_kwargs={
+    #             "data_consumer": consumer,
+    #             "img_producer": image_producer,
+    #             "table_name": "res_properties",
+    #         },
+    #     )
+    #
+    #     # Task 7: Start the MongoDB consumer
+    #     mongo_consumer = PythonOperator(
+    #         task_id="mongo_consumer",
+    #         python_callable=airflow_image_consumer,
+    #         op_kwargs={"remote_client": mongo_col},
+    #     )
+    #
+    #     # ETL Pipeline dependencies
+    #     kafka_msg_sensor >> gsmls_consumer
+    #     kafka_img_sensor >> mongo_consumer
+    #
+    # with TaskGroup(group_id="ending_pipeline") as ending_pipeline:
+    #
+    #     # Close KafkaProducer connection
+    #     # Close KafkaConsumer connection
+    #     mongo_status, mongo_col, num_of_docs = check_mongodb(
+    #         mongo_client, "realEstate", "propertyImages", logger
+    #     )
+    #     table_name, prop_count = get_postgresql_rows("res_properties")
+    #     mongo_col.close()
+    #
+    #     kwargs["phase"] = "Ending"
+    #     kwargs["kafka_status"] = False
+    #     kwargs["mongo_status"] = False
+    #     kwargs["postgres_count"] = prop_count
+    #     kwargs["mongo_count"] = num_of_docs
+    #     status_email(table_name, **kwargs)
+    #
+    # # Total pipeline dependencies
+    # start_pipeline >> etl_pipeline >> ending_pipeline
 
 
 if __name__ == "__main__":
