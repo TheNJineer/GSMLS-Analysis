@@ -154,14 +154,14 @@ def gsmls_pipeline(**kwargs):
             raise ConnectionFailure(f"Table {table_name} does not exist")
 
     # Task 3: Create Kafka Producer and Consumer
-    @task(task_id="create_producer_consumer")
+    @task(task_id="create_producer_consumer", multiple_outputs=True)
     def create_producer_consumer(logger_):
 
         data_prod = create_kafka_producer("data_producer", logger=logger_)
         image_prod = create_kafka_producer("image_producer", logger=logger_)
         cons = create_kafka_consumer("data_consumer", "data_consumer")
 
-        return data_prod, image_prod, cons
+        return {'data_producer': data_prod, 'image_producer': image_prod, 'consumer': cons}
 
     # Task 4: Get row count of res_properties table
     @task(task_id="postgres_data_count")
@@ -274,7 +274,7 @@ def gsmls_pipeline(**kwargs):
         mongo_start_results = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
         )
-        data_producer, image_producer, consumer = create_producer_consumer(logger)
+        kafka_objects = create_producer_consumer(logger)
         table_name, prop_count = get_postgresql_rows("res_properties")
 
         kwargs["kafka_status"] = kafka_conn
@@ -291,7 +291,7 @@ def gsmls_pipeline(**kwargs):
     #     PythonOperator(
     #         task_id="gsmls_producer",
     #         python_callable=airflow_gsmls_producer,
-    #         op_kwargs={"data_producer": data_producer, "table_name": "res_properties"},
+    #         op_kwargs={"data_producer": kafka_objects['data_producer'], "table_name": "res_properties"},
     #     )
     #
     #     # The producer will publish data to both the data and image topics first
@@ -307,8 +307,8 @@ def gsmls_pipeline(**kwargs):
     #         task_id="gsmls_consumer",
     #         python_callable=airflow_data_consumer,
     #         op_kwargs={
-    #             "data_consumer": consumer,
-    #             "img_producer": image_producer,
+    #             "data_consumer": kafka_objects['consumer'],
+    #             "img_producer": kafka_objects['image_producer'],
     #             "table_name": "res_properties",
     #         },
     #     )
