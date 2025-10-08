@@ -1,0 +1,99 @@
+*** The Docker Container needs to already be running in order to debug
+-This runs a detached interactive container which mounts the project directory to the container
+docker run -dit --name pycharm-dev -v ./home/projects/GSMLS-Analysis:/app python:latest bash
+
+GSMLS
+1) ***MAKE SURE THE AIRFLOW FUNCTIONS REFERENCED IN THE AIRFLOW_GSMLS_PIPELINE.PY
+ACCEPT THE CORRECT TABLE NAME!!!
+5) Put create_producer(), create_selenium_webdriver(), create_sql_engine() in utility_func
+    - Create args to denote if these functions are used in a remote or local env
+11) Put date_produced col in publish_data_2kafka()
+    - Probably should include
+    - Should filter for home's whose close date ot listing day is equal or greater than
+    the current date range
+    - Should I make the Spark job dependant on the scrape being finished so I dont run the risk of
+    enriching the same data more than once?
+14) Make sure reduce_df_size() isnt producing duplicates (Kafka_GSMLSConsumer)
+16) Make sure gsmls_event_log_new database is auto-incrementing
+17) Create functions which initiate the class in the gsmls_airflow_pipeline.py then use the airflow function in
+python_callable:
+- RealEstateImages: airflow_consumer
+- GSMLS: airflow_gsmls_producer
+- Kafka_GSMLSConsumer: NA (create it)
+
+
+query = """
+        SELECT year_,  quarter, county, municipality, initiated, results_found, finished,
+        date_produced, property_type FROM gsmls_event_log
+        WHERE municipality = (
+                SELECT municipality FROM gsmls_event_log
+                WHERE id = (SELECT MAX(id) FROM gsmls_event_log)
+                )
+        ORDER BY date_produced DESC, municipality DESC
+        LIMIT 2;
+"""
+
+RealEstateImages
+- Create a function to use in gsmls_airflow_pipeline that accepts a mongo client
+
+Kafka_GSMLSConsumer
+
+- Create a function to use in gsmls_airflow_pipeline that accepts a consumer and producer
+- Update fill_na_values()
+    - Create loarge datatype_dict that encompasses every possible column name and default value
+    - If the key doesn't exist, pass.
+        - Is this still necessary?
+        if col == 'BATHSFULLTOTAL' or col == 'BATHSHALFTOTAL':
+            df_var.insert(20, col, 0.0)
+        if col == 'AMENITIES_SHORT':
+            df_var.insert(38, col, None)
+- Update fix_lotsize
+    - There still instances where extremely large lotsize values are being calculated
+    - Modify the acrese pattern probably
+- Update fixer_upper()
+    - I need to modify the fixup pattern
+    - Anything that has mold in the description is getting labelled as a fixer upper but that's
+    incorrect. Descriptions with crown molding are being incorrectly labelled as fixer upper
+    - Make whole function more Pythonic
+- Update reorder_columns()
+- Reduce the amount of lines used in the function. Make the dicts
+more compact
+- Update consume_data()
+    - Create function to unpack the kafka data
+    - Create function to remove duplicates from kafka_data
+- Change calculate_dates() to the following:
+def calculate_dates(df_var, prop_type, update_bar):
+
+    if prop_type in ['RES', 'MUL', 'LND']:
+        df_var['YEAR'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_year)
+        df_var['MONTH'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_month)
+        df_var['LISTDATE'] = pd.to_datetime(df_var['LISTDATE'], errors='coerce')
+        df_var['CLOSEDDATE'] = pd.to_datetime(df_var['CLOSEDDATE'], errors='coerce')
+        df_var['PENDINGDATE'] = pd.to_datetime(df_var['PENDINGDATE'], errors='coerce')
+        df_var['ANTICCLOSEDDATE'] = pd.to_datetime(df_var['ANTICCLOSEDDATE'], errors='coerce')
+        df_var['DAYS_TO_CLOSE'] = df_var['CLOSEDDATE'] - df_var['PENDINGDATE']
+        df_var['ANTIC_CLOSEDATE_DIFF'] = df_var['CLOSEDDATE'] - df_var['ANTICCLOSEDDATE']
+        # Stuck these transformations here to not make a new function
+        df_var['SP/LP%'] = df_var['SP/LP%'].astype('float64')
+        df_var['SP/LP%'] = df_var['SP/LP%'] - 100.0
+
+        if prop_type == 'RES':
+            df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME', 'SUBPROPTYPE': 'SUBPROPTYPE_SFH'})
+        else:
+            df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME'})
+
+    elif prop_type == 'RNT':
+        df_var['YEAR'] = df_var['RENTEDDATE'].apply(KafkaGSMLSConsumer.parse_year)
+        df_var['MONTH'] = df_var['RENTEDDATE'].apply(KafkaGSMLSConsumer.parse_month)
+        df_var['RENTEDDATE'] = pd.to_datetime(df_var['RENTEDDATE'], errors='coerce')
+        # Stuck these transformations here to not make a new function
+        df_var['RP/LP%'] = df_var['RP/LP%'].astype('float64')
+        df_var['RP/LP%'] = df_var['RP/LP%'] - 100.0
+
+    elif prop_type == 'TAX':
+        df_var['PRIORSALEDATE'] = pd.to_datetime(df_var['PRIORSALEDATE'], errors='coerce')
+        df_var['SALEDATE'] = pd.to_datetime(df_var['SALEDATE'], errors='coerce')
+        df_var['PREVOWN_POSS_TIME (YRS)'] = (df_var['SALEDATE'] - df_var['PRIORSALEDATE']) / 365
+
+    update_bar.update(1)
+    return df_var
