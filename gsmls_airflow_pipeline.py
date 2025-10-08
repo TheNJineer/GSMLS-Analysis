@@ -123,7 +123,7 @@ def gsmls_pipeline(**kwargs):
                     logger_.info(f'Topic {topic} created in Apache Kafka topic list')
 
     # Task 2: Check the health of MongoDB Connection and if database exists
-    @task(task_id="check_mongo_connection")
+    @task(task_id="check_mongo_connection", multiple_outputs=True)
     def check_mongodb(client, db_name, table_name, logger):
 
         retries = 0
@@ -144,7 +144,7 @@ def gsmls_pipeline(**kwargs):
                     num_of_docs_ = database[table_name].count_documents({})
 
                     if conn_result is True and table_result is True:
-                        return True, database[table_name], num_of_docs_
+                        return {'mongo_status': True, 'mongo_col': database[table_name], 'num_of_docs': num_of_docs_}
 
                 except ConnectionFailure as cf:
                     logger.warning(f"{cf}")
@@ -271,16 +271,16 @@ def gsmls_pipeline(**kwargs):
         kafka_conn = check_kafka_connection(logger)
         create_kafka_topics("res_properties", status=kafka_conn, logger_=logger)
         mongo_client = create_mongodb_conn(remote=True)
-        mongo_status, mongo_col, num_of_docs = check_mongodb(
+        mongo_start_results = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
         )
         data_producer, image_producer, consumer = create_producer_consumer(logger)
         table_name, prop_count = get_postgresql_rows("res_properties")
 
         kwargs["kafka_status"] = kafka_conn
-        kwargs["mongo_status"] = mongo_status
+        kwargs["mongo_status"] = mongo_start_results['mongo_status']
         kwargs["postgres_count"] = prop_count
-        kwargs["mongo_count"] = num_of_docs
+        kwargs["mongo_count"] = mongo_start_results['num_of_docs']
         status_email(table_name, **kwargs)
 
     # with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
@@ -317,7 +317,7 @@ def gsmls_pipeline(**kwargs):
     #     mongo_consumer = PythonOperator(
     #         task_id="mongo_consumer",
     #         python_callable=airflow_image_consumer,
-    #         op_kwargs={"remote_client": mongo_col},
+    #         op_kwargs={"remote_client": mongo_start_results['mongo_col']},
     #     )
     #
     #     # ETL Pipeline dependencies
@@ -328,17 +328,17 @@ def gsmls_pipeline(**kwargs):
     #
     #     # Close KafkaProducer connection
     #     # Close KafkaConsumer connection
-    #     mongo_status, mongo_col, num_of_docs = check_mongodb(
+    #     mongo_end_results = check_mongodb(
     #         mongo_client, "realEstate", "propertyImages", logger
     #     )
     #     table_name, prop_count = get_postgresql_rows("res_properties")
-    #     mongo_col.close()
+    #     mongo_end_results['mongo_col'].close()
     #
     #     kwargs["phase"] = "Ending"
     #     kwargs["kafka_status"] = False
     #     kwargs["mongo_status"] = False
     #     kwargs["postgres_count"] = prop_count
-    #     kwargs["mongo_count"] = num_of_docs
+    #     kwargs["mongo_count"] = mongo_end_results['num_of_docs']
     #     status_email(table_name, **kwargs)
     #
     # # Total pipeline dependencies
