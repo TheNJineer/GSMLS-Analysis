@@ -13,7 +13,7 @@ from tqdm import tqdm
 from sqlalchemy import create_engine
 from collections import defaultdict
 from pymongo.errors import CursorNotFound
-from utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
+from plugins.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
 
 
 class RealEstateImages:
