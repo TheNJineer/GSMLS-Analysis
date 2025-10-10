@@ -1,5 +1,5 @@
 # Extend the official Airflow image
-FROM apache/airflow:3.0.4
+FROM apache/airflow:latest
 
 # Copy the DAG requirements
 COPY requirements.txt /requirements.txt
