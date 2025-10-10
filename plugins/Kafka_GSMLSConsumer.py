@@ -7,7 +7,7 @@ from tqdm import tqdm
 from sqlalchemy import create_engine
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
-from plugins.RealEstateImages import RealEstateImages
+from RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError
 
 
