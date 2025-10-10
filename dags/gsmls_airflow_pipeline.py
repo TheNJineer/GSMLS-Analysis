@@ -20,6 +20,10 @@ from plugins.GSMLS import GSMLS
 from plugins.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
 from plugins.RealEstateImages import RealEstateImages
 
+# That guarantees the DAG loader process can find the plugins module even if
+# Airflow ignores the PYTHONPATH
+sys.path.append(os.path.join(os.environ.get("AIRFLOW_HOME", "/opt/airflow"), "plugins"))
+
 # Define default args
 default_args = {
     "owner": "Jibreel Hameed",
