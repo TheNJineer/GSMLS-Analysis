@@ -12,7 +12,7 @@ import pandas as pd
 import sys, traceback
 import logging
 from dotenv import load_dotenv
-from plugins.utility_func import (
+from utility_func import (
     create_sql_engine,
     create_kafka_producer,
     create_selenium_webdriver,
@@ -22,7 +22,7 @@ from tqdm import tqdm
 from tqdm.auto import trange
 from datetime import datetime
 from datetime import timedelta
-from plugins.utility_func import logger_decorator, get_us_pw
+from utility_func import logger_decorator, get_us_pw
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
