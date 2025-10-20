@@ -72,7 +72,9 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     # yamllint enable rule:line-length
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
-    PYTHONPATH: /opt/airflow/dags:/opt/airflow/plugins
+    PYTHONPATH: /opt/airflow:/opt/airflow/dags:/opt/airflow/plugins
+  networks:
+    - airflow_network
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -95,6 +97,8 @@ services:
     ports:
       # Use the cloud VM’s public IP if deployed remotely for the local port
       - "5050:80"  # Exposes pgAdmin on http://localhost:5050
+    networks:
+      - airflow_network
     volumes:
       - pgadmin-user-data:/var/lib/pgadmin
 
@@ -107,11 +111,15 @@ services:
       - "8081:8081"
     environment:
       ME_CONFIG_BASICAUTH_ENABLED: true
+    networks:
+      - airflow_network
 
   # https://hub.docker.com/r/selenium/standalone-edge
   selenium-edge:
     image: selenium/standalone-edge:4.13.0
     container_name: selenium-edge
+    networks:
+      - airflow_network
     ports:
       - '4444:4444' # Selenium server
       - '7900:7900' # For viewing browser through VNC Server since container will run Selenium headless
@@ -128,6 +136,8 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
+    networks:
+      - airflow_network
     ports:
       # Use the cloud VM’s public IP if deployed remotely for the local port
       - '8080:8080'
@@ -150,6 +160,8 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
+    networks:
+      - airflow_network
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep -v grep | grep org.apache.spark.deploy.worker.Worker || exit 1"]
       interval: 30s
@@ -171,6 +183,8 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
 
   controller-2:
     image: apache/kafka:latest
@@ -183,6 +197,8 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
 
   controller-3:
     image: apache/kafka:latest
@@ -195,6 +211,8 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
 
   broker-1:
     image: apache/kafka:latest
@@ -211,6 +229,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
     volumes:
       - broker1-data:/var/lib/kafka/data
     depends_on:
@@ -239,6 +259,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9095,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
     volumes:
       - broker2-data:/var/lib/kafka/data
     depends_on:
@@ -267,6 +289,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - airflow_network
     volumes:
       - broker3-data:/var/lib/kafka/data
     depends_on:
@@ -286,6 +310,8 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
+    networks:
+      - airflow_network
     volumes:
       - postgres-airflow-volume:/var/lib/postgresql/data
     healthcheck:
@@ -299,6 +325,8 @@ services:
     # Redis is limited to 7.2-bookworm due to licencing change
     # https://redis.io/blog/redis-adopts-dual-source-available-licensing/
     image: redis:7.2-bookworm
+    networks:
+      - airflow_network
     expose:
       - 6379
     healthcheck:
@@ -308,6 +336,31 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+
+  airflow-debug:
+    <<: *airflow-common
+    profiles:
+      - debug
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      # Local directory for the pycharm_helpers
+      - /root/.cache/JetBrains/RemoteDev/dist/9c8c4d9f91629_pycharm-professional-2023.3.7/plugins/python/helpers:/opt/.pycharm_helpers
+      - ${AIRFLOW_PROJ_DIR:-.}:/opt/project
+      - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+      - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+      - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+      - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    user: "50000:0"
+    tty: true
+    entrypoint: [ ""]
+    command: ["sleep", "infinity"]
 
   airflow-apiserver:
     <<: *airflow-common
@@ -524,6 +577,11 @@ services:
       airflow-init:
         condition: service_completed_successfully
 # yamllint enable rules:line-length
+networks:
+  airflow_network:
+    name: airflow_network
+    driver: bridge
+
 volumes:
   postgres-airflow-volume:
   pgadmin-user-data:
