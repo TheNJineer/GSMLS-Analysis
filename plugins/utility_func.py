@@ -80,35 +80,28 @@ def create_kafka_producer(client_id, logger=None, remote=True):
 
 
 def create_mongodb_conn(remote=False):
-    # username, base_url, pw = RealEstateImages.get_us_pw('MongoDB')
+
+    mongo_conn_dict = {
+        'host': '',
+        'serverSelectionTimeoutMS': 5000,  # How long to wait when selecting a server (default 30s)
+        'maxPoolSize': 100,  # Limit concurrent connections in the pool
+        'waitQueueTimeoutMS': 5000,  # How long to wait for a free connection from pool
+        'retryWrites': True,  # Enable automatic retries for certain write operations
+        'retryReads': True,  # Enable automatic retries for certain read operations
+        'heartbeatFrequencyMS': 10000,  # How often to check MongoDB availability
+        'connect': True,  # Force connection on client creation (fail fast if bad config)
+    }
 
     # Create a MongoDB connection
     if remote is False:
-        connection = MongoClient(
-            "mongodb://localhost:27017/",
-            serverSelectionTimeoutMS=5000,  # How long to wait when selecting a server (default 30s)
-            maxPoolSize=100,  # Limit concurrent connections in the pool
-            waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
-            retryWrites=True,  # Enable automatic retries for certain write operations
-            retryReads=True,  # Enable automatic retries for certain read operations
-            heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
-            connect=True,  # Force connection on client creation (fail fast if bad config)
-        )
-    else:
-        load_dotenv()
-        connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
-        connection = MongoClient(
-            host=connection_str,
-            serverSelectionTimeoutMS=5000,  # How long to wait when selecting a server (default 30s)
-            maxPoolSize=100,  # Limit concurrent connections in the pool
-            waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
-            retryWrites=True,  # Enable automatic retries for certain write operations
-            retryReads=True,  # Enable automatic retries for certain read operations
-            heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
-            connect=True,  # Force connection on client creation (fail fast if bad config)
-        )
+        mongo_conn_dict['host'] = "mongodb://localhost:27017/"
 
-    return connection
+    else:
+        load_dotenv("/opt/airflow/.env")
+        connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
+        mongo_conn_dict['host'] = connection_str
+
+    return mongo_conn_dict
 
 
 def create_selenium_webdriver(remote=True):
@@ -117,7 +110,7 @@ def create_selenium_webdriver(remote=True):
 
     if remote is True:
         # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
-        load_dotenv()
+        load_dotenv("/opt/airflow/.env")
         ip_address = os.getenv("DIGITAL_OCEAN_IP")
         return webdriver.Remote(
             command_executor=f"http://{ip_address}:4444/wd/hub", options=options
@@ -147,7 +140,7 @@ def create_selenium_webdriver(remote=True):
 def create_sql_engine(database: str, remote=True):
 
     if remote is True:
-        load_dotenv()
+        load_dotenv("/opt/airflow/.env")
         connection_str = os.getenv("POSTGRES_AWS_CONN")
         engine = create_engine(
             f"postgresql+psycopg2://{connection_str}:5432/{database}"
