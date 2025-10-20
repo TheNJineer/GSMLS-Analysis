@@ -27,7 +27,7 @@ sys.path.append(os.path.join(os.environ.get("AIRFLOW_HOME", "/opt/airflow"), "pl
 # Define default args
 default_args = {
     "owner": "Jibreel Hameed",
-    "start_date": datetime(2025, 10, 8),
+    "start_date": datetime(2025, 10, 19),
     "retries": 3,
     "retry_delay": timedelta(minutes=5),
 }
@@ -127,7 +127,13 @@ def gsmls_pipeline(**kwargs):
 
                     logger_.info(f'Topic {topic} created in Apache Kafka topic list')
 
-    # Task 2: Check the health of MongoDB Connection and if database exists
+    # Task 2: Return the MongoDB connection
+    @task(task_id='return_mongo_connection')
+    def return_mongo_conn():
+
+        return create_mongodb_conn(remote=True)
+
+    # Task 3: Check the health of MongoDB Connection and if database exists
     @task(task_id="check_mongo_connection", multiple_outputs=True)
     def check_mongodb(client, db_name, table_name, logger):
 
@@ -275,7 +281,7 @@ def gsmls_pipeline(**kwargs):
         # Task Dependencies, throw error if any of these don't work?
         kafka_conn = check_kafka_connection(logger)
         create_kafka_topics("res_properties", status=kafka_conn, logger_=logger)
-        mongo_client = create_mongodb_conn(remote=True)
+        mongo_client = return_mongo_conn()
         mongo_start_results = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
         )
@@ -352,6 +358,4 @@ def gsmls_pipeline(**kwargs):
     start_pipeline >> ending_pipeline
 
 
-if __name__ == "__main__":
-
-    gsmls_pipeline()
+gsmls_pipeline()
