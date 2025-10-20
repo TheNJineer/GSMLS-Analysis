@@ -167,9 +167,9 @@ def logger_decorator(original_function):
 
         if not logger.handlers:
             # Create the FileHandler() and StreamHandler() loggers
-            # filepath = "F:\\Python 2.0\\Projects\\Real Life Projects\\Real Estate Analysis\\Logs"
-            # filepath = "C:\\Users\\jibreel.q.hameed.AC\\OneDrive - US Army\\DoD Python ML Projects\\Logs"
-            filepath = "/root/home/projects/logs"
+            if not os.path.exists("/opt/airflow/logs/logger_decorator"):
+                os.mkdir("/opt/airflow/logs/logger_decorator")
+            filepath = "/opt/airflow/logs/logger_decorator"
             log_filepath = os.path.join(
                 filepath,
                 original_function.__name__
