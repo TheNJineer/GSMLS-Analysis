@@ -66,33 +66,15 @@ def gsmls_pipeline(**kwargs):
     @task(task_id="check_kafka_connection")
     def check_kafka_connection(logger_):
 
-        # Make sure these brokers are created in the #Docker Compose yaml
-        brokers_ready = {1: False, 2: False, 3: False}
+        # Check if broker connects
+        test_producer = create_kafka_producer(client_id='test-connection')
 
-        admin_client = KafkaClient(
-            bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
-            client_id="health_check",
-        )
-        admin_client.poll(timeout_ms=1000)
-
-        # Step 1: Individual broker checks
-        while (brokers_ready[1] | brokers_ready[2] | brokers_ready[3]) is False:
-
-            for id_ in brokers_ready.keys():
-
-                conn_result = admin_client.is_ready(node_id=id_)
-                brokers_ready[id_] = conn_result
-
-            if list(brokers_ready.values()).count(True) < 3:
-                # Need this to be able to check if more than one node isn’t connected
-                unconnected_node = list(brokers_ready.values()).index(False)
-                logger_.info(
-                    f"Broker {unconnected_node} is not ready. Retrying connection"
-                )
+        if test_producer.bootstrap_connected() is True:
+            test_producer.close()
+            return True
 
         else:
-            admin_client.close()
-            return True
+            return False
 
     # Task 1a: Check if the correct topics have been created
     @task(task_id="create_topics")
