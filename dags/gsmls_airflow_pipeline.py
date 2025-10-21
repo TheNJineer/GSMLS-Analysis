@@ -1,6 +1,8 @@
 import time
 import json
 import sys
+
+import kafka.errors
 import pandas as pd
 import os
 from dotenv import load_dotenv
@@ -15,6 +17,7 @@ from kafka import KafkaClient
 from kafka.admin import NewTopic
 from kafka.structs import TopicPartition
 from kafka.admin.client import KafkaAdminClient
+from kafka.cluster import ClusterMetadata
 from pymongo.errors import ConnectionFailure
 from plugins.GSMLS import GSMLS
 from plugins.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
@@ -70,15 +73,43 @@ def gsmls_pipeline(**kwargs):
         test_producer = create_kafka_producer(client_id='test-connection')
 
         if test_producer.bootstrap_connected() is True:
+            logger_.info('Test connection to Kafka brokers was successful')
             test_producer.close()
             return True
 
         else:
             return False
 
+        # Make sure these brokers are created in the #Docker Compose yaml
+        # brokers_ready = {4: False, 5: False, 6: False}
+        #
+        # admin_client = KafkaClient(
+        #     bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
+        #     client_id="health_check",
+        # )
+        # admin_client.poll(timeout_ms=1000)
+        #
+        # # Step 1: Individual broker checks
+        # while list(brokers_ready.values()).count(True) < 2:
+        #
+        #     for id_ in brokers_ready.keys():
+        #         conn_result = admin_client.is_ready(node_id=id_)
+        #         brokers_ready[id_] = conn_result
+        #
+        #     if not list(brokers_ready.values()).count(True) >= 2:
+        #         # Need this to be able to check if more than one node isn’t connected
+        #         unconnected_node = list(brokers_ready.values()).index(False)
+        #         logger_.info(
+        #             f"Broker {unconnected_node} is not ready. Retrying connection"
+        #         )
+        #
+        # else:
+        #     admin_client.close()
+        #     return True
+
     # Task 1a: Check if the correct topics have been created
     @task(task_id="create_topics")
-    def create_kafka_topics(topic: str, status: bool, logger_):
+    def create_kafka_topics(logger_, topic: str = 'res_properties', status: bool = True):
 
         topic_list = ["prop_images", topic]
 
@@ -88,6 +119,7 @@ def gsmls_pipeline(**kwargs):
                 bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
                 client_id="check_topic",
             )
+
             available_topics = admin_client.list_topics()
 
             for t in topic_list:
@@ -98,16 +130,18 @@ def gsmls_pipeline(**kwargs):
                         name=topic,
                         num_partitions=3,
                         replication_factor=2,
-                        topic_configs={
-                            "cleanup.policy": "compact"
-                        },  # Look into what other configs I need
+                        topic_configs={"cleanup.policy": "compact"},  # Look into what other configs I need
                     )
+                    try:
+                        admin_client.create_topics(
+                            new_topics=[topic_obj], validate_only=False
+                        )
+                    except kafka.errors.TopicAlreadyExistsError:
+                        logger_.info(f'Topic {t} already exists')
+                    else:
+                        logger_.info(f'Topic {topic} created in Apache Kafka topic list')
 
-                    admin_client.create_topics(
-                        new_topics=[topic_obj], validate_only=False
-                    )
-
-                    logger_.info(f'Topic {topic} created in Apache Kafka topic list')
+            return admin_client.list_topics()
 
     # Task 2: Return the MongoDB connection
     @task(task_id='return_mongo_connection')
@@ -262,7 +296,8 @@ def gsmls_pipeline(**kwargs):
 
         # Task Dependencies, throw error if any of these don't work?
         kafka_conn = check_kafka_connection(logger)
-        create_kafka_topics("res_properties", status=kafka_conn, logger_=logger)
+        # _ = create_kafka_topics(logger, topic="res_properties", status=kafka_conn)
+        _ = create_kafka_topics(logger, topic="res_properties", status=True)
         mongo_client = return_mongo_conn()
         mongo_start_results = check_mongodb(
             mongo_client, "realEstate", "propertyImages", logger
