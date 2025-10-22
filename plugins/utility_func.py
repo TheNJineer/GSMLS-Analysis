@@ -140,11 +140,10 @@ def create_sql_engine(database: str, remote=True):
         load_dotenv("/opt/airflow/.env")
         connection_str = os.getenv("POSTGRES_AWS_CONN")
         engine = create_engine(
-            f"postgresql+psycopg2://{connection_str}:5432/{database}"
-        )
+            f"postgresql+psycopg2://{connection_str}:5432/{database}", echo=True, future=True)
     else:
         base, user, pw = get_us_pw("PostgreSQL")
-        engine = create_engine(f"postgresql://{user}:{pw}@{base}:5432/{database}")
+        engine = create_engine(f"postgresql://{user}:{pw}@{base}:5432/{database}", echo=True, future=True)
 
     return engine
 
