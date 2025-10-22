@@ -81,27 +81,24 @@ def create_kafka_producer(client_id, logger=None, remote=True):
 
 def create_mongodb_conn(remote=False):
 
-    mongo_conn_dict = {
-        'host': '',
-        'serverSelectionTimeoutMS': 5000,  # How long to wait when selecting a server (default 30s)
-        'maxPoolSize': 100,  # Limit concurrent connections in the pool
-        'waitQueueTimeoutMS': 5000,  # How long to wait for a free connection from pool
-        'retryWrites': True,  # Enable automatic retries for certain write operations
-        'retryReads': True,  # Enable automatic retries for certain read operations
-        'heartbeatFrequencyMS': 10000,  # How often to check MongoDB availability
-        'connect': True,  # Force connection on client creation (fail fast if bad config)
-    }
-
     # Create a MongoDB connection
     if remote is False:
-        mongo_conn_dict['host'] = "mongodb://localhost:27017/"
+        connection_str = "mongodb://localhost:27017/"
 
     else:
         load_dotenv("/opt/airflow/.env")
         connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
-        mongo_conn_dict['host'] = connection_str
 
-    return mongo_conn_dict
+    return MongoClient(
+            host=connection_str,
+            serverSelectionTimeoutMS=5000,  # How long to wait when selecting a server (default 30s)
+            maxPoolSize=100,  # Limit concurrent connections in the pool
+            waitQueueTimeoutMS=5000,  # How long to wait for a free connection from pool
+            retryWrites=True,  # Enable automatic retries for certain write operations
+            retryReads=True,  # Enable automatic retries for certain read operations
+            heartbeatFrequencyMS=10000,  # How often to check MongoDB availability
+            connect=True,  # Force connection on client creation (fail fast if bad config)
+        )
 
 
 def create_selenium_webdriver(remote=True):
