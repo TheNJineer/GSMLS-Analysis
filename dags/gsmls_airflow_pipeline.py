@@ -121,25 +121,26 @@ def gsmls_pipeline(**kwargs):
             )
 
             available_topics = admin_client.list_topics()
+            logger_.info(f'Current existing topics: {available_topics}')
 
             for t in topic_list:
 
-                if t not in available_topics:
+                try:
+                    if t not in available_topics:
 
-                    topic_obj = NewTopic(
-                        name=topic,
-                        num_partitions=3,
-                        replication_factor=2,
-                        topic_configs={"cleanup.policy": "compact"},  # Look into what other configs I need
-                    )
-                    try:
-                        admin_client.create_topics(
-                            new_topics=[topic_obj], validate_only=False
+                        topic_obj = NewTopic(
+                            name=t,
+                            num_partitions=3,
+                            replication_factor=2,
+                            topic_configs={"cleanup.policy": "compact"},  # Look into what other configs I need
                         )
-                    except kafka.errors.TopicAlreadyExistsError:
-                        logger_.info(f'Topic {t} already exists')
-                    else:
-                        logger_.info(f'Topic {topic} created in Apache Kafka topic list')
+                        admin_client.create_topics(
+                            new_topics=[topic_obj], validate_only=False, timeout_ms=1500
+                        )
+                except kafka.errors.TopicAlreadyExistsError:
+                    logger_.info(f'Topic {t} already exists')
+                else:
+                    logger_.info(f'Topic {t} created in Apache Kafka topic list')
 
             return admin_client.list_topics()
 
@@ -195,8 +196,10 @@ def gsmls_pipeline(**kwargs):
 
         query = f"SELECT COUNT(*) FROM {table_name_};"
 
-        with engine.connect() as connection:
-            df = pd.read_sql_query(query, con=connection)
+        # The version discrepancy between Pandas 2.x and SQLAlchemy 1.4.x forces
+        # the user to create a raw DBAPI connection which Pandas expects
+        # Throws AttributeError "Engine/Connection object has no .cursor() method"
+        df = pd.read_sql_query(query, con=engine.raw_connection())
 
         return {'table_name': table_name_, 'prop_count': int(df.loc[0].values[0])}
 
