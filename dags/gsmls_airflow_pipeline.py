@@ -143,42 +143,39 @@ def gsmls_pipeline(**kwargs):
 
             return admin_client.list_topics()
 
-    # Task 2: Return the MongoDB connection
-    @task(task_id='return_mongo_connection')
-    def return_mongo_conn():
-
-        return create_mongodb_conn(remote=True)
-
-    # Task 3: Check the health of MongoDB Connection and if database exists
+    # Task 2: Create and check the health of MongoDB Connection and if database exists
     @task(task_id="check_mongo_connection", multiple_outputs=True)
-    def check_mongodb(client, db_name, table_name, logger):
+    def check_mongodb(db_name, table_name, logger_):
 
         retries = 0
 
+        client = create_mongodb_conn(remote=True)
+
+        # Confirm connection to MongoDB Atlas
         while retries < 10:
 
             try:
-                conn_result = client.admin.command("ping")
+                client.admin.command({"ping": 1})
             except ConnectionFailure as cf:
-                logger.warning(f"{cf}")
-                time.sleep(3)
+                logger_.warning(f"{cf}")
+                time.sleep(1)
                 retries += 1
             else:
-
-                try:
-                    database = client[db_name]
-                    table_result = table_name in database.list_collection_names()
-                    num_of_docs_ = database[table_name].count_documents({})
-
-                    if conn_result is True and table_result is True:
-                        return {'mongo_status': True, 'mongo_col': database[table_name], 'num_of_docs': num_of_docs_}
-
-                except ConnectionFailure as cf:
-                    logger.warning(f"{cf}")
-                    raise ConnectionFailure(f"Table {table_name} does not exist")
+                logger_.info('MongoDB connection successful')
+                break
 
         else:
             raise ConnectionFailure(f"Table {table_name} does not exist")
+
+        # Collect database information
+        database = client[db_name]
+        table_result = table_name in database.list_collection_names()
+        num_of_docs_ = database[table_name].count_documents({})
+
+        if table_result is True:
+            return {'mongo_status': True, 'mongo_col': table_result, 'num_of_docs': num_of_docs_}
+        else:
+            return {'mongo_status': True, 'mongo_col': table_result, 'num_of_docs': num_of_docs_}
 
     # Task 3: Create Kafka Producer and Consumer
     @task(task_id="create_producer_consumer", multiple_outputs=True)
@@ -198,7 +195,8 @@ def gsmls_pipeline(**kwargs):
 
         query = f"SELECT COUNT(*) FROM {table_name_};"
 
-        df = pd.read_sql(query, engine)
+        with engine.connect() as connection:
+            df = pd.read_sql_query(query, con=connection)
 
         return {'table_name': table_name_, 'prop_count': int(df.loc[0].values[0])}
 
@@ -298,11 +296,8 @@ def gsmls_pipeline(**kwargs):
         kafka_conn = check_kafka_connection(logger)
         # _ = create_kafka_topics(logger, topic="res_properties", status=kafka_conn)
         _ = create_kafka_topics(logger, topic="res_properties", status=True)
-        mongo_client = return_mongo_conn()
-        mongo_start_results = check_mongodb(
-            mongo_client, "realEstate", "propertyImages", logger
-        )
-        kafka_objects = create_producer_consumer(logger)
+        mongo_start_results = check_mongodb("realEstate-cloud", "propertyImages", logger)
+        # kafka_objects = create_producer_consumer(logger)
         postgresql_results1 = get_postgresql_rows("res_properties")
 
         kwargs["kafka_status"] = kafka_conn
@@ -357,9 +352,7 @@ def gsmls_pipeline(**kwargs):
 
         # Close KafkaProducer connection
         # Close KafkaConsumer connection
-        mongo_end_results = check_mongodb(
-            mongo_client, "realEstate", "propertyImages", logger
-        )
+        mongo_end_results = check_mongodb("realEstate", "propertyImages", logger)
         postgresql_results2 = get_postgresql_rows("res_properties")
         # mongo_end_results['mongo_col'].close()
 
