@@ -1,7 +1,6 @@
 import time
 import json
 import sys
-
 import kafka.errors
 import pandas as pd
 import os
@@ -30,8 +29,11 @@ sys.path.append(os.path.join(os.environ.get("AIRFLOW_HOME", "/opt/airflow"), "pl
 # Define default args
 default_args = {
     "owner": "Jibreel Hameed",
+    "email": ['jqhameed@gmail.com'],
+    "email_on_failure": True,
+    "email_on_retry": True,
     "start_date": datetime(2025, 10, 19),
-    "retries": 3,
+    "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -174,9 +176,11 @@ def gsmls_pipeline(**kwargs):
         num_of_docs_ = database[table_name].count_documents({})
 
         if table_result is True:
-            return {'mongo_status': True, 'mongo_col': table_result, 'num_of_docs': num_of_docs_}
+            return {'mongo_status': 'Connected', 'table_name': table_name,
+                    'mongo_col': table_result, 'num_of_docs': num_of_docs_}
         else:
-            return {'mongo_status': True, 'mongo_col': table_result, 'num_of_docs': num_of_docs_}
+            return {'mongo_status': 'Connected', 'table_name': table_name,
+                    'mongo_col': table_result, 'num_of_docs': num_of_docs_}
 
     # Task 3: Create Kafka Producer and Consumer
     @task(task_id="create_producer_consumer", multiple_outputs=True)
@@ -205,46 +209,63 @@ def gsmls_pipeline(**kwargs):
 
     # Task 5: Send pipeline initiation email
     @task(task_id="send_status_email")
-    def status_email(table_name_, phase: str = "Starting", **kwargs_):
+    def status_email(postgres_results, mongo_results, phase: str = "Starting"):
 
         # https://airflow.apache.org/docs/apache-airflow/stable/tutorial/taskflow.html
+        postgres_table_name = postgres_results['table_name']
+        mongo_table_name = mongo_results['table_name']
+        mongo_status_ = mongo_results["mongo_status"]
+        postgres_count = postgres_results["prop_count"]
+        mongo_count = mongo_results["num_of_docs"]
+        mongo_table_exists = mongo_results['mongo_col']
 
-        kafka_status = kwargs_["kafka_status"]
-        mongo_status_ = kwargs_["mongo_status"]
-        postgres_count = kwargs_["postgres_count"]
-        mongo_count = kwargs_["mongo_count"]
+        property_types = {
+            "res_properties": "RES",
+            "mul_properties": "MUL",
+            "lnd_properties": "LND",
+            "rnt_properties": "RNT",
+            "tax_properties": "TAX",
+
+        }
 
         if phase == "Starting":
             ip_address = os.getenv("DIGITAL_OCEAN_IP")
             subject = "GSMLS Pipeline Has Started"
             message = f"""
-                        start_time: {datetime.now()}
-                        target_properties: {table_name_}
-                        kafka_status: {kafka_status}
-                        mongo_status: {mongo_status_}
-                        postgres_count: {postgres_count}
-                        mongo_count: {mongo_count}
+                        <br>
+				        <b>Execution Date</b>: {{{{ ds }}}}<br>
+				        <b>Pipeline Start Time</b>: {datetime.now()}<br>
+				        <b>Kafka Connection Status</b>: Connected<br>
+				        <b>MongoDB Collection Exists</b>: {mongo_table_exists}<br>
+				        <b>MongoDB Connection Status</b>: {mongo_status_}<br>
+				        <b>MongoDB Document Count</b>: {mongo_count}<br>
+				        <b>MongoDB Table Name</b>: {mongo_table_name}<br>
+                        <b>Postgres Row Count</b>: {postgres_count}<br>
+                        <b>Postgres Table Name</b>: {postgres_table_name}<br>
+                        <b>Property Type</b>: {property_types[postgres_table_name]}<br><br>
                         
-                        You can view the status and progress of your pipeline from the following ports:
-                        - Airflow: http://{ip_address}:8085 → Airflow UI
-                        - Spark: http://{ip_address}:8080 → Spark UI
-                        - Mongo Express: http://{ip_address}:8081 → MongoDB Web Based UI
-                        - pgAdmin: http://{ip_address}:5050 → PostgresSQL Web Based UI
-                        - Selenium Browser: http://{ip_address}:7900 → Install VNC viewer for OS to view browser
+                        You can view the status and progress of your pipeline from the following ports:<br>
+                        -- <b>Airflow UI</b>: http://{ip_address}:8085<br>
+                        -- <b>Spark UI</b>: http://{ip_address}:8080<br>
+                        -- <b>MongoDB UI</b>: http://{ip_address}:8081 (Mongo Express)<br>
+                        -- <b>PostgreSQL UI</b>: http://{ip_address}:5050 (pgAdmin)<br>
+                        -- <b>Selenium UI</b>: http://{ip_address}:7900 (Install VNC viewer for OS to view browser)<br>
                     """
         else:
 
             subject = "GSMLS Pipeline Has Finished"
             message = f"""
-                        end_time: {datetime.now()}
-                        target_properties: {table_name_}
-                        kafka_status: {kafka_status}
-                        mongo_status: {mongo_status_}
-                        postgres_count: {postgres_count}
-                        mongo_count: {mongo_count}
+                        <br>
+                        <b>Pipeline End Time</b>: {datetime.now()}<br>
+                        <b>Kafka Connection Status</b>: Closed<br>
+                        <b>MongoDB Connection Status</b>: Closed<br>
+                        <b>MongoDB Document Count</b>: {mongo_count}<br>
+                        <b>Postgres Table Name</b>: {postgres_table_name}<br>
+                        <b>Property Type</b>: {property_types[postgres_table_name]}<br>
+                        <b>Postgres Row Count</b>: {postgres_count}<br><br>
                     """
 
-        send_email(to="jqhholdingsllc@gmail.com", subject=subject, html_content=message)
+        send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
 
     # Task 6: Create Kafka message sensor
     @task.sensor(poke_interval=300, timeout=3600, mode="reschedule")
@@ -297,17 +318,11 @@ def gsmls_pipeline(**kwargs):
 
         # Task Dependencies, throw error if any of these don't work?
         kafka_conn = check_kafka_connection(logger)
-        # _ = create_kafka_topics(logger, topic="res_properties", status=kafka_conn)
-        _ = create_kafka_topics(logger, topic="res_properties", status=True)
+        _ = create_kafka_topics(logger, topic="res_properties", status=kafka_conn)
         mongo_start_results = check_mongodb("realEstate-cloud", "propertyImages", logger)
         # kafka_objects = create_producer_consumer(logger)
         postgresql_results1 = get_postgresql_rows("res_properties")
-
-        kwargs["kafka_status"] = kafka_conn
-        kwargs["mongo_status"] = mongo_start_results['mongo_status']
-        kwargs["postgres_count"] = postgresql_results1['prop_count']
-        kwargs["mongo_count"] = mongo_start_results['num_of_docs']
-        status_email(postgresql_results1['table_name'], **kwargs)
+        status_email(postgresql_results1, mongo_start_results)
 
     # with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
     #     # Make sure to create function or have existing functions return the objects
@@ -353,18 +368,9 @@ def gsmls_pipeline(**kwargs):
     #
     with TaskGroup(group_id="ending_pipeline") as ending_pipeline:
 
-        # Close KafkaProducer connection
-        # Close KafkaConsumer connection
         mongo_end_results = check_mongodb("realEstate", "propertyImages", logger)
         postgresql_results2 = get_postgresql_rows("res_properties")
-        # mongo_end_results['mongo_col'].close()
-
-        kwargs["phase"] = "Ending"
-        kwargs["kafka_status"] = False
-        kwargs["mongo_status"] = False
-        kwargs["postgres_count"] = postgresql_results2['prop_count']
-        kwargs["mongo_count"] = mongo_end_results['num_of_docs']
-        status_email(postgresql_results2['table_name'], **kwargs)
+        status_email(postgresql_results2, mongo_end_results, phase='Ending')
     #
     # Total pipeline dependencies
     # start_pipeline >> etl_pipeline >> ending_pipeline
