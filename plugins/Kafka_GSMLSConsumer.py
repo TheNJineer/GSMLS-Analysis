@@ -1,10 +1,9 @@
 import os
-from kafka import KafkaConsumer, KafkaProducer
 import json
 import pandas as pd
 import re
 from tqdm import tqdm
-from sqlalchemy import create_engine
+from utility_func import create_sql_engine, create_kafka_producer, create_kafka_consumer
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from RealEstateImages import RealEstateImages
@@ -13,16 +12,17 @@ from sqlalchemy.exc import DataError
 
 class KafkaGSMLSConsumer:
 
-    def __init__(self, connection, producer_):
-        self.connection = connection
-        self.producer = producer_
+    def __init__(self):
+        self.connection = create_sql_engine('gsmls', True)
+        self.producer = create_kafka_producer(client_id="data_producer")
+        self.consumer = create_kafka_consumer("data_consumer", "data_consumer")
         self.prop_dict = {
-            'RES': {'topic':'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
-            # 'MUL': {'topic':'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
-            # 'LND': {'topic':'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
-            # 'RNT': {'topic':'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
-            # 'TAX': {'topic':'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
-            'IMAGES': {'topic':'prop_images', 'functions': 0, 'clean_type': None},
+            'RES': {'topic': 'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
+            'MUL': {'topic': 'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
+            'LND': {'topic': 'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
+            'RNT': {'topic': 'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
+            'TAX': {'topic': 'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
+            'IMAGES': {'topic': 'prop_images', 'functions': 0, 'clean_type': None},
         }
 
     @staticmethod
@@ -39,7 +39,6 @@ class KafkaGSMLSConsumer:
                     df_var.loc[idx, 'BATHSTOTAL'] = row['BATHSFULLTOTAL']
 
         return df_var
-
 
     @staticmethod
     def calculate_dates(df_var, prop_type, update_bar):
@@ -136,8 +135,6 @@ class KafkaGSMLSConsumer:
 
         os.chdir(current_wd_)
 
-
-
     @staticmethod
     def combine_listing_remarks(df_var, update_bar):
 
@@ -147,8 +144,7 @@ class KafkaGSMLSConsumer:
         update_bar.update(1)
         return df_var
 
-    @staticmethod
-    def consume_data(consumer):
+    def consume_data(self):
 
         df_list = []
         empty_data = 0
@@ -159,7 +155,7 @@ class KafkaGSMLSConsumer:
         while data_available:
 
             try:
-                new_data = consumer.poll(max_records=100, timeout_ms=5000)
+                new_data = self.consumer.poll(max_records=100, timeout_ms=5000)
 
                 if not new_data:
                     empty_data += 1
@@ -195,13 +191,13 @@ class KafkaGSMLSConsumer:
         df = pd.concat(df_list)
 
         if 'LISTDATE' in list(df.columns):
-            consumer.commit()
+            self.consumer.commit()
             return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'LISTDATE'],
                                       keep='last').reset_index(drop=True)
 
         elif 'RP/LP%' in list(df.columns):
             try:
-                consumer.commit()
+                self.consumer.commit()
                 return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
                                       keep='last').reset_index(drop=True)
             except KeyError:
@@ -210,11 +206,11 @@ class KafkaGSMLSConsumer:
                                           keep='last').reset_index(drop=True)
 
         elif 'AUTOROW' in list(df.columns):
-            consumer.commit()
+            self.consumer.commit()
             return df.drop_duplicates(subset=['AUTOROW'], keep='last').reset_index(drop=True)
 
         else:
-            consumer.commit()
+            self.consumer.commit()
             return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN',], keep='last').reset_index(drop=True)
 
     @staticmethod
@@ -242,12 +238,13 @@ class KafkaGSMLSConsumer:
         return df_var
 
     @staticmethod
-    def create_consumer():
+    def create_final_df(df, prop_type, clean_type, cleaning_bar):
 
-        return KafkaConsumer(client_id='residential_consumer', group_id='residential_consumer',
-                             bootstrap_servers=['broker-1:9092', 'broker-2:9092', 'broker-3:9092'],
-                             auto_offset_reset='earliest', enable_auto_commit=False,
-                             value_deserializer=lambda v: v.decode('utf-8'), consumer_timeout_ms=120000)
+        if prop_type != 'IMAGES':
+            return df.pipe(clean_type, prop_type=prop_type, update_bar=cleaning_bar)
+
+        else:
+            return df
 
     @staticmethod
     def drop_columns(df_var, prop_type, update_bar):
@@ -1224,16 +1221,18 @@ class KafkaGSMLSConsumer:
 
             slice_df = df_var[row:row + step]
 
-            if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
-                final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns, prop_type=prop_type, update_bar=cleaning_bar)
+            with self.connection.raw_connection() as connection:
+
                 try:
-                    final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
-                except DataError:
-                    print(f'DataError has been detected in Block {idx}. Now submitting data by individual row...')
-                    self.submit2sql_dataerror(final_df, topic)
-            else:
-                try:
-                    slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                    # Employs drop column for the following property data types
+                    if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
+                        final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
+                                                 prop_type=prop_type, update_bar=cleaning_bar)
+                        final_df.to_sql(topic, con=connection, if_exists='append', index=False)
+
+                    else:
+                        # Only use for prop_type == 'TAX'
+                        slice_df.to_sql(topic, con=connection, if_exists='append', index=False)
                 except DataError:
                     print(f'DataError has been detected in Block {idx}. Now submitting data by individual row...')
                     self.submit2sql_dataerror(slice_df, topic)
@@ -1251,67 +1250,55 @@ class KafkaGSMLSConsumer:
 
         for idx, row in df_var.iterrows():
 
-            temp_df = pd.DataFrame(data=row.values.reshape(1,-1), index=[idx], columns=row.index)
+            temp_df = pd.DataFrame(data=row.values.reshape(1, -1), index=[idx], columns=row.index)
 
-            try:
-                temp_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
-            except DataError as de:
-                print(f'A DataError has occurred: {de}')
-                continue
+            with self.connection.raw_connection() as connection:
+                try:
+                    temp_df.to_sql(topic, con=connection, if_exists='append', index=False)
+                except DataError as de:
+                    print(f'A DataError has occurred: {de}')
+                    continue
 
-    def main(self, remote_consumer=None):
+    def submit_data(self, df, prop, table, cleaning_bar):
 
-        if remote_consumer is None:
-            data_consumer = KafkaGSMLSConsumer.create_consumer()
+        if prop != 'IMAGES':
+            # Produce image data to Kafka topic and relational data to SQL
+            if prop in ['RES', 'MUL', 'RNT']:
+                self.produce_images(df, prop)
+
+            self.submit2sql(df, table, prop, cleaning_bar)
+
         else:
-            data_consumer = remote_consumer
+            # Produce image data to MongoDB
+            RealEstateImages(df).main()
+            print(f"{table} images have successfully been stored in MongoDB")
 
-        topics_bar = tqdm(total=len(self.prop_dict.keys()), desc='Topics', colour='red')
+    def main(self, prop, retry=False):
 
-        for prop_type, topic_data in self.prop_dict.items():
+        for prop_type, topic_data in zip(prop, self.prop_dict[prop]):
             # Using the subscribe method instead of directly assigning a topic so Kafka can
             # handle the re-balancing of partitions for me
-            data_consumer.subscribe([topic_data['topic']])
             cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
-            temp_df = KafkaGSMLSConsumer.consume_data(data_consumer)
-            KafkaGSMLSConsumer.checkpoint(temp_df,topic_data['topic'])
-            # temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
-            if prop_type != 'IMAGES':
-                final_df = temp_df.pipe(topic_data['clean_type'], prop_type=prop_type, update_bar=cleaning_bar)
-
+            if retry is False:
+                self.consumer.subscribe([topic_data['topic']])
+                temp_df = self.consume_data()
+                KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
             else:
-                final_df = temp_df
+                temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
-            if prop_type != 'IMAGES':
+            final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop_type, topic_data['clean_type'], cleaning_bar)
+            self.submit_data(final_df, prop_type, topic_data['topic'], cleaning_bar)
 
-                if prop_type in ['RES', 'MUL', 'RNT']:
-                    self.produce_images(final_df, prop_type)
-
-                self.submit2sql(final_df, topic_data['topic'], prop_type, cleaning_bar)
-
-            else:
-                RealEstateImages(final_df).main()
-                print(f"{topic_data['topic']} has successfully been stored in MongoDB")
-
-            topics_bar.update(1)
-
-        data_consumer.close()
+        self.consumer.close()
         print('Data consumption is finished')
 
 
 if __name__ == '__main__':
 
-    engine = create_engine(f"postgresql+psycopg2://postgres:Xy14RNw02SmD@database-1.chuq28s6itob.us-east-2.rds.amazonaws.com:5432/gsmls")
-
     current_wd = os.getcwd()
     os.chdir('F:\\Real Estate Investing\\Kafka_Data_Backups')
 
-    producer = KafkaProducer(bootstrap_servers='localhost:9092',
-                             value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                             retries=3, acks='all')
-
-    with engine.connect() as conn:
-        obj = KafkaGSMLSConsumer(conn, producer)
-        obj.main()
+    obj = KafkaGSMLSConsumer()
+    obj.main('RES')
     os.chdir(current_wd)
