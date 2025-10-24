@@ -18,17 +18,11 @@ from utility_func import logger_decorator, create_sql_engine, create_mongodb_con
 
 class RealEstateImages:
 
-    def __init__(
-        self, db_name="realEstate", col_name="propertyImages", remote=True, df_var=None
-    ):
-        self.remote = remote
+    def __init__(self, db_name="realEstate", col_name="propertyImages", remote=True, df_var=None):
         self.db_name = db_name
         self.col_name = col_name
         self.sql_conn = create_sql_engine("nj_tax_assessor", remote=remote)
-        if self.remote is False:
-            self.mongo_db_conn = create_mongodb_conn()
-        else:
-            self.mongo_db_conn = None
+        self.mongo_db_conn = create_mongodb_conn(remote=remote)
         self.database = self.check_for_database()
         self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
@@ -837,38 +831,16 @@ class RealEstateImages:
             if record.get("Images_Downloaded") is None:
                 table.update_one(query_filter, outer_update_operation)
 
-    def main(self, remote_client=None):
+    def main(self):
         """
         Stores real estate property image data from a Pandas dataframe
         :return:
         """
 
-        if remote_client is None:
-            # Check if the database exists. If it doesn't, create it
-            db_name = "realEstate"
-            database = RealEstateImages.check_for_database(db_name, self.mongo_db_conn)
-
-            # Check if a collection (table) exists. If it doesn't, create it
-            col_name = "propertyImages"
-            table = RealEstateImages.check_for_collection(col_name, database)
-        else:
-            table = remote_client
-
         # Include a column for Property Style. Some messages won't have this data available so set to "Unknown"
-        target_columns = [
-            "MLSNum",
-            "ListDate",
-            "Address",
-            "Town",
-            "State",
-            "Zipcode",
-            "CountyCode",
-            "BlockID",
-            "LotID",
-            "Condition",
-            "Prop_Style",
-            "Images",
-        ]
+        target_columns = ["MLSNum", "ListDate", "Address", "Town",
+                          "State", "Zipcode", "CountyCode", "BlockID",
+                          "LotID", "Condition", "Prop_Style","Images"]
         image_pattern = re.compile(
             r"'(\d{1,5}(?:-\d{1,5}|-\w)?(?: )?(?:\w\.)? [\w+ ]*(?:\.)?, [\w+ ]*(?:\.)? - [\w+ ,&.\/!-]* - \d{0,3})': '(https:\/\/img\.gsmls\.com\/imagedb\/highres\/a\/\d{1,3}\/\d{1,15}(?:_\d{1,3})?\.jpg)'"
         )
@@ -994,7 +966,7 @@ class RealEstateImages:
                 else:
                     property_data[col] = target_row[col.upper()]
 
-            table.insert_one(dict(property_data))
+            self.collection.insert_one(dict(property_data))
             # del property_data
 
 
