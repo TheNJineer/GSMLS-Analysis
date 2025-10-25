@@ -43,7 +43,7 @@ from kafka.errors import MessageSizeTooLargeError
 class GSMLS:
 
     def __init__(self, remote=True, timeframe="current"):
-        load_dotenv()
+        load_dotenv("/opt/airflow/.env")
         self.remote = remote
         self.counties = {}
         self.municipalities = {}
@@ -2055,8 +2055,72 @@ class GSMLS:
             )
             yes_button.click()
 
+    def login_load_main_page(self, driver_var, **kwargs):
+        self.login("GSMLS", driver_var)
+        GSMLS.explicit_page_load("Garden State MLS", driver_var)
+        kwargs["Main_Window"] = driver_var.current_window_handle
+
+    def scrape_state_data(self, driver_var):
+
+        if self.municipalities == {}:
+            page_results = driver_var.page_source
+            GSMLS.page_search(2, page_results, driver_var)
+            time.sleep(2)  # Build-in latency to let the page load
+
+            # Scrape all the county and municipality targets
+            self.create_state_dictionary(driver_var)
+
+        page_results = driver_var.page_source
+        GSMLS.page_search(1, page_results, driver_var)
+        GSMLS.explicit_page_load("Advanced Search", driver_var)
+
+    def value_generator(self, key_name, update_bar, values=None):
+
+        instance_key_values = {
+            'year': self.last_scraped_year,
+            'property_type': self.last_scraped_property_type,
+            'county': self.last_scraped_county,
+            'municipality': self.last_scraped_muni
+        }
+        metadata_value = instance_key_values[key_name]
+
+        if key_name == 'county':
+            values = self.municipalities
+
+        if key_name in ['county', 'municipalities']:
+
+            for key, value_ in values.items():
+                if metadata_value is not None:
+                    if key_name == 'municipality':
+                        target = value_
+                    else:
+                        target = key
+                    if target != metadata_value:
+                        update_bar.update(1)
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        instance_key_values[key_name] = None
+                        break
+
+                yield key, value_
+
+        else:
+
+            for key, in values:
+                if metadata_value is not None:
+                    if key != metadata_value:
+                        update_bar.update(1)
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        instance_key_values[key_name] = None
+                        break
+
+                yield key
+
     @logger_decorator
-    def main(self, driver_var=None, **kwargs):
+    def main(self, driver_var, **kwargs):
 
         # Remove the logger decorator and just accept **kwargs
         logger = kwargs["logger"]
@@ -2069,9 +2133,7 @@ class GSMLS:
 
         try:
             # Step 1: Login to the GSMLS
-            GSMLS.login("GSMLS", driver_var)
-            GSMLS.explicit_page_load("Garden State MLS", driver_var)
-            kwargs["Main_Window"] = driver_var.current_window_handle
+            self.login_load_main_page(driver_var, **kwargs)
 
             # Step 2: Choose the property search type
             page_results = driver_var.page_source
