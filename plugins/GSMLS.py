@@ -2126,27 +2126,15 @@ class GSMLS:
         logger = kwargs["logger"]
         f_handler = kwargs["f_handler"]
         c_handler = kwargs["c_handler"]
-        if self.remote is not True:
-            kwargs["data-producer"] = create_kafka_producer(
-                "data_producer", logger=logger, remote=False
-            )
+        kwargs["data-producer"] = create_kafka_producer("data_producer", logger=logger, remote=True)
 
         try:
             # Step 1: Login to the GSMLS
             self.login_load_main_page(driver_var, **kwargs)
 
-            # Step 2: Choose the property search type
-            page_results = driver_var.page_source
-            if self.municipalities == {}:
-                GSMLS.page_search(2, page_results, driver_var)
-                time.sleep(2)  # Build-in latency to let the page load
-
-                # Step 3: Scrape all the county and municipality targets
-                self.create_state_dictionary(driver_var)
-                page_results = driver_var.page_source
-
-            GSMLS.page_search(1, page_results, driver_var)
-            GSMLS.explicit_page_load("Advanced Search", driver_var)
+            # Step 2: Scrape the county and municipality data
+            # Choose the property search type
+            self.scrape_state_data(driver_var)
 
             # Step 4: Create the time periods for which to search for data
             years = range(1995, datetime.now().year + 1)
