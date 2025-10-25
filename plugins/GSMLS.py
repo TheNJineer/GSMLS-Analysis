@@ -2136,27 +2136,14 @@ class GSMLS:
             # Choose the property search type
             self.scrape_state_data(driver_var)
 
-            # Step 4: Create the time periods for which to search for data
+            # Step 3: Create the time periods for which to search for data
             years = range(1995, datetime.now().year + 1)
             with tqdm(total=len(years), desc="Years", colour="red") as year_bar:
-                for year in years:
-
-                    # Ensure that the program doesn't progress into peak hours
-                    # assert datetime.now().hour < 6, 'Peak hours approaching. Ending program...'
-
-                    if self.last_scraped_year is not None:
-                        if year == self.last_scraped_year:
-                            self.last_scraped_year = None
-                        elif year < self.last_scraped_year:
-                            year_bar.update(1)
-                            time.sleep(0.2)
-                            continue
+                for year in self.value_generator('year', year_bar, years):
 
                     time_periods = self.assign_timeframe(year)
 
-                    with tqdm(
-                        total=len(time_periods), desc="Qtr", colour="blue", position=1
-                    ) as quarters_bar:
+                    with tqdm(total=len(time_periods), desc="Qtr", colour="blue", position=1) as quarters_bar:
                         for qtr, date_range in time_periods.items():
 
                             kwargs["Qtr"] = qtr
