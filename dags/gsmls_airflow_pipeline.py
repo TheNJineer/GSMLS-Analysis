@@ -9,7 +9,7 @@ from datetime import datetime
 from datetime import timedelta
 from airflow.sdk import task, dag, TaskGroup
 from airflow.utils.email import send_email
-from airflow.providers.standard.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator, ShortCircuitOperator
 from airflow.providers.standard.sensors.python import PythonSensor
 from kafka.admin import NewTopic
 from kafka.structs import TopicPartition
@@ -35,6 +35,73 @@ def airflow_image_consumer(prop_type='IMAGES', retry=False):
 
     img_consumer = KafkaGSMLSConsumer()
     img_consumer.main(prop_type, retry)
+
+
+def condition_function(value):
+
+    if value == 'complete':
+        return False
+    else:
+        return True
+
+
+def starting_point():
+
+    prop_type_dict = {
+        'RES': 'res_properties',
+        'MUL': 'mul_properties',
+        'LND': 'lnd_properties',
+        'RNT': 'rnt_properties',
+        'TAX': 'tax_properties'
+    }
+
+    query = """
+            SELECT * FROM gsmls_event_log_new
+            ORDER BY id DESC
+            LIMIT 1;
+            """
+
+    engine = create_sql_engine("gsmls", remote=True)
+    metadata = pd.read_sql_query(query, con=engine.raw_connection())
+    last_row = metadata.shape[0] - 1
+
+    if metadata.empty:
+
+        for prop_type, topic in prop_type_dict.items():
+            yield prop_type, topic
+
+    else:
+        start_date = metadata.loc[last_row, "start_date"]
+        last_scraped_county = metadata.loc[last_row, "county"]
+        last_scraped_muni = metadata.loc[last_row, "municipality"]
+        finished = metadata.loc[last_row, "finished"]
+        last_scraped_property_type = metadata.loc[last_row, "property_type"]
+        index_num = list(prop_type_dict.keys()).index(last_scraped_property_type)
+        modified_prop_list = list(prop_type_dict.keys())[index_num:]
+        modified_topic_list = list(prop_type_dict.values())[index_num:]
+
+        for prop_type, topic in zip(modified_prop_list, modified_topic_list):
+            # All data for the last property type was acquired
+            if (last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes"
+                    and last_scraped_property_type != 'TAX'):
+                try:
+                    if start_date < datetime.now() - timedelta(days=1):
+                        yield prop_type, topic
+                    else:
+                        if last_scraped_property_type == 'TAX':
+                            yield 'complete', 'complete'
+                        else:
+                            # Return the next property in the list
+                            continue
+                except TypeError:
+                    yield prop_type, topic
+
+            elif (last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes"
+                    and last_scraped_property_type == 'TAX'):
+                return 'complete', 'complete'
+
+            else:
+                return prop_type, topic
 
 
 def new_msgs_available(topic, logger_):
@@ -81,10 +148,11 @@ def new_msgs_available(topic, logger_):
 
 
 @task(task_id="gsmls_producer")
-def airflow_gsmls_producer(prop_type):
+def airflow_gsmls_producer(prop_type, **kwargs):
 
-    obj = GSMLS()
-    obj.airflow_gsmls_producer(prop_type)
+    obj = GSMLS(prop_type)
+    kwargs['property_type'] = prop_type
+    obj.airflow_gsmls_producer(**kwargs)
 
 
 # Task 1: Check the health of Apache Kafka #Connection
@@ -305,18 +373,17 @@ def gsmls_pipeline(**kwargs):
 
     load_dotenv()
     logger = kwargs["logger"]
+    previous_group = None
 
-    prop_type_dict = {
-        'RES': 'res_properties',
-        'MUL': 'mul_properties',
-        'LND': 'lnd_properties',
-        'RNT': 'rnt_properties',
-        'TAX': 'tax_properties'
-    }
+    for prop_type, topic in starting_point():
 
-    for prop_type, topic in prop_type_dict.items():
+        short_circuit = ShortCircuitOperator(
+            task_id=f'short_circuit_{prop_type.lower()}',
+            python_callable=condition_function,
+            op_kwargs={'value': prop_type}
+        )
 
-        with TaskGroup(group_id="start_pipeline") as start_pipeline:
+        with TaskGroup(group_id=f"start_pipeline_{prop_type.lower()}") as start_pipeline:
 
             # Check the Kafka connection
             kafka_conn = check_kafka_connection(logger)
@@ -326,7 +393,7 @@ def gsmls_pipeline(**kwargs):
             postgresql_results1 = get_postgresql_rows(topic)
             status_email(postgresql_results1, mongo_start_results)
 
-        with TaskGroup(group_id="etl_pipeline") as etl_pipeline:
+        with TaskGroup(group_id=f"etl_pipeline_{prop_type.lower()}") as etl_pipeline:
             # Update so table_name and prop type isn't hard-coded
             # Task 5: Start the GSMLS message production
             airflow_gsmls_producer(prop_type)
@@ -342,7 +409,7 @@ def gsmls_pipeline(**kwargs):
             )
 
             kafka_img_sensor = PythonSensor(
-                task_id="kafka_image_sensor",
+                task_id=f"kafka_image_sensor_{prop_type.lower()}",
                 python_callable=new_msgs_available,
                 op_kwargs={'topic': 'prop_images', 'logger_': logger},
                 poke_interval=300,
@@ -352,12 +419,12 @@ def gsmls_pipeline(**kwargs):
 
             # Task 6: Start the GSMLS consumer and MongoDB consumer
             gsmls_consumer = PythonOperator(
-                task_id="gsmls_consumer",
+                task_id=f"gsmls_consumer_{prop_type.lower()}",
                 python_callable=airflow_data_consumer,
                 op_kwargs={"prop_type": prop_type, "retry": False})
     
             image_consumer = PythonOperator(
-                task_id="image_consumer",
+                task_id=f"image_consumer_{prop_type.lower()}",
                 python_callable=airflow_image_consumer,
                 op_kwargs={"retry": False})
 
@@ -365,14 +432,20 @@ def gsmls_pipeline(**kwargs):
             kafka_msg_sensor >> gsmls_consumer
             kafka_img_sensor >> image_consumer
 
-        with TaskGroup(group_id="ending_pipeline") as ending_pipeline:
+        with TaskGroup(group_id=f"ending_pipeline_{prop_type.lower()}") as ending_pipeline:
 
             mongo_end_results = check_mongodb("realEstate", "propertyImages", logger)
             postgresql_results2 = get_postgresql_rows(topic)
             status_email(postgresql_results2, mongo_end_results, phase='Ending')
         #
         # Total pipeline dependencies
-        start_pipeline >> etl_pipeline >> ending_pipeline
+        # short_circuit >> start_pipeline >> etl_pipeline >> ending_pipeline
+        short_circuit >> start_pipeline >> ending_pipeline
+
+        if previous_group:
+            previous_group >> short_circuit
+
+        previous_group = ending_pipeline
 
 
 gsmls_pipeline()
