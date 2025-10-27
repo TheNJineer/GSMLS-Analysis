@@ -99,15 +99,14 @@ class GSMLS:
 
             return clean_address
 
-    @staticmethod
-    def click_target_tab(target_name, prop_type, driver_var):
+    def click_target_tab(self, target_name, driver_var):
 
         target_dict = {"County": 1, "Status": 2, "Town": 3, "Property_Type": 8}
 
         GSMLS.explicit_page_load("Target Tabs", driver_var)
 
         # Locate and click the County tab
-        if prop_type == "TAX" and target_name == "Town":
+        if self.prop_type == "TAX" and target_name == "Town":
             x_path = f'//*[@id="advance-search-fields"]/li[2]'
         else:
             x_path = f'//*[@id="advance-search-fields"]/li[{target_dict[target_name]}]'
@@ -118,8 +117,7 @@ class GSMLS:
         property_tab.click()
         time.sleep(1)
 
-    @staticmethod
-    def click_property_type(type_, driver_var):
+    def click_property_type(self, driver_var):
 
         # Locate and click the property type in the Advanced Search
         x_path = f"//select[@id='ptype']"
@@ -127,7 +125,7 @@ class GSMLS:
             EC.presence_of_element_located((By.XPATH, x_path))
         )
         property_menu.click()
-        choice_path = f"//option[@value='{type_}']"
+        choice_path = f"//option[@value='{self.prop_type}']"
         WebDriverWait(driver_var, 10).until(
             EC.presence_of_element_located((By.XPATH, choice_path))
         ).click()
@@ -166,29 +164,72 @@ class GSMLS:
 
         print("State Dictionary completed. Data will be scraped shortly...")
 
-    def create_timeframe_dict(self, year):
+    def create_timeframe_dict(self, year, split_type=None, start_month=None):
 
-        if self.timeframe in ["historic", "mixed"]:
-            return {1234: [f"01/01/{year}", f"12/31/{year}"]}
+        if split_type is None:
+            if self.timeframe in ["historic", "mixed"]:
+                return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
-        elif self.timeframe == "current":
-            # Get latest scraped date
-            start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
-            stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
-            start_month, start_day = start_date_list[1], start_date_list[2]
-            stop_month, stop_day, stop_year = (
-                stop_date_list[1],
-                stop_date_list[2],
-                stop_date_list[0],
-            )
+            elif self.timeframe == "current":
+                # Get latest scraped date
+                start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
+                stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+                start_month, start_day = start_date_list[1], start_date_list[2]
+                stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
 
-            # Start scraping date from the day after the last scraped day
-            return {
-                1234: [
-                    f"{start_month}/{start_day}/{year}",
-                    f"{stop_month}/{stop_day}/{stop_year}",
-                ]
-            }
+                # Start scraping date from the day after the last scraped day
+                return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
+
+        # The yearly results returned too much data. Split the data up into quarters
+        elif split_type == 'quarterly':
+
+            return {1: [f"01/01/{year}", f"03/31/{year}"],
+                    2: [f"04/01/{year}", f"06/30/{year}"],
+                    3: [f"07/01/{year}", f"09/30/{year}"],
+                    4: [f"10/01/{year}", f"12/31/{year}"]}
+
+        # The quarterly results returned too much data. Split the data up into months starting with start_month
+        elif split_type == 'monthly':
+
+            new_timeframe = {1: [],
+                             2: [],
+                             3: []}
+
+            for idx, month in enumerate(range(start_month, start_month + 3)):
+                last_day = GSMLS.last_day_of_month(month, year)
+                month_str = GSMLS.string_month(month)
+                new_timeframe[idx + 1].extend([f"{month_str}/01/{year}", f"{month_str}/{last_day}/{year}"])
+
+            return new_timeframe
+
+        elif split_type == 'weekly':
+
+            new_timeframe = {1: [],
+                             2: [],
+                             3: [],
+                             4: []}
+
+            last_day = GSMLS.last_day_of_month(start_month, year)
+            month_str = GSMLS.string_month(start_month)
+
+            # Create a timeframe dict using the week as a key and the values are the days in that week
+            for week, last_day_of_week in enumerate(range(1, int(last_day) + 1, 7)):
+
+                if week == 4:
+                    new_timeframe.setdefault(5, [])
+
+                # Despite the function name, this just right pads single digits with '0'
+                if week == 0:
+                    start_of_the_week_str = GSMLS.string_month(last_day_of_week - 7)
+                else:
+                    # Subtracting 6 days to exclude the last day of the previous week
+                    start_of_the_week_str = GSMLS.string_month(last_day_of_week - 6)
+
+                last_day_of_week_str = GSMLS.string_month(last_day_of_week)
+                new_timeframe[week + 1].extend([f"{month_str}/{start_of_the_week_str}/{year}",
+                                                f"{month_str}/{last_day_of_week_str}/{year}"])
+
+            return new_timeframe
 
     @staticmethod
     def download_complete(filename):
@@ -257,12 +298,9 @@ class GSMLS:
         else:
             return False
 
-    @staticmethod
-    def download_sales_data(
-        city_name, county_name, qtr, year, prop_type, driver_var, window_id, logger
-    ):
+    def download_sales_data(self, driver_var, logger, **kwargs):
 
-        GSMLS.explicit_page_load("Results", driver_var, property_type=prop_type)
+        GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
 
         page_source = driver_var.page_source
 
@@ -290,14 +328,14 @@ class GSMLS:
         filename_input = driver_var.find_element(By.ID, "filename")
         filename_input.click()
         filename = (
-            city_name.rstrip(".")
+            kwargs["Municipality"].rstrip(".")
             + " "
-            + county_name
+            + kwargs["County"]
             + " "
             + "Q"
-            + str(qtr)
-            + str(year)
-            + f" {prop_type} Sales GSMLS"
+            + str(kwargs["Qtr"])
+            + str(kwargs["Year"])
+            + f" {self.prop_type} Sales GSMLS"
         )
         AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
             Keys.CONTROL
@@ -313,7 +351,7 @@ class GSMLS:
         download_button.click()
         error_result = GSMLS.download_error(driver_var, logger)
 
-        driver_var.switch_to.window(window_id)
+        driver_var.switch_to.window(kwargs["Main_Window"])
         time.sleep(1)
         close_page = WebDriverWait(driver_var, 5).until(
             EC.presence_of_element_located(
@@ -514,12 +552,12 @@ class GSMLS:
         soup = BeautifulSoup(page_source, "html.parser")
         target = soup.find("div", {"id": "town1"})
         target_contents = target.find_all("div", {"class": "selection-item"})
-        self.municipalities.setdefault(county_id, {})
+        self.municipalities.setdefault(int(county_id), {})
 
         for i in target_contents:
             # Strips the contents of the target counties (ie: 10 Atlantic ---> [10, Atlantic])
             target_search = value_pattern.search(str(i))
-            self.municipalities[county_id][target_search.group(1)] = (
+            self.municipalities[int(county_id)][target_search.group(1)] = (
                 target_search.group(2)
             )
 
@@ -578,8 +616,7 @@ class GSMLS:
 
         return None, None
 
-    @staticmethod
-    def format_data_for_kafka(driver_var, year, municipality, prop_type, logger):
+    def format_data_for_kafka(self, driver_var, **kwargs):
 
         sold_listings_dictionary = {
             "MLSNUM": [],
@@ -587,9 +624,14 @@ class GSMLS:
             "LONGITUDE": [],
             "IMAGES": [],
         }
-        if prop_type != "TAX":
+
+        year = kwargs["Year"],
+        municipality = kwargs["Municipality"]
+        logger = kwargs["logger"]
+
+        if self.prop_type != "TAX":
             # Use a checkpoint to make sure page is loaded
-            GSMLS.explicit_page_load("Results", driver_var, property_type=prop_type)
+            GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
 
             # Step 1: Acquire the page source and find the main table holding the property information
             page_source = driver_var.page_source
@@ -782,8 +824,7 @@ class GSMLS:
         no_results_found.click()
         # time.sleep(1)  # Built-in latency
 
-    @staticmethod
-    def page_criteria(timeframe, prop_type, driver_var):
+    def page_criteria(self, driver_var):
 
         # Locate and click the Status tab
         x_path = '//*[@id="advance-search-fields"]/li[2]'
@@ -796,7 +837,7 @@ class GSMLS:
         uncheck_all = driver_var.find_element(By.ID, "adv-uncheck-all")
         uncheck_all.click()  # Step 2: Uncheck unwanted statuses
 
-        if timeframe == "historic":
+        if self.timeframe == "historic":
             # Click the radio symbols which return historic data
             target_status = {
                 "RES": ["SD", "WD", "XD"],
@@ -805,7 +846,7 @@ class GSMLS:
                 "RNT": ["RD", "WD", "XD"],
             }
 
-        elif timeframe == "mixed":
+        elif self.timeframe == "mixed":
             # Click the radio symbols which return historic data
             target_status = {
                 "RES": ["S", "W", "X", "SD", "WD", "XD"],
@@ -814,7 +855,7 @@ class GSMLS:
                 "RNT": ["R", "W", "X", "RD", "WD", "XD"],
             }
 
-        elif timeframe == "current":
+        elif self.timeframe == "current":
             # Click the radio symbols which return historic data
             target_status = {
                 "RES": ["S", "W", "X"],
@@ -823,7 +864,7 @@ class GSMLS:
                 "RNT": ["R", "W", "X"],
             }
 
-        for target in target_status[prop_type]:
+        for target in target_status[self.prop_type]:
             status = driver_var.find_element(By.ID, target)
             status.click()  # Step 3: Check the sold status
 
@@ -971,94 +1012,43 @@ class GSMLS:
         """
 
         logger = kwargs["logger"]
-        qtr = kwargs["Qtr"]
         date_range = kwargs["Dates"]
-        property_types = ['RES', 'MUL', 'LND', 'RNT', 'TAX']
-
-        with tqdm(total=len(property_types), desc="Property Types", colour="magenta") as properties_bar:
-            for type_ in property_types:
-
-                if self.last_scraped_property_type is not None:
-                    if type_ != self.last_scraped_property_type:
-                        properties_bar.update(1)
-                        time.sleep(0.2)
-                        continue
-                    else:
-                        self.last_scraped_property_type = None
-                        kwargs["Property_Type"] = type_
 
         # Click the property type in the dropdown menu
-        GSMLS.click_property_type(type_, driver_var)
+        self.click_property_type(driver_var)
 
         # Set the page criteria
-        # Make the timeframe an instance var that can dynamically change
         try:
-            GSMLS.page_criteria(self.timeframe, type_, driver_var)
+            self.page_criteria(driver_var)
         except selenium.common.exceptions.ElementNotInteractableException:
             # The TAX property type doesn't have an uncheck all option or set page criteria
             pass
 
         # Set the dates
-        GSMLS.set_dates(date_range, type_, driver_var)
+        self.set_dates(date_range, driver_var)
         # If this is rent the property styles
-        if type_ == "RNT":
+        if self.prop_type == "RNT":
             GSMLS.res_property_styles(driver_var)
 
-        with tqdm(
-            total=len(self.municipalities.keys()),
-            desc="Counties",
-            colour="yellow",
-        ) as counties_bar:
-            for county, municipality in self.municipalities.items():
+        with tqdm(total=len(self.municipalities.keys()), desc="Counties", colour="yellow") as counties_bar:
+            for county, municipality in self.value_generator('county', counties_bar):
 
-                if self.last_scraped_county is not None:
-                    if int(county) != self.last_scraped_county:
-                        counties_bar.update(1)
-                        time.sleep(0.2)
-                        continue
-                    else:
-                        self.last_scraped_county = None
-
-                GSMLS.click_target_tab("County", type_, driver_var)
+                self.click_target_tab("County", driver_var)
                 GSMLS.set_county(2, county, driver_var)  # Set the county
                 kwargs["County"] = county
-                GSMLS.click_target_tab("Town", type_, driver_var)
+                self.click_target_tab("Town", driver_var)
 
-                with tqdm(
-                    total=len(municipality.keys()),
-                    desc="Municipalities",
-                    colour="green",
-                    position=1,
-                ) as muni_bar:
-                    for city_id, city_name in municipality.items():
-
-                        if self.last_scraped_muni is not None:
-                            if city_name != self.last_scraped_muni:
-                                muni_bar.update(1)
-                                time.sleep(0.2)
-                                continue
-                            else:
-                                self.last_scraped_muni = None
+                # The municipality variable is actually a dictionary with key-value pairs od city_id and city_name
+                with tqdm(total=len(municipality.keys()), desc="Municipalities", colour="green", position=1, ) as muni_bar:
+                    for city_id, city_name in self.value_generator("municipality", muni_bar, values=municipality):
 
                         GSMLS.set_city(2, city_id, driver_var)  # Set the city
                         kwargs["Municipality"] = city_name
                         GSMLS.explicit_page_load("Pre-Results", driver_var)
-                        zero_results, too_many_results = GSMLS.show_results(
-                            driver_var
-                        )
+                        zero_results, too_many_results = GSMLS.show_results(driver_var)
 
-                        self.download_log["Year_"].append(kwargs["Year"])
-                        self.download_log["Quarter"].append(qtr)
-                        self.download_log["County"].append(county)
-                        self.download_log["Municipality"].append(city_name)
-                        self.download_log["Initiated"].append("Yes")
-                        self.download_log["Finished"].append("No")
-                        self.download_log["Rows_Produced"].append(0)
-                        self.download_log["Date_Produced"].append(
-                            datetime.now().date()
-                        )
-                        self.download_log["Start_Date"].append(self.start_date)
-                        self.download_log["Property_Type"].append(type_)
+                        # Input attributes into event log dictionary
+                        self.input_download_log_data(**kwargs)
 
                         if zero_results is True:
                             # No results found
@@ -1066,25 +1056,17 @@ class GSMLS:
                             self.download_log["Finished"][-1] = "Yes"
                             GSMLS.no_results(driver_var)
                             muni_bar.update(1)
-                            logger.info(
-                                f"There is no GSMLS sales data available for {city_name}"
-                            )
-                            GSMLS.click_target_tab("Town", type_, driver_var)
+                            logger.info(f"There is no GSMLS sales data available for {city_name}")
+                            self.click_target_tab("Town", driver_var)
                             GSMLS.set_city(2, city_id, driver_var)
+
                         elif too_many_results is True:
                             # Too many results were found, split the search dates
                             self.download_log["Results_Found"].append("Yes")
-                            self.split_search_dates(
-                                kwargs["Year"],
-                                type_,
-                                city_name,
-                                county,
-                                driver_var,
-                                **kwargs,
-                            )
+                            self.split_search_dates(driver_var, **kwargs,)
                             self.download_log["Finished"][-1] = "Yes"
-                            GSMLS.set_dates(date_range, type_, driver_var)
-                            GSMLS.click_target_tab("Town", type_, driver_var)
+                            self.set_dates(date_range, driver_var)
+                            self.click_target_tab("Town", driver_var)
                             GSMLS.set_city(2, city_id, driver_var)
 
                         else:
@@ -1092,41 +1074,20 @@ class GSMLS:
                             # Sales file will be requested and additional data will be added
                             # and formatted before being produced to Apache Kafka
                             self.download_log["Results_Found"].append("Yes")
-                            filename = self.download_sales_data(
-                                city_name,
-                                self.counties[county],
-                                qtr,
-                                kwargs["Year"],
-                                kwargs["Property_Type"],
-                                driver_var,
-                                kwargs["Main_Window"],
-                                logger,
-                            )
-                            GSMLS.explicit_page_load(
-                                "Results",
-                                driver_var,
-                                property_type=kwargs["Property_Type"],
-                            )
+                            filename = self.download_sales_data(driver_var, logger, **kwargs)
+                            GSMLS.explicit_page_load("Results", driver_var,property_type=self.prop_type)
 
                             if filename != "Server Error":
-                                additional_info = GSMLS.format_data_for_kafka(
-                                    driver_var,
-                                    kwargs["Year"],
-                                    city_name,
-                                    kwargs["Property_Type"],
-                                    logger,
-                                )
-                                self.publish_data_2kafka(
-                                    filename, additional_info, **kwargs
-                                )
+                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
+                                self.publish_data_2kafka(filename, additional_info, **kwargs)
 
                             self.download_log["Finished"][-1] = "Yes"
                             muni_bar.update(1)
                             GSMLS.exit_results_page(driver_var)
-                            GSMLS.click_target_tab("Town", type_, driver_var)
+                            self.click_target_tab("Town", driver_var)
                             GSMLS.set_city(2, city_id, driver_var)
 
-                GSMLS.click_target_tab("County", type_, driver_var)
+                self.click_target_tab("County", driver_var)
                 GSMLS.set_county(2, county, driver_var)  # Set the county
                 counties_bar.update(1)
                 self.save_metadata()
@@ -1745,8 +1706,7 @@ class GSMLS:
             )
             click_county.click()
 
-    @staticmethod
-    def set_dates(date_range, type_, driver_var):
+    def set_dates(self, date_range, driver_var):
 
         ids_list = [
             ("CLOSEDDATEmin", "CLOSEDDATEmax"),
@@ -1769,14 +1729,14 @@ class GSMLS:
             "TAX": [81],
         }
 
-        if type_ in ["RES", "MUL", "LND"]:
+        if self.prop_type in ["RES", "MUL", "LND"]:
             target_list = ids_list
-        elif type_ == "RNT":
+        elif self.prop_type == "RNT":
             target_list = rent_ids
         else:
             target_list = tax_ids
 
-        for value, daterangeids in zip(values[type_], target_list):
+        for value, daterangeids in zip(values[self.prop_type], target_list):
             # Locate and click the target tab
             x_path = f'//*[@id="advance-search-fields"]/li[{value}]'
             target_tab = WebDriverWait(driver_var, 10).until(
@@ -1859,13 +1819,9 @@ class GSMLS:
         )
         sign_out_button.click()
 
-    def split_search_dates(self, year, type_, city_name, county, driver_var, **kwargs):
+    def split_search_dates(self, driver_var, **kwargs):
         """
 
-        :param year:
-        :param type_:
-        :param city_name:
-        :param county:
         :param driver_var:
         :param kwargs:
         :return:
@@ -1874,37 +1830,16 @@ class GSMLS:
         # Too many results were found, exit the alert popup and continue with script
         GSMLS.too_many_results(driver_var)
 
-        time_periods = {
-            1: [f"01/01/{year}", f"03/31/{year}"],
-            2: [f"04/01/{year}", f"06/30/{year}"],
-            3: [f"07/01/{year}", f"09/30/{year}"],
-            4: [f"10/01/{year}", f"12/31/{year}"],
-        }
+        time_periods = self.create_timeframe_dict(kwargs["Year"], split_type='quarterly')
 
         for qtr, daterange in time_periods.items():
-            # Quarterly timeframe
-            GSMLS.set_dates([daterange[0], daterange[1]], type_, driver_var)
 
+            self.set_dates([daterange[0], daterange[1]], driver_var)
             zero_results, too_many_results = GSMLS.show_results(driver_var)
 
             if zero_results is False and too_many_results is False:
-                filename = self.download_sales_data(
-                    city_name,
-                    self.counties[county],
-                    qtr,
-                    year,
-                    kwargs["Property_Type"],
-                    driver_var,
-                    kwargs["Main_Window"],
-                    kwargs["logger"],
-                )
-                additional_info = GSMLS.format_data_for_kafka(
-                    driver_var,
-                    year,
-                    city_name,
-                    kwargs["Property_Type"],
-                    kwargs["logger"],
-                )
+                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
+                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
                 self.publish_data_2kafka(filename, additional_info, **kwargs)
                 GSMLS.exit_results_page(driver_var)
 
@@ -1913,133 +1848,51 @@ class GSMLS:
                 GSMLS.too_many_results(driver_var)
                 start_month = int(daterange[0][:2])
 
-                for month in range(start_month, start_month + 3):
-                    last_day = GSMLS.last_day_of_month(month, year)
+                monthly_periods = self.create_timeframe_dict(kwargs["Year"],
+                                                             split_type='monthly', start_month=start_month)
 
-                    month_str = GSMLS.string_month(month)
-                    GSMLS.set_dates(
-                        [f"{month_str}/01/{year}", f"{month_str}/{last_day}/{year}"],
-                        type_,
-                        driver_var,
-                    )
+                for month, daterange1 in monthly_periods.items():
 
+                    self.set_dates([daterange1[0], daterange1[1]], driver_var)
                     zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                     if zero_results is False and too_many_results is False:
-                        new_qtr = f"{qtr}_{month_str}"
-                        filename = self.download_sales_data(
-                            city_name,
-                            self.counties[county],
-                            new_qtr,
-                            year,
-                            kwargs["Property_Type"],
-                            driver_var,
-                            kwargs["Main_Window"],
-                            kwargs["logger"],
-                        )
-                        GSMLS.explicit_page_load(
-                            "Results", driver_var, property_type=kwargs["Property_Type"]
-                        )
-                        additional_info = GSMLS.format_data_for_kafka(
-                            driver_var,
-                            year,
-                            city_name,
-                            kwargs["Property_Type"],
-                            kwargs["logger"],
-                        )
+                        kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}"
+                        filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
+                        GSMLS.explicit_page_load("Results", driver_var, property_type=kwargs["Property_Type"])
+                        additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
                         self.publish_data_2kafka(filename, additional_info, **kwargs)
                         GSMLS.exit_results_page(driver_var)
 
                     elif too_many_results is True:
                         # Weekly timeframe
                         GSMLS.too_many_results(driver_var)
+                        weekly_periods = self.create_timeframe_dict(kwargs["Year"],
+                                                                    split_type='weekly', start_month=start_month)
 
-                        for week, last_day_of_week in enumerate(
-                            range(8, int(last_day) + 1, 7)
-                        ):
-
-                            # Dispite the function name, this just right pads single digits with '0'
-                            if week == 0:
-                                start_of_the_week_str = GSMLS.string_month(
-                                    last_day_of_week - 7
-                                )
-                            else:
-                                start_of_the_week_str = GSMLS.string_month(
-                                    last_day_of_week - 6
-                                )
-
-                            last_day_of_week_str = GSMLS.string_month(last_day_of_week)
-                            GSMLS.set_dates(
-                                [
-                                    f"{month_str}/{start_of_the_week_str}/{year}",
-                                    f"{month_str}/{last_day_of_week_str}/{year}",
-                                ],
-                                type_,
-                                driver_var,
-                            )
-
-                            zero_results, too_many_results = GSMLS.show_results(
-                                driver_var
-                            )
+                        for week, daterange2 in weekly_periods.items():
+                            self.set_dates([daterange1[0], daterange1[1]], driver_var)
+                            zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                             if zero_results is False and too_many_results is False:
-                                new_qtr = f"{qtr}_{month_str}_{week}"
-                                filename = self.download_sales_data(
-                                    city_name,
-                                    self.counties[county],
-                                    new_qtr,
-                                    year,
-                                    kwargs["Property_Type"],
-                                    driver_var,
-                                    kwargs["Main_Window"],
-                                    kwargs["logger"],
-                                )
-                                GSMLS.explicit_page_load(
-                                    "Results",
-                                    driver_var,
-                                    property_type=kwargs["Property_Type"],
-                                )
-                                additional_info = GSMLS.format_data_for_kafka(
-                                    driver_var,
-                                    year,
-                                    city_name,
-                                    kwargs["Property_Type"],
-                                    kwargs["logger"],
-                                )
-                                self.publish_data_2kafka(
-                                    filename, additional_info, **kwargs
-                                )
+                                kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
+                                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
+                                GSMLS.explicit_page_load("Results", driver_var,
+                                                         property_type=kwargs["Property_Type"])
+                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
+                                self.publish_data_2kafka(filename, additional_info, **kwargs)
                                 GSMLS.exit_results_page(driver_var)
 
                             elif too_many_results is True:
 
+                                # Scrape the first 500 results given
                                 GSMLS.too_many_results(driver_var, giveup="Yes")
-                                new_qtr = f"{qtr}_{month_str}_{week}"
-                                filename = self.download_sales_data(
-                                    city_name,
-                                    self.counties[county],
-                                    new_qtr,
-                                    year,
-                                    kwargs["Property_Type"],
-                                    driver_var,
-                                    kwargs["Main_Window"],
-                                    kwargs["logger"],
-                                )
-                                GSMLS.explicit_page_load(
-                                    "Results",
-                                    driver_var,
-                                    property_type=kwargs["Property_Type"],
-                                )
-                                additional_info = GSMLS.format_data_for_kafka(
-                                    driver_var,
-                                    year,
-                                    city_name,
-                                    kwargs["Property_Type"],
-                                    kwargs["logger"],
-                                )
-                                self.publish_data_2kafka(
-                                    filename, additional_info, **kwargs
-                                )
+                                kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
+                                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
+                                GSMLS.explicit_page_load("Results", driver_var,
+                                                         property_type=kwargs["Property_Type"])
+                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
+                                self.publish_data_2kafka(filename, additional_info, **kwargs)
                                 GSMLS.exit_results_page(driver_var)
 
     @staticmethod
