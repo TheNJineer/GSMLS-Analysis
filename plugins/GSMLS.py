@@ -151,6 +151,18 @@ class GSMLS:
 
         return clean_log
 
+    def create_filename(self, base_path=None, **kwargs):
+
+        if base_path is None:
+
+            return " ".join([kwargs["Municipality"].rstrip("."),
+                            kwargs["County"], "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
+                            f"{self.prop_type} Sales GSMLS"])
+
+        else:
+
+            return os.path.join(base_path, kwargs["Filename"] + ".xls")
+
     def create_state_dictionary(self, driver_var):
 
         results = driver_var.page_source
@@ -231,12 +243,11 @@ class GSMLS:
 
             return new_timeframe
 
-    @staticmethod
-    def download_complete(filename):
+    def download_complete(self, **kwargs):
 
         download_folder = "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"
         for _ in range(1, 16):
-            abspath_ = os.path.join(download_folder, filename + ".xls")
+            abspath_ = self.create_filename(base_path=download_folder, **kwargs)
             if os.path.exists(abspath_):
                 return True
             else:
@@ -298,7 +309,7 @@ class GSMLS:
         else:
             return False
 
-    def download_sales_data(self, driver_var, logger, **kwargs):
+    def download_sales_data(self, driver_var, **kwargs):
 
         GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
 
@@ -327,16 +338,7 @@ class GSMLS:
         excel_file_input.click()
         filename_input = driver_var.find_element(By.ID, "filename")
         filename_input.click()
-        filename = (
-            kwargs["Municipality"].rstrip(".")
-            + " "
-            + kwargs["County"]
-            + " "
-            + "Q"
-            + str(kwargs["Qtr"])
-            + str(kwargs["Year"])
-            + f" {self.prop_type} Sales GSMLS"
-        )
+        filename = self.create_filename(**kwargs)
         AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
             Keys.CONTROL
         ).send_keys(filename).perform()
@@ -349,7 +351,7 @@ class GSMLS:
             )
         )
         download_button.click()
-        error_result = GSMLS.download_error(driver_var, logger)
+        error_result = GSMLS.download_error(driver_var, kwargs["logger"])
 
         driver_var.switch_to.window(kwargs["Main_Window"])
         time.sleep(1)
@@ -365,6 +367,37 @@ class GSMLS:
 
         elif error_result is False:
             return filename
+
+    def enrich_raw_data(self, df, meta_dict, **kwargs):
+
+        df = df.astype({"MLSNUM": "string"})
+
+        if self.prop_type == "LND":
+            geo_data = pd.DataFrame(
+                {
+                    "MLSNUM": meta_dict["MLSNUM"],
+                    "LATITUDE": meta_dict["LATITUDE"],
+                    "LONGITUDE": meta_dict["LONGITUDE"],
+                }
+            )
+        else:
+            geo_data = pd.DataFrame(
+                {
+                    "MLSNUM": meta_dict["MLSNUM"],
+                    "LATITUDE": meta_dict["LATITUDE"],
+                    "LONGITUDE": meta_dict["LONGITUDE"],
+                    "IMAGES": meta_dict["IMAGES"],
+                }
+            )
+
+        merged_df = pd.merge(df, geo_data, on="MLSNUM")
+        merged_df["MLS"] = "GSMLS"
+        merged_df["QTR"] = kwargs["Qtr"]
+        merged_df["CONDITION"] = "Unknown"
+        merged_df["PROP_CLASS"] = self.prop_type
+        merged_df["SCRAPED_DATE"] = datetime.today().date()
+
+        return merged_df
 
     @staticmethod
     def exit_results_page(driver_var):
@@ -705,8 +738,9 @@ class GSMLS:
 
     def load_metadata(self, first_run=None):
 
-        query = """
+        query = f"""
                 SELECT * FROM gsmls_event_log_new
+                WHERE property_type = '{self.prop_type}'
                 ORDER BY id DESC
                 LIMIT 1;
                 """
@@ -807,6 +841,11 @@ class GSMLS:
             except TimeoutException:
                 pass
 
+    def login_load_main_page(self, driver_var, **kwargs):
+        self.login("GSMLS", driver_var)
+        GSMLS.explicit_page_load("Garden State MLS", driver_var)
+        kwargs["Main_Window"] = driver_var.current_window_handle
+
     @staticmethod
     def no_results(driver_var):
 
@@ -903,7 +942,7 @@ class GSMLS:
         )
         xpy_search.click()
 
-    def publish_data_2kafka(self, xls_file_name: str, soldlistings: dict, **kwargs):
+    def publish_data_2kafka(self, soldlistings: dict, **kwargs):
 
         topic_dict = {
             "RES": "res_properties",
@@ -913,88 +952,58 @@ class GSMLS:
             "TAX": "tax_properties",
         }
 
-        base_path = "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"
-        kafka_data_prod = kwargs["data-producer"]
+        if kwargs.get("Topic", None) is None:
+            kwargs["Topic"] = topic_dict[self.prop_type]
 
-        if GSMLS.download_complete(xls_file_name):
-            sold_df = pd.read_excel(
-                os.path.join(base_path, xls_file_name + ".xls"), engine="xlrd"
-            )
+        base_path = "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"
+
+        if self.download_complete(**kwargs) is True:
+            sold_df = pd.read_excel(self.create_filename(base_path=base_path, **kwargs), engine="xlrd")
             sold_df.columns = sold_df.columns.str.upper()
-            sold_df = GSMLS.return_target_columns(sold_df, kwargs["Property_Type"])
+            sold_df = self.return_target_columns(sold_df)
 
             # Merge the Latitude and Longitude data from the image df to the sold listings df
-            if kwargs["Property_Type"] in ["RES", "MUL", "LND", "RNT"]:
-                sold_df = sold_df.astype({"MLSNUM": "string"})
+            if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
+                raw_data = self.enrich_raw_data(sold_df, soldlistings, **kwargs)
 
-                if kwargs["Property_Type"] == "LND":
-                    geo_data = pd.DataFrame(
-                        {
-                            "MLSNUM": soldlistings["MLSNUM"],
-                            "LATITUDE": soldlistings["LATITUDE"],
-                            "LONGITUDE": soldlistings["LONGITUDE"],
-                        }
-                    )
-                else:
-                    geo_data = pd.DataFrame(
-                        {
-                            "MLSNUM": soldlistings["MLSNUM"],
-                            "LATITUDE": soldlistings["LATITUDE"],
-                            "LONGITUDE": soldlistings["LONGITUDE"],
-                            "IMAGES": soldlistings["IMAGES"],
-                        }
-                    )
-
-                target_df = pd.merge(sold_df, geo_data, on="MLSNUM")
-                target_df["MLS"] = "GSMLS"
-                target_df["QTR"] = kwargs["Qtr"]
-                target_df["CONDITION"] = "Unknown"
-                target_df["PROP_CLASS"] = kwargs["Property_Type"]
-                target_df["SCRAPED_DATE"] = datetime.today().date()
-
-            elif kwargs["Property_Type"] == "TAX":
-                target_df = sold_df
+            elif self.prop_type == "TAX":
+                raw_data = sold_df
 
             # Send to Kafka
-            final_df = target_df.to_json(orient="split", date_format="iso")
+            final_df = raw_data.to_json(orient="split", date_format="iso")
 
             try:
-                result = kafka_data_prod.send(
-                    topic_dict[kwargs["Property_Type"]],
-                    key=xls_file_name,
+                result = kwargs["data-producer"].send(
+                    topic_dict[self.prop_type],
+                    key=kwargs["Filename"],
                     value=final_df,
                 )
                 result_metadata = result.get(timeout=10)
 
             except KafkaTimeoutError as kte:
                 kwargs["logger"].warning(
-                    f"Kafka Producer Error: {xls_file_name} was not produced to {topic_dict[kwargs['Property_Type']]}"
+                    f"Kafka Producer Error: {kwargs["Filename"]} was not produced to {topic_dict[self.prop_type]}"
                 )
                 kwargs["logger"].warning(f"{kte}")
-                kwargs["logger"].info(f"Re-attempting to send {xls_file_name}")
-                self.publish_data_2kafka(xls_file_name, soldlistings, **kwargs)
-                GSMLS.sendfile2trash(xls_file_name)
+                kwargs["logger"].info(f"Re-attempting to send {kwargs["Filename"]}")
+                self.publish_data_2kafka(soldlistings, **kwargs)
+                GSMLS.sendfile2trash(kwargs["Filename"])
 
             except MessageSizeTooLargeError:
 
-                GSMLS.reduce_df_size(
-                    kafka_data_prod,
-                    target_df,
-                    500,
-                    topic_dict[kwargs["Property_Type"]],
-                    xls_file_name,
-                    kwargs["logger"],
-                )
-                GSMLS.sendfile2trash(xls_file_name)
+                # Reduce the size of the raw dataframe and send to Kafka in chunks
+                GSMLS.reduce_df_size(raw_data,500, **kwargs)
+                GSMLS.sendfile2trash(kwargs["Filename"])
 
             else:
                 kwargs["logger"].info(
-                    f'{xls_file_name} was produced to "{result_metadata.topic}" in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"'
+                    f'{kwargs["Filename"]} was produced to "{result_metadata.topic}" in "Partition '
+                    f'{result_metadata.partition}" on "Offset {result_metadata.offset}"'
                 )
-                self.rows_counted[kwargs["Property_Type"]] += len(sold_df)
+                self.rows_counted[self.prop_type] += len(sold_df)
                 self.download_log["Rows_Produced"][-1] = len(sold_df)
                 self.download_log["Date_Produced"][-1] = str(datetime.now())
-                GSMLS.sendfile2trash(xls_file_name)
+                GSMLS.sendfile2trash(kwargs["Filename"])
 
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
@@ -1044,6 +1053,7 @@ class GSMLS:
 
                         GSMLS.set_city(2, city_id, driver_var)  # Set the city
                         kwargs["Municipality"] = city_name
+                        kwargs["Municipality_ID"] = city_id
                         GSMLS.explicit_page_load("Pre-Results", driver_var)
                         zero_results, too_many_results = GSMLS.show_results(driver_var)
 
@@ -1052,40 +1062,17 @@ class GSMLS:
 
                         if zero_results is True:
                             # No results found
-                            self.download_log["Results_Found"].append("No")
-                            self.download_log["Finished"][-1] = "Yes"
-                            GSMLS.no_results(driver_var)
-                            muni_bar.update(1)
-                            logger.info(f"There is no GSMLS sales data available for {city_name}")
-                            self.click_target_tab("Town", driver_var)
-                            GSMLS.set_city(2, city_id, driver_var)
+                            self.zero_results_found(muni_bar, driver_var, **kwargs)
 
                         elif too_many_results is True:
                             # Too many results were found, split the search dates
-                            self.download_log["Results_Found"].append("Yes")
-                            self.split_search_dates(driver_var, **kwargs,)
-                            self.download_log["Finished"][-1] = "Yes"
-                            self.set_dates(date_range, driver_var)
-                            self.click_target_tab("Town", driver_var)
-                            GSMLS.set_city(2, city_id, driver_var)
+                            self.too_many_results_found(muni_bar, driver_var, **kwargs)
 
                         else:
                             # Results were found
                             # Sales file will be requested and additional data will be added
                             # and formatted before being produced to Apache Kafka
-                            self.download_log["Results_Found"].append("Yes")
-                            filename = self.download_sales_data(driver_var, logger, **kwargs)
-                            GSMLS.explicit_page_load("Results", driver_var,property_type=self.prop_type)
-
-                            if filename != "Server Error":
-                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
-                                self.publish_data_2kafka(filename, additional_info, **kwargs)
-
-                            self.download_log["Finished"][-1] = "Yes"
-                            muni_bar.update(1)
-                            GSMLS.exit_results_page(driver_var)
-                            self.click_target_tab("Town", driver_var)
-                            GSMLS.set_city(2, city_id, driver_var)
+                            self.results_found(driver_var, update_bar=muni_bar, **kwargs)
 
                 self.click_target_tab("County", driver_var)
                 GSMLS.set_county(2, county, driver_var)  # Set the county
@@ -1094,27 +1081,25 @@ class GSMLS:
                 kwargs["data-producer"].flush()
 
     @staticmethod
-    def reduce_df_size(producer, df_var, step: int, topic, file_name, logger):
+    def reduce_df_size(df_var, step: int, **kwargs):
 
         for idx, i in enumerate(range(0, len(df_var), step)):
-            slice_df = df_var[i : i + step]
+            slice_df = df_var[i: i + step]
 
             prepared_df = slice_df.to_json(orient="split", date_format="iso")
             try:
-                results = producer.send(topic, value=prepared_df)
+                results = kwargs["data-producer"].send(kwargs["Topic"], value=prepared_df)
                 result_metadata = results.get(timeout=10)
-                logger.info(
-                    f'Block {idx} of {file_name} was produced to "{result_metadata.topic}" '
+                kwargs["logger"].info(
+                    f'Block {idx} of {kwargs["Filename"]} was produced to "{result_metadata.topic}" '
                     f'in "Partition {result_metadata.partition}" on "Offset {result_metadata.offset}"'
                 )
             except MessageSizeTooLargeError:
-                GSMLS.reduce_df_size(
-                    producer, df_var, step // 5, topic, file_name, logger
-                )
+                GSMLS.reduce_df_size(df_var, step // 5, **kwargs)
 
             except KafkaTimeoutError:
-                logger.warning(
-                    f"Property data for {file_name} has not been "
+                kwargs["logger"].warning(
+                    f"Property data for {kwargs["Filename"]} has not been "
                     f"produced to {result_metadata.topic} in Kafka"
                 )
 
@@ -1157,10 +1142,34 @@ class GSMLS:
                 EC.presence_of_element_located((By.ID, type_))
             ).click()
 
-    @staticmethod
-    def return_target_columns(df, ptypes: str):
+    def results_found(self, driver_var, results_type=1, update_bar=None, **kwargs):
 
-        if ptypes == "RES":
+        # Results were regularly found on first search
+        if results_type == 1:
+            self.download_log["Results_Found"].append("Yes")
+
+        filename = self.download_sales_data(driver_var, **kwargs)
+        kwargs["Filename"] = filename
+        GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
+
+        # Do not try to publish any data to Kafka if there was a server error during the search
+        # No data was returned
+        if filename != "Server Error":
+            # Scrape the mlsnum, lat/long and image data to merge into Kafka data
+            additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
+            self.publish_data_2kafka(additional_info, **kwargs)
+
+        GSMLS.exit_results_page(driver_var)
+
+        if results_type == 1:
+            self.download_log["Finished"][-1] = "Yes"
+            update_bar.update(1)
+            self.click_target_tab("Town", driver_var)
+            GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
+
+    def return_target_columns(self, df):
+
+        if self.prop_type == "RES":
 
             columns = [
                 "MLSNUM",
@@ -1248,7 +1257,7 @@ class GSMLS:
 
             return df[columns]
 
-        elif ptypes == "MUL":
+        elif self.prop_type == "MUL":
 
             columns = [
                 "MLSNUM",
@@ -1349,7 +1358,7 @@ class GSMLS:
 
             return df[columns]
 
-        elif ptypes == "LND":
+        elif self.prop_type == "LND":
 
             columns = [
                 "MLSNUM",
@@ -1423,7 +1432,7 @@ class GSMLS:
 
             return df[columns]
 
-        elif ptypes == "RNT":
+        elif self.prop_type == "RNT":
 
             columns = [
                 "MLSNUM",
@@ -1489,7 +1498,7 @@ class GSMLS:
 
             return df[columns]
 
-        elif ptypes == "TAX":
+        elif self.prop_type == "TAX":
 
             columns = [
                 "AUTOROW",
@@ -1652,6 +1661,20 @@ class GSMLS:
         time.sleep(1)  # Latency period added in order to load and scrape city names
         self.find_cities(county_id, driver_var.page_source)
         GSMLS.set_county(1, county_id, driver_var)
+
+    def scrape_state_data(self, driver_var):
+
+        if self.municipalities == {}:
+            page_results = driver_var.page_source
+            GSMLS.page_search(2, page_results, driver_var)
+            time.sleep(2)  # Build-in latency to let the page load
+
+            # Scrape all the county and municipality targets
+            self.create_state_dictionary(driver_var)
+
+        page_results = driver_var.page_source
+        GSMLS.page_search(1, page_results, driver_var)
+        GSMLS.explicit_page_load("Advanced Search", driver_var)
 
     @staticmethod
     def search_listing(mls_number, driver_var, logger_var, mls_address=None):
@@ -1838,10 +1861,7 @@ class GSMLS:
             zero_results, too_many_results = GSMLS.show_results(driver_var)
 
             if zero_results is False and too_many_results is False:
-                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
-                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
-                self.publish_data_2kafka(filename, additional_info, **kwargs)
-                GSMLS.exit_results_page(driver_var)
+                self.results_found(driver_var, results_type=2, **kwargs)
 
             elif too_many_results is True:
                 # Monthly timeframe
@@ -1858,11 +1878,7 @@ class GSMLS:
 
                     if zero_results is False and too_many_results is False:
                         kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}"
-                        filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
-                        GSMLS.explicit_page_load("Results", driver_var, property_type=kwargs["Property_Type"])
-                        additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
-                        self.publish_data_2kafka(filename, additional_info, **kwargs)
-                        GSMLS.exit_results_page(driver_var)
+                        self.results_found(driver_var, results_type=2, **kwargs)
 
                     elif too_many_results is True:
                         # Weekly timeframe
@@ -1876,24 +1892,14 @@ class GSMLS:
 
                             if zero_results is False and too_many_results is False:
                                 kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
-                                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
-                                GSMLS.explicit_page_load("Results", driver_var,
-                                                         property_type=kwargs["Property_Type"])
-                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
-                                self.publish_data_2kafka(filename, additional_info, **kwargs)
-                                GSMLS.exit_results_page(driver_var)
+                                self.results_found(driver_var, results_type=2, **kwargs)
 
                             elif too_many_results is True:
 
                                 # Scrape the first 500 results given
                                 GSMLS.too_many_results(driver_var, giveup="Yes")
                                 kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
-                                filename = self.download_sales_data(driver_var, kwargs["logger"], **kwargs)
-                                GSMLS.explicit_page_load("Results", driver_var,
-                                                         property_type=kwargs["Property_Type"])
-                                additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
-                                self.publish_data_2kafka(filename, additional_info, **kwargs)
-                                GSMLS.exit_results_page(driver_var)
+                                self.results_found(driver_var, results_type=2, **kwargs)
 
     @staticmethod
     def string_month(value):
@@ -1904,7 +1910,7 @@ class GSMLS:
             return "0" + string_month
 
         else:
-            return value
+            return string_month
 
     @staticmethod
     def too_many_results(driver_var, giveup=None):
@@ -1921,24 +1927,15 @@ class GSMLS:
             )
             yes_button.click()
 
-    def login_load_main_page(self, driver_var, **kwargs):
-        self.login("GSMLS", driver_var)
-        GSMLS.explicit_page_load("Garden State MLS", driver_var)
-        kwargs["Main_Window"] = driver_var.current_window_handle
+    def too_many_results_found(self, update_bar, driver_var, **kwargs):
 
-    def scrape_state_data(self, driver_var):
-
-        if self.municipalities == {}:
-            page_results = driver_var.page_source
-            GSMLS.page_search(2, page_results, driver_var)
-            time.sleep(2)  # Build-in latency to let the page load
-
-            # Scrape all the county and municipality targets
-            self.create_state_dictionary(driver_var)
-
-        page_results = driver_var.page_source
-        GSMLS.page_search(1, page_results, driver_var)
-        GSMLS.explicit_page_load("Advanced Search", driver_var)
+        self.download_log["Results_Found"].append("Yes")
+        self.split_search_dates(driver_var, **kwargs)
+        self.download_log["Finished"][-1] = "Yes"
+        update_bar.update(1)
+        self.set_dates(kwargs["Dates"], driver_var)
+        self.click_target_tab("Town", driver_var)
+        GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
 
     def value_generator(self, key_name, update_bar, values=None):
 
@@ -1984,6 +1981,16 @@ class GSMLS:
                         break
 
                 yield key
+
+    def zero_results_found(self, update_bar, driver_var, **kwargs):
+
+        self.download_log["Results_Found"].append("No")
+        self.download_log["Finished"][-1] = "Yes"
+        GSMLS.no_results(driver_var)
+        update_bar.update(1)
+        kwargs["logger"].info(f"There is no GSMLS sales data available for {kwargs["Municipality"]}")
+        self.click_target_tab("Town", driver_var)
+        GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
 
     @logger_decorator
     def main(self, driver_var, **kwargs):
