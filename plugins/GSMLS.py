@@ -22,10 +22,9 @@ from tqdm import tqdm
 from tqdm.auto import trange
 from datetime import datetime
 from datetime import timedelta
-from utility_func import logger_decorator, get_us_pw
-from selenium import webdriver
-from selenium.webdriver.edge.service import Service
-from selenium.webdriver.edge.options import Options
+from datetime import date
+from pendulum import timezone
+from utility_func import get_us_pw
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.alert import Alert
@@ -34,10 +33,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import UnexpectedAlertPresentException
-from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
+from psycopg2.errors import SyntaxError
+from sqlalchemy.exc import DatabaseError
 
 
 class GSMLS:
@@ -50,6 +50,7 @@ class GSMLS:
         self.municipalities = {}
         self.window_ids = {}
         self.rows_counted = {"RES": 0, "MUL": 0, "LND": 0, "RNT": 0, "TAX": 0}
+        self.level_set = {'quarterly': 0, 'monthly': 0, 'weekly': 0}
         self.download_log = GSMLS.create_download_log()
         self.engine = create_sql_engine("gsmls", remote=True)
         self.last_scraped_qtr = None
@@ -60,6 +61,7 @@ class GSMLS:
         self.start_date = None
         self.finished = None
         self.timeframe = timeframe
+        self.alt_split_type = None
         self.load_metadata(first_run="Yes")
 
     """ 
@@ -76,6 +78,17 @@ class GSMLS:
             self.timeframe = "current"
         else:
             pass
+
+    def change_instance_var(self, key_name):
+
+        if key_name == 'year':
+            self.last_scraped_year = None
+
+        elif key_name == 'county':
+            self.last_scraped_county = None
+
+        elif key_name == 'municipality':
+            self.last_scraped_muni = None
 
     @staticmethod
     def clean_address(address, streetnum=None, zipcode=None):
@@ -146,7 +159,9 @@ class GSMLS:
             "Start_Date": [],
             "Date_Produced": [],
             "Property_Type": [],
-            "Timeframe": []
+            "Timeframe": [],
+            "Split_Type": [],
+            "Split_Index": []
         }
 
         return clean_log
@@ -155,26 +170,34 @@ class GSMLS:
 
         if base_path is None:
 
-            return " ".join([kwargs["Municipality"].rstrip("."),
-                            kwargs["County"], "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
-                            f"{self.prop_type} Sales GSMLS"])
+            if kwargs['split_data'] is False:
+
+                return " ".join([kwargs["Municipality"].rstrip("."),
+                                kwargs["County_Name"], "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
+                                f"{self.prop_type} Sales GSMLS"])
+            else:
+                # New names need to be made so the same filename isnt being rewritten over, possibly corrupting data
+                return " ".join([kwargs["Municipality"].rstrip("."),
+                                 kwargs["County_Name"], str(kwargs["New_Qtr"]) + str(kwargs["Year"]),
+                                 f"{self.prop_type} Sales GSMLS"])
+
 
         else:
 
-            return os.path.join(base_path, kwargs["Filename"] + ".xls")
+            return os.path.join(base_path, kwargs["Filename"] + ".XLS")
 
     def create_state_dictionary(self, driver_var):
 
         results = driver_var.page_source
         self.find_counties(results)
 
-        print("Preparing State Dictionary...")
+        print(" ==== PREPARING STATE DICTIONARY ==== ")
         for _, county_id in zip(
             trange(len(self.counties.keys()), desc="Counties"), self.counties.keys()
         ):
             self.scrape_municipalities(county_id, driver_var)
 
-        print("State Dictionary completed. Data will be scraped shortly...")
+        print(" ==== STATE DICTIONARY COMPLETED. DATA WILL BE SCRAPED SHORTLY ==== ")
 
     def create_timeframe_dict(self, year, split_type=None, start_month=None):
 
@@ -186,7 +209,7 @@ class GSMLS:
                 # Get latest scraped date
                 start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
                 stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
-                start_month, start_day = start_date_list[1], start_date_list[2]
+                start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
                 stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
 
                 # Start scraping date from the day after the last scraped day
@@ -245,9 +268,10 @@ class GSMLS:
 
     def download_complete(self, **kwargs):
 
-        download_folder = "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"
+        download_folder = "/opt/airflow/downloads"
         for _ in range(1, 16):
             abspath_ = self.create_filename(base_path=download_folder, **kwargs)
+            print(abspath_)
             if os.path.exists(abspath_):
                 return True
             else:
@@ -353,7 +377,7 @@ class GSMLS:
         download_button.click()
         error_result = GSMLS.download_error(driver_var, kwargs["logger"])
 
-        driver_var.switch_to.window(kwargs["Main_Window"])
+        # driver_var.switch_to.window(kwargs["Main_Window"])
         time.sleep(1)
         close_page = WebDriverWait(driver_var, 5).until(
             EC.presence_of_element_located(
@@ -395,7 +419,9 @@ class GSMLS:
         merged_df["QTR"] = kwargs["Qtr"]
         merged_df["CONDITION"] = "Unknown"
         merged_df["PROP_CLASS"] = self.prop_type
+        merged_df["PYSPARK_PROCESSED"] = False
         merged_df["SCRAPED_DATE"] = datetime.today().date()
+        merged_df["SCRAPED_DATE"] = pd.to_datetime(merged_df["SCRAPED_DATE"])
 
         return merged_df
 
@@ -497,9 +523,9 @@ class GSMLS:
 
         if page_name in ["Garden State MLS", "Advanced Search", "Results", "Download"]:
             # Wait for the page to completely load
-            WebDriverWait(driver_var, 10).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
+            # WebDriverWait(driver_var, 10).until(
+            #     lambda d: d.execute_script("return document.readyState") == "complete"
+            # )
             # Wait 1
             WebDriverWait(driver_var, 15).until(
                 EC.text_to_be_present_in_element(
@@ -706,9 +732,40 @@ class GSMLS:
                 sold_listings_dictionary["LATITUDE"].append(latlong.group(1))
                 sold_listings_dictionary["LONGITUDE"].append(latlong.group(2))
 
+        # print(sold_listings_dictionary)
         return sold_listings_dictionary
 
-    def input_download_log_data(self, **kwargs):
+    def generate_level_sets(self):
+
+        query = f"""
+            SELECT * FROM gsmls_event_log_new
+            WHERE id IN (
+            SELECT id FROM gsmls_event_log_new
+            WHERE id BETWEEN (
+                SELECT MAX(id) FROM gsmls_event_log_new
+                WHERE municipality = '{self.last_scraped_muni}'
+                AND county = {self.last_scraped_county}
+                AND split_type = 'quarterly')
+                AND
+                (SELECT MAX(id) FROM gsmls_event_log_new
+                WHERE municipality = '{self.last_scraped_muni}')
+        )
+        """
+
+        table = pd.read_sql_query(query, con=self.engine.raw_connection())
+
+        for level_type in self.level_set.keys():
+
+            sub_table = table[table['split_type'] == level_type]
+            if not sub_table.empty:
+                self.level_set[level_type] += sub_table['split_index'].max()
+
+                # if level_type == 'monthly':
+                #     self.level_set['quarterly'] += 1
+                # elif level_type == 'weekly':
+                #     self.level_set['monthly'] += 1
+
+    def input_download_log_data(self, split_type=None, split_index=None, results_found=None, **kwargs):
 
         self.download_log["Year_"].append(kwargs["Year"])
         self.download_log["Quarter"].append(kwargs["Qtr"])
@@ -717,10 +774,15 @@ class GSMLS:
         self.download_log["Initiated"].append("Yes")
         self.download_log["Finished"].append("No")
         self.download_log["Rows_Produced"].append(0)
-        self.download_log["Date_Produced"].append(datetime.now().date())
         self.download_log["Start_Date"].append(self.start_date)
+        self.download_log["Date_Produced"].append(datetime.now().date())
         self.download_log["Property_Type"].append(self.prop_type)
         self.download_log["Timeframe"].append(self.timeframe)
+        self.download_log["Split_Type"].append(split_type)
+        self.download_log["Split_Index"].append(split_index)
+        if results_found is not None:
+            self.download_log["Results_Found"].append("Yes")
+
 
     @staticmethod
     def kill_logger(logger_var, file_handler, console_handler):
@@ -745,7 +807,7 @@ class GSMLS:
                 LIMIT 1;
                 """
 
-        metadata = pd.read_sql_query(query, self.engine)
+        metadata = pd.read_sql_query(query, self.engine.raw_connection())
         last_row = metadata.shape[0] - 1
 
         if metadata.empty:
@@ -759,20 +821,43 @@ class GSMLS:
             self.last_scraped_muni = metadata.loc[last_row, "municipality"]
             self.finished = metadata.loc[last_row, "finished"]
             self.last_scraped_property_type = metadata.loc[last_row, "property_type"]
+            self.alt_split_type = metadata.loc[last_row, "split_type"]
+            if self.alt_split_type is not None:
+                self.generate_level_sets()
             self.assign_timeframe()
+            print(f" ==== SCRAPED QUARTER: {self.last_scraped_qtr} ====")
+            print(f" ==== SCRAPED YEAR: {self.last_scraped_year} ====")
+            print(f" ==== SCRAPED COUNTY: {self.last_scraped_county} ====")
+            print(f" ==== SCRAPED MUNICIPALITY: {self.last_scraped_muni} ====")
+            print(f" ==== SCRAPED FINISHED: {self.finished} ====")
+            print(f" ==== SCRAPED PROPERTY TYPE: {self.last_scraped_property_type} ====")
+            print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
+            print(f" ==== LEVEL SET: {self.level_set} ====")
 
-            if first_run is None:
+            if first_run is not None:
                 # Block is initiated on program start
                 # self.start_date is used to understand what date the program should start scraping from
                 # A historic or mixed timeframe will always start on Jan. 1st of the last scraped year
                 if self.timeframe in ['historic', 'mixed']:
-                    self.start_date = datetime.date(year=int(self.last_scraped_year), month=1, day=1)
+                    default_date = f'{self.last_scraped_year}-01-01 00:00:00'
+                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                    print(f" ==== START DATE : {self.start_date} ==== ")
                 else:
                     # Date produced is the date the program scraped that data
                     # For a current timeframe, date of last run + 1 day will be new start date
-                    self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1)
+                    try:
+                        self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1)
+                        assert datetime.now() > self.start_date
+                        print(f" ==== START DATE : {self.start_date} ==== ")
+                    except AssertionError:
+                        # In the event of a complete program shutdown, the class will initiate a new
+                        # run and create a start date greater than today. This will put the previous start
+                        # date if that occurs
+                        self.start_date = metadata.loc[last_row, "start_date"]
+
             else:
                 self.start_date = metadata.loc[last_row, "start_date"]
+                # self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1) Used for debugging
 
             # All data from last run was scraped. Reset the value to scrape all new data
             if (
@@ -844,7 +929,9 @@ class GSMLS:
     def login_load_main_page(self, driver_var, **kwargs):
         self.login("GSMLS", driver_var)
         GSMLS.explicit_page_load("Garden State MLS", driver_var)
+        print(f' ==== CURRENT WINDOW ID: {driver_var.current_window_handle} ==== ')
         kwargs["Main_Window"] = driver_var.current_window_handle
+        kwargs['logger'].info('==== LOGIN SUCCESSFUL ====')
 
     @staticmethod
     def no_results(driver_var):
@@ -955,16 +1042,18 @@ class GSMLS:
         if kwargs.get("Topic", None) is None:
             kwargs["Topic"] = topic_dict[self.prop_type]
 
-        base_path = "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"
+        base_path = "/opt/airflow/downloads"
 
         if self.download_complete(**kwargs) is True:
             sold_df = pd.read_excel(self.create_filename(base_path=base_path, **kwargs), engine="xlrd")
+            print(f' ==== SIZE OF DF AFTER LOADING: {len(sold_df)}')
             sold_df.columns = sold_df.columns.str.upper()
             sold_df = self.return_target_columns(sold_df)
 
             # Merge the Latitude and Longitude data from the image df to the sold listings df
             if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
                 raw_data = self.enrich_raw_data(sold_df, soldlistings, **kwargs)
+                print(f' ==== SIZE OF DF AFTER DATA ENRICHMENT: {len(sold_df)}')
 
             elif self.prop_type == "TAX":
                 raw_data = sold_df
@@ -1042,36 +1131,47 @@ class GSMLS:
         with tqdm(total=len(self.municipalities.keys()), desc="Counties", colour="yellow") as counties_bar:
             for county, municipality in self.value_generator('county', counties_bar):
 
+                assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
+                    "Program cutoff time reached. Saving progress and ending"
+
                 self.click_target_tab("County", driver_var)
                 GSMLS.set_county(2, county, driver_var)  # Set the county
+                print(f' ==== COUNTY SET: {self.counties[str(county)]} ==== ')
                 kwargs["County"] = county
+                kwargs["County_Name"] = self.counties[str(county)]
                 self.click_target_tab("Town", driver_var)
 
                 # The municipality variable is actually a dictionary with key-value pairs od city_id and city_name
                 with tqdm(total=len(municipality.keys()), desc="Municipalities", colour="green", position=1, ) as muni_bar:
                     for city_id, city_name in self.value_generator("municipality", muni_bar, values=municipality):
 
+                        assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
+                            "Program cutoff time reached. Saving progress and ending"
+
                         GSMLS.set_city(2, city_id, driver_var)  # Set the city
                         kwargs["Municipality"] = city_name
                         kwargs["Municipality_ID"] = city_id
+                        print(f' ==== MUNICIPALITY SET: {city_name} ==== ')
                         GSMLS.explicit_page_load("Pre-Results", driver_var)
                         zero_results, too_many_results = GSMLS.show_results(driver_var)
 
-                        # Input attributes into event log dictionary
-                        self.input_download_log_data(**kwargs)
-
                         if zero_results is True:
                             # No results found
+                            # Input attributes into event log dictionary
+                            self.input_download_log_data(**kwargs)
                             self.zero_results_found(muni_bar, driver_var, **kwargs)
 
                         elif too_many_results is True:
                             # Too many results were found, split the search dates
+                            kwargs['split_data'] = True
                             self.too_many_results_found(muni_bar, driver_var, **kwargs)
 
                         else:
                             # Results were found
                             # Sales file will be requested and additional data will be added
                             # and formatted before being produced to Apache Kafka
+                            kwargs['split_data'] = False
+                            self.input_download_log_data(**kwargs)
                             self.results_found(driver_var, update_bar=muni_bar, **kwargs)
 
                 self.click_target_tab("County", driver_var)
@@ -1144,9 +1244,7 @@ class GSMLS:
 
     def results_found(self, driver_var, results_type=1, update_bar=None, **kwargs):
 
-        # Results were regularly found on first search
-        if results_type == 1:
-            self.download_log["Results_Found"].append("Yes")
+        self.download_log["Results_Found"].append("Yes")
 
         filename = self.download_sales_data(driver_var, **kwargs)
         kwargs["Filename"] = filename
@@ -1156,13 +1254,14 @@ class GSMLS:
         # No data was returned
         if filename != "Server Error":
             # Scrape the mlsnum, lat/long and image data to merge into Kafka data
-            additional_info = GSMLS.format_data_for_kafka(driver_var, **kwargs)
+            additional_info = self.format_data_for_kafka(driver_var, **kwargs)
             self.publish_data_2kafka(additional_info, **kwargs)
 
         GSMLS.exit_results_page(driver_var)
+        self.download_log["Finished"][-1] = "Yes"
 
+        # Results were regularly found on first search and results totaling rows or less
         if results_type == 1:
-            self.download_log["Finished"][-1] = "Yes"
             update_bar.update(1)
             self.click_target_tab("Town", driver_var)
             GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
@@ -1562,9 +1661,8 @@ class GSMLS:
 
         metadata = pd.DataFrame(self.download_log)
         metadata.columns = metadata.columns.str.lower()
-        metadata.to_sql(
-            "gsmls_event_log_new", con=self.engine, if_exists="append", index=False
-        )
+        metadata.to_sql("gsmls_event_log_new", con=self.engine,
+                        if_exists="append", index=False)
         self.download_log = GSMLS.create_download_log()
 
     @staticmethod
@@ -1590,9 +1688,9 @@ class GSMLS:
 
         # Step 2: Switch to new media links window
         driver_var.switch_to.window(media_window)
-        WebDriverWait(driver_var, 10).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
+        # WebDriverWait(driver_var, 10).until(
+        #     lambda d: d.execute_script("return document.readyState") == "complete"
+        # )
 
         GSMLS.explicit_page_load(
             "Media Page", driver_var, prop_id=prop_id, window_id=media_window
@@ -1693,9 +1791,9 @@ class GSMLS:
     @staticmethod
     def sendfile2trash(xls_file_name: str):
 
-        send2trash.send2trash(
+        os.remove(
             os.path.join(
-                "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder", xls_file_name + ".xls"
+                "/opt/airflow/downloads", xls_file_name + ".XLS"
             )
         )
 
@@ -1852,54 +1950,99 @@ class GSMLS:
 
         # Too many results were found, exit the alert popup and continue with script
         GSMLS.too_many_results(driver_var)
-
-        time_periods = self.create_timeframe_dict(kwargs["Year"], split_type='quarterly')
+        split_type = 'quarterly'
+        time_periods = self.create_timeframe_dict(kwargs["Year"], split_type=split_type)
 
         for qtr, daterange in time_periods.items():
 
+            if self.split_type_check(split_type, qtr) is False:
+                continue
             self.set_dates([daterange[0], daterange[1]], driver_var)
             zero_results, too_many_results = GSMLS.show_results(driver_var)
 
             if zero_results is False and too_many_results is False:
+                kwargs["New_Qtr"] = f"Q{qtr}_"
+                self.input_download_log_data(split_type=split_type, split_index=qtr, **kwargs)
                 self.results_found(driver_var, results_type=2, **kwargs)
 
             elif too_many_results is True:
                 # Monthly timeframe
                 GSMLS.too_many_results(driver_var)
+                # Properly capture the parent timeframe. Creates a checkpoint to reference in the event of a program failure
+                self.input_download_log_data(split_type='quarterly', split_index=qtr, results_found='Yes', **kwargs)
                 start_month = int(daterange[0][:2])
-
+                split_type = 'monthly'
                 monthly_periods = self.create_timeframe_dict(kwargs["Year"],
-                                                             split_type='monthly', start_month=start_month)
+                                                             split_type=split_type, start_month=start_month)
 
                 for month, daterange1 in monthly_periods.items():
 
+                    if self.split_type_check(split_type, month) is False:
+                        continue
                     self.set_dates([daterange1[0], daterange1[1]], driver_var)
                     zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                     if zero_results is False and too_many_results is False:
-                        kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}"
+                        kwargs["New_Qtr"] = f"Q{qtr}_M{GSMLS.string_month(month)}"
+                        self.input_download_log_data(split_type=split_type, split_index=month, **kwargs)
                         self.results_found(driver_var, results_type=2, **kwargs)
 
                     elif too_many_results is True:
                         # Weekly timeframe
                         GSMLS.too_many_results(driver_var)
+                        self.input_download_log_data(split_type='monthly', split_index=month,
+                                                     results_found='Yes', **kwargs)
+                        split_type = 'weekly'
                         weekly_periods = self.create_timeframe_dict(kwargs["Year"],
-                                                                    split_type='weekly', start_month=start_month)
+                                                                    split_type=split_type, start_month=start_month)
 
                         for week, daterange2 in weekly_periods.items():
+                            if self.split_type_check(split_type, week) is False:
+                                continue
                             self.set_dates([daterange1[0], daterange1[1]], driver_var)
                             zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                             if zero_results is False and too_many_results is False:
-                                kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
+                                kwargs["New_Qtr"] = f"Q{qtr}_M{GSMLS.string_month(month)}_W{week}"
+                                self.input_download_log_data(split_type=split_type, split_index=week, **kwargs)
                                 self.results_found(driver_var, results_type=2, **kwargs)
 
                             elif too_many_results is True:
 
                                 # Scrape the first 500 results given
                                 GSMLS.too_many_results(driver_var, giveup="Yes")
-                                kwargs["New_Qtr"] = f"{qtr}_{GSMLS.string_month(month)}_{week}"
+                                kwargs["New_Qtr"] = f"Q{qtr}_M{GSMLS.string_month(month)}_W{week}500"
+                                self.input_download_log_data(split_type=split_type, split_index=week, **kwargs)
                                 self.results_found(driver_var, results_type=2, **kwargs)
+
+    def split_type_check(self, split_type, num):
+        """
+        Evaluate the current split type with the self.level_set dictionary.
+        The for loop index needs to match the value stored in the dictionary
+        for that split type in order to proceed to the correct scrape date
+        """
+
+        # If the current loop cycle doesn't match the one stored in the level set, continue
+        if num < self.level_set[split_type]:
+            return False
+
+        else:
+            print(f' ==== SPLIT TYPE MATCHED. SCRAPING FROM {split_type} TIMEFRAME ==== ')
+            print(f" ==== LEVEL SET: {self.level_set} ====")
+            # If it does match, and the cycle value is greater than zero, reset the value
+            if self.level_set[split_type] > 0:
+                self.level_set[split_type] = 0
+
+            # If this current split_type matches the global split_type reset values
+            if self.alt_split_type == split_type:
+                self.alt_split_type = None
+
+                # If the program previously finished scraping this cycle, reset the value
+                if self.finished == 'Yes':
+                    self.finished = None
+                    return False
+
+            return True
 
     @staticmethod
     def string_month(value):
@@ -1929,9 +2072,7 @@ class GSMLS:
 
     def too_many_results_found(self, update_bar, driver_var, **kwargs):
 
-        self.download_log["Results_Found"].append("Yes")
         self.split_search_dates(driver_var, **kwargs)
-        self.download_log["Finished"][-1] = "Yes"
         update_bar.update(1)
         self.set_dates(kwargs["Dates"], driver_var)
         self.click_target_tab("Town", driver_var)
@@ -1945,32 +2086,49 @@ class GSMLS:
             'county': self.last_scraped_county,
             'municipality': self.last_scraped_muni
         }
-        metadata_value = instance_key_values[key_name]
 
         if key_name == 'county':
             values = self.municipalities
 
-        if key_name in ['county', 'municipalities']:
+        if key_name in ['county', 'municipality']:
 
             for key, value_ in values.items():
+                metadata_value = instance_key_values[key_name]
+                print(f'Last scraped municipality: {metadata_value}')
+                print(f' ==== {key_name} CURRENT KEY AND VALUES: {key}, {value_}')
                 if metadata_value is not None:
                     if key_name == 'municipality':
                         target = value_
                     else:
                         target = key
+                    # If target doesn't equal metadata value, continue
                     if target != metadata_value:
                         update_bar.update(1)
                         time.sleep(0.2)
                         continue
+
+                    # If the target == metadata value, alt_split_type is None and the last scraped run completed
+                    # skip this municipality in order to not produce duplicate data. This handles data that didn't
+                    # require dates to be split
+                    elif key_name == 'municipality' and self.alt_split_type is None and self.finished == 'Yes':
+                        instance_key_values[key_name] = None
+                        self.change_instance_var(key_name)
+                        continue
+
                     else:
                         instance_key_values[key_name] = None
-                        break
+                        self.change_instance_var(key_name)
 
-                yield key, value_
+                        yield key, value_
+
+                elif metadata_value is None:
+                    yield key, value_
 
         else:
 
-            for key, in values:
+            for key in values:
+                metadata_value = instance_key_values[key_name]
+
                 if metadata_value is not None:
                     if key != metadata_value:
                         update_bar.update(1)
@@ -1978,9 +2136,11 @@ class GSMLS:
                         continue
                     else:
                         instance_key_values[key_name] = None
-                        break
+                        self.change_instance_var(key_name)
 
-                yield key
+                        yield key
+                else:
+                    yield key
 
     def zero_results_found(self, update_bar, driver_var, **kwargs):
 
@@ -1992,7 +2152,6 @@ class GSMLS:
         self.click_target_tab("Town", driver_var)
         GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
 
-    @logger_decorator
     def main(self, driver_var, **kwargs):
 
         # Remove the logger decorator and just accept **kwargs
@@ -2000,8 +2159,15 @@ class GSMLS:
         f_handler = kwargs["f_handler"]
         c_handler = kwargs["c_handler"]
         kwargs["data-producer"] = create_kafka_producer("data_producer", logger=logger, remote=True)
+        tz = timezone("America/New_York")
+        kwargs["time_zone"] = tz
 
         try:
+
+            # Check program cutoff time
+            assert datetime.now(tz=tz) < kwargs["cutoff_time"], \
+                "Program cutoff time reached. Saving progress and ending"
+
             # Step 1: Login to the GSMLS
             self.login_load_main_page(driver_var, **kwargs)
 
@@ -2015,6 +2181,12 @@ class GSMLS:
                 for year in self.value_generator('year', year_bar, years):
 
                     time_periods = self.create_timeframe_dict(year)
+                    logger.info(f'Timeframe: {time_periods}')
+
+                    if year != self.start_date.year:
+                        default_date = f'{year}-01-01 00:00:00'
+                        self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+
 
                     with tqdm(total=len(time_periods), desc="Qtr", colour="blue", position=1) as quarters_bar:
                         for qtr, date_range in time_periods.items():
@@ -2030,6 +2202,7 @@ class GSMLS:
 
             # Step 5: Sign out
             GSMLS.sign_out(driver_var)
+            return True
 
         except (TimeoutException, TimeoutError, AttributeError):
             exc = sys.exception()
@@ -2044,10 +2217,15 @@ class GSMLS:
             self.save_metadata()
             raise AssertionError
 
+        except (SyntaxError, DatabaseError) as e:
+            print(f" ==== A SQL DATABASE ERROR HAS OCCURRED ==== \n{e}")
+            raise DatabaseError
+
         except KeyboardInterrupt:
             # Press the stop button once in order for data to save
             logger.info("User has ended the program")
             GSMLS.kill_logger(logger, f_handler, c_handler)
+            self.save_metadata()
             raise KeyboardInterrupt
 
         except BaseException:
@@ -2065,25 +2243,27 @@ class GSMLS:
         website = "https://mls.gsmls.com/member/"
         quit_program = False
 
-        while quit_program:
+        while not quit_program:
 
             driver = create_selenium_webdriver()
 
             try:
                 driver.maximize_window()
                 driver.get(website)
-                self.main(driver, **kwargs)
+                quit_program = self.main(driver, **kwargs)
 
-            except AssertionError:
+                if quit_program is True:
+                    break
+
+            except (AssertionError, KeyboardInterrupt, NoBrokersAvailable):
                 break
 
-            except KeyboardInterrupt:
-                self.save_metadata()
-                break
-
-            except NoBrokersAvailable:
-                break
+            except (SyntaxError, DatabaseError) as e:
+                return e
 
             else:
                 # Modify this so program can end properly on no errors
                 self.load_metadata()
+
+        return self.rows_counted[self.prop_type]
+
