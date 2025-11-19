@@ -36,8 +36,12 @@ def create_kafka_consumer(client_id, group_id):
         bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
         auto_offset_reset="earliest",
         enable_auto_commit=False,
+        key_deserializer=lambda k: k.decode("utf-8"),
         value_deserializer=lambda v: v.decode("utf-8"),
-        consumer_timeout_ms=120000,
+        heartbeat_interval_ms=5000,  # Send heartbeats in 5s intervals
+        session_timeout_ms=45000,  # How long the consumer waits for heartbeats before considered dead
+        max_poll_interval_ms=3000000,  # How long the consumer goes in between successful polls before considered "stuck"
+        max_poll_records=100,  # Max number of records pulled per poll request
     )
 
 
@@ -109,6 +113,20 @@ def create_selenium_webdriver(remote=True):
         # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
         load_dotenv("/opt/airflow/.env")
         ip_address = os.getenv("DIGITAL_OCEAN_IP")
+
+        save_location = "/home/seluser/downloads"
+        custom_user_agent = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0")
+
+        s = {
+            "savefile.default_directory": save_location,
+            "download.default_directory": save_location,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True
+        }
+        options.add_argument(f"user-agent={custom_user_agent}")
+        options.add_experimental_option("prefs", s)
+
         return webdriver.Remote(
             command_executor=f"http://{ip_address}:4444/wd/hub", options=options
         )
@@ -139,11 +157,11 @@ def create_sql_engine(database: str, remote=True):
     if remote is True:
         load_dotenv("/opt/airflow/.env")
         connection_str = os.getenv("POSTGRES_AWS_CONN")
-        engine = create_engine(
-            f"postgresql+psycopg2://{connection_str}:5432/{database}", echo=True, future=True)
+        engine = create_engine(f"postgresql+psycopg2://{connection_str}:5432/{database}", echo=False, future=False)
+
     else:
         base, user, pw = get_us_pw("PostgreSQL")
-        engine = create_engine(f"postgresql://{user}:{pw}@{base}:5432/{database}", echo=True, future=True)
+        engine = create_engine(f"postgresql://{user}:{pw}@{base}:5432/{database}", echo=False, future=False)
 
     return engine
 
