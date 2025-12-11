@@ -1,13 +1,19 @@
 import os
 import json
 import pandas as pd
+import numpy
 import re
+import traceback
+import time
 from tqdm import tqdm
+from datetime import datetime
+from datetime import timedelta
 from utility_func import create_sql_engine, create_kafka_producer, create_kafka_consumer
-from kafka.errors import KafkaTimeoutError
-from kafka.errors import MessageSizeTooLargeError
+from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
 from RealEstateImages import RealEstateImages
-from sqlalchemy.exc import DataError
+from sqlalchemy.exc import DataError, IntegrityError
+from psycopg2.errors import SyntaxError
+from sqlalchemy.exc import DatabaseError
 
 
 class KafkaGSMLSConsumer:
@@ -43,38 +49,30 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def calculate_dates(df_var, prop_type, update_bar):
 
-        if prop_type == 'RES':
+        if prop_type in ['RES', 'MUL', 'LND']:
             df_var['YEAR'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_year)
             df_var['MONTH'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_month)
             df_var['LISTDATE'] = pd.to_datetime(df_var['LISTDATE'], errors='coerce')
             df_var['CLOSEDDATE'] = pd.to_datetime(df_var['CLOSEDDATE'], errors='coerce')
             df_var['PENDINGDATE'] = pd.to_datetime(df_var['PENDINGDATE'], errors='coerce')
             df_var['ANTICCLOSEDDATE'] = pd.to_datetime(df_var['ANTICCLOSEDDATE'], errors='coerce')
+            df_var['SCRAPED_DATE'] = pd.to_datetime(df_var['SCRAPED_DATE'], errors='coerce')
             df_var['DAYS_TO_CLOSE'] = df_var['CLOSEDDATE'] - df_var['PENDINGDATE']
             df_var['ANTIC_CLOSEDATE_DIFF'] = df_var['CLOSEDDATE'] - df_var['ANTICCLOSEDDATE']
             # Stuck these transformations here to not make a new function
             df_var['SP/LP%'] = df_var['SP/LP%'].astype('float64')
             df_var['SP/LP%'] = df_var['SP/LP%'] - 100.0
-            df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME', 'SUBPROPTYPE': 'SUBPROPTYPE_SFH'})
 
-        if prop_type in ['MUL', 'LND']:
-            df_var['YEAR'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_year)
-            df_var['MONTH'] = df_var['CLOSEDDATE'].apply(KafkaGSMLSConsumer.parse_month)
-            df_var['LISTDATE'] = pd.to_datetime(df_var['LISTDATE'], errors='coerce')
-            df_var['CLOSEDDATE'] = pd.to_datetime(df_var['CLOSEDDATE'], errors='coerce')
-            df_var['PENDINGDATE'] = pd.to_datetime(df_var['PENDINGDATE'], errors='coerce')
-            df_var['ANTICCLOSEDDATE'] = pd.to_datetime(df_var['ANTICCLOSEDDATE'], errors='coerce')
-            df_var['DAYS_TO_CLOSE'] = df_var['CLOSEDDATE'] - df_var['PENDINGDATE']
-            df_var['ANTIC_CLOSEDATE_DIFF'] = df_var['CLOSEDDATE'] - df_var['ANTICCLOSEDDATE']
-            # Stuck these transformations here to not make a new function
-            df_var['SP/LP%'] = df_var['SP/LP%'].astype('float64')
-            df_var['SP/LP%'] = df_var['SP/LP%'] - 100.0
-            df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME'})
+            if prop_type == 'RES':
+                df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME', 'SUBPROPTYPE': 'SUBPROPTYPE_SFH'})
+            else:
+                df_var = df_var.rename(columns={'OWNERNAME': 'SELLERNAME'})
 
         elif prop_type == 'RNT':
             df_var['YEAR'] = df_var['RENTEDDATE'].apply(KafkaGSMLSConsumer.parse_year)
             df_var['MONTH'] = df_var['RENTEDDATE'].apply(KafkaGSMLSConsumer.parse_month)
             df_var['RENTEDDATE'] = pd.to_datetime(df_var['RENTEDDATE'], errors='coerce')
+            df_var['SCRAPED_DATE'] = pd.to_datetime(df_var['SCRAPED_DATE'], errors='coerce')
             # Stuck these transformations here to not make a new function
             df_var['RP/LP%'] = df_var['RP/LP%'].astype('float64')
             df_var['RP/LP%'] = df_var['RP/LP%'] - 100.0
@@ -91,35 +89,41 @@ class KafkaGSMLSConsumer:
     def change_datatypes(df_var, prop_type, update_bar):
 
         if prop_type == 'RES':
+            # fill_na() function turns this col to string. TypeError thrown if string value is explictly tried to
+            # change to Boolean type, even if it's "True" or "False:
+            df_var["PYSPARK_PROCESSED"] = False
             update_bar.update(1)
             return df_var.astype({'TOWNCODE': 'int64', 'ASSESSAMOUNTBLDG': 'float64', 'APPFEE': 'float64', 'YEAR': 'int64',
                                   'ASSESSAMOUNTLAND': 'float64', 'ASSESSTOTAL': 'float64', 'QTR': 'int64',
                                   'TAXAMOUNT': 'float64', 'YEARBUILT': 'float64', 'SQFTAPPROX': 'float64',
                                   'ORIGLISTPRICE': 'int64', 'LISTPRICE': 'int64', 'SALESPRICE': 'int64',
-                                  'PARKNBRAVAIL': 'int64'})
+                                  'PARKNBRAVAIL': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'MUL':
+            df_var["PYSPARK_PROCESSED"] = False
             update_bar.update(1)
             return df_var.astype({'TOWNCODE': 'int64', 'ASSESSAMOUNTBLDG': 'float64', 'YEAR': 'int64',
                                   'ASSESSAMOUNTLAND': 'float64', 'ASSESSTOTAL': 'float64', 'QTR': 'int64',
                                   'TAXAMOUNT': 'float64', 'YEARBUILT': 'float64', 'SQFTBLDG': 'float64',
                                   'INCOMEGROSSOPERATING': 'float64', 'EXPENSEOPERATING': 'float64',
                                   'INCOMENETOPERATING': 'float64', 'ORIGLISTPRICE': 'int64', 'LISTPRICE': 'int64',
-                                  'SALESPRICE': 'int64', 'PARKNBRAVAIL': 'int64'})
+                                  'SALESPRICE': 'int64', 'PARKNBRAVAIL': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'LND':
+            df_var["PYSPARK_PROCESSED"] = False
             update_bar.update(1)
             return df_var.astype({'TOWNCODE': 'int64', 'ASSESSAMOUNTBLDG': 'float64', 'YEAR': 'int64',
                                   'ASSESSAMOUNTLAND': 'float64', 'ASSESSTOTAL': 'float64', 'QTR': 'int64',
                                   'TAXAMOUNT': 'float64', 'ORIGLISTPRICE': 'int64', 'LISTPRICE': 'int64',
-                                  'SALESPRICE': 'int64'})
+                                  'SALESPRICE': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'RNT':
+            df_var["PYSPARK_PROCESSED"] = False
             update_bar.update(1)
             return df_var.astype({'TOWNCODE': 'int64', 'YEAR': 'int64','QTR': 'int64', 'BEDS':'int64',
                                   'YEARBUILT': 'float64', 'SQFTAPPROX': 'float64', 'RENTMONTHPERLSE': 'int64',
                                   'GARAGECAP': 'int64', 'LP': 'int64', 'RENTPRICEORIG': 'int64',
-                                  'LENGTHOFLEASE': 'int64'})
+                                  'LENGTHOFLEASE': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'TAX':
             update_bar.update(1)
@@ -144,74 +148,44 @@ class KafkaGSMLSConsumer:
         update_bar.update(1)
         return df_var
 
-    def consume_data(self):
+    def consume_data(self, prop_type):
 
         df_list = []
-        empty_data = 0
-        data_available = True
+        keys_list = []
+        start_time = datetime.now()
         progress_bar = tqdm(range(len(df_list)), desc='New Data Found', colour='green', position=1)
-        empty_data_bar = tqdm(range(10), desc='Empty Data', colour='green', position=2)
 
-        while data_available:
+        while True:
 
             try:
-                new_data = self.consumer.poll(max_records=100, timeout_ms=5000)
+                new_data = self.consumer.poll(timeout_ms=4000)
 
-                if not new_data:
-                    empty_data += 1
-                    empty_data_bar.update(1)
+                if new_data:
+                    sub_list, key_list = KafkaGSMLSConsumer.extract_messages(new_data)
 
-                    if empty_data == 10:
-                        print(f'No new data. Returning dataframe')
-                        break
+                    if isinstance(sub_list, list):
+                        df_list.extend(sub_list)
+                        keys_list.extend(key_list)
+                        progress_bar.update(len(sub_list))
+                    else:
+                        pass
 
-                elif new_data:
+                elif ((datetime.now() - start_time) < timedelta(minutes=30)) and len(df_list) == 0:
 
-                    for partition, messages in new_data.items():
+                    print(' === WAITING FOR NEW DATA === ')
+                    print(f' ==== CURRENT TIME LAPSE: {datetime.now() - start_time} ====')
+                    continue
 
-                        for dataset in messages:
+                elif ((datetime.now() - start_time) < timedelta(minutes=30)) and len(df_list) > 0:
 
-                            try:
-                                json_obj = json.loads(json.loads(dataset.value))
-                                df = pd.DataFrame(data=json_obj['data'], index=json_obj['index'], columns=json_obj['columns'])
-                                df_list.append(df)
-                                # progress_bar.update(1)
+                    return self.prepare_data(df_list, prop_type), keys_list
 
-                            except json.decoder.JSONDecodeError:
-                                pass
-
-                    if empty_data > 1:
-                        empty_data = 0
-
-                    progress_bar.update(1)
+                else:
+                    print(' === NO NEW DATA. KAFKA DATA CONSUMPTION COMPLETE === ')
+                    return None, None
 
             except ValueError:
                 pass
-
-        df = pd.concat(df_list)
-
-        if 'LISTDATE' in list(df.columns):
-            self.consumer.commit()
-            return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'LISTDATE'],
-                                      keep='last').reset_index(drop=True)
-
-        elif 'RP/LP%' in list(df.columns):
-            try:
-                self.consumer.commit()
-                return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
-                                      keep='last').reset_index(drop=True)
-            except KeyError:
-                df.insert(17, 'RENTEDDATE', '00/00/0000 00:00:00')
-                return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
-                                          keep='last').reset_index(drop=True)
-
-        elif 'AUTOROW' in list(df.columns):
-            self.consumer.commit()
-            return df.drop_duplicates(subset=['AUTOROW'], keep='last').reset_index(drop=True)
-
-        else:
-            self.consumer.commit()
-            return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN',], keep='last').reset_index(drop=True)
 
     @staticmethod
     def convert_lot_size(df_var, update_bar):
@@ -309,179 +283,244 @@ class KafkaGSMLSConsumer:
         return df_var
 
     @staticmethod
+    def extract_messages(new_messages):
+
+        sub_list = []
+        key_list = []
+
+        for partition_obj, messages_list in new_messages.items():
+
+            for record in messages_list:
+
+                try:
+                    json_obj = json.loads(json.loads(record.value))
+
+                    df = pd.DataFrame(data=json_obj['data'],
+                                        index=json_obj['index'],
+                                        columns=json_obj['columns'])
+                    sub_list.append(df)
+                    if record.key != 'null':
+                        key_list.append(record.key)
+
+                except json.decoder.JSONDecodeError:
+
+                    pass
+        if len(sub_list) > 0:
+            return sub_list, key_list
+        else:
+            return None, None
+
+    @staticmethod
     def fill_na_values(df_var, prop_type, update_bar):
 
         df_var = df_var.astype('string')
 
-        if prop_type == 'RES':
-            datatype_dict = {'ACRES': ['0.0', 'string'], 'AGENTLIST': ['000000', 'string'],
-                             'ANTICCLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'BATHSTOTAL': ['0.0', 'float64'], 'BEDS': ['0', 'int64'],
-                             'CLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'COUNTYCODE': ['00', 'string'], 'AGENTSELL': ['000000', 'string'],
-                             'DAYSONMARKET': ['0.0', 'float64'], 'FIREPLACES': ['0', 'int64'],
-                             'EXPIREDATE': ['00/00/0000 00:00:00', 'string'], 'GARAGECAP': ['0.0', 'float64'],
-                             'LISTDATE': ['00/00/0000 00:00:00', 'string'], 'APPFEE': ['0.0', 'string'],
-                             'LISTPRICE': ['0', 'int64'], 'LOANTERMS_SHORT': ['Unknown', 'string'],
-                             'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
-                             'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
-                             'PARKNBRAVAIL': ['0.0', 'float64'], 'EASEMENT_SHORT': ['N', 'string'],
-                             'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'ASSOCFEE': ['0.0', 'float64'],
-                             'POOL_SHORT': ['N', 'string'], 'STYLEPRIMARY_SHORT': ['Unknown', 'string'], 'SUBPROPTYPE': ['U', 'string'],
-                             'REMARKSAGENT': ['None', 'string'], 'REMARKSPUBLIC': ['None', 'string'], 'ROOMS': ['0.0', 'float64'],
-                             'SALESPRICE': ['0.0', 'float64'], 'SHOWSPECIAL': ['None', 'string'],
-                             'STREETNUMDISPLAY': ['0', 'string'], 'SUBDIVISION': ['None', 'string'],
-                             'TAXID': ['0000-00000-0000-00000-0000', 'string'], 'TOWNCODE': ['0', 'string'],
-                             'WITHDRAWNDATE': ['00/00/0000 00:00:00', 'string'],
-                             'YEARBUILT': ['0', 'string'], 'ZIPCODE': ['00000', 'string'], 'SP/LP%': ['0%', 'string'],
-                             'BASEMENT_SHORT': ['N', 'string'], 'BUSRELATION_SHORT': ['Unknown', 'string'],
-                             'AGENTSELLNAME': ['NOT AVAILABLE', 'string'], 'OFFICESELL': ['000000', 'string'],
-                             'LISTTYPE_SHORT': ['Unknown', 'string'], 'BASEDESC_SHORT': ['None', 'string'],
-                             'ASSESSAMOUNTBLDG': ['0.0', 'string'], 'ASSESSAMOUNTLAND': ['0.0', 'string'],
-                             'ASSESSTOTAL': ['0.0', 'string'], 'COMPBUY': [None, 'string'], 'COMPSELL': [None, 'string'],
-                             'COMPTRANS': [None, 'string'], 'ZONING': [None, 'string'], 'STYLE_SHORT': ['Unknown', 'string'],
-                             'UTILITIES_SHORT': ['Unknown', 'string'], 'WATER_SHORT': ['Unknown', 'string'],
-                             'BATHSHALFTOTAL': ['0.0', 'float64'], 'BATHSFULLTOTAL': ['0.0', 'float64'],
-                             'SQFTAPPROX': ['0', 'string'], 'LATITUDE': ['0E-20', 'string'], 'LONGITUDE': ['0E-20', 'string']}
-
-        elif prop_type == 'MUL':
-            datatype_dict = {'ACRES': ['0.0', 'string'], 'AGENTLIST': ['000000', 'string'],
-                             'ANTICCLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'BATHSTOTAL': ['0.0', 'float64'], 'BEDS': ['0', 'int64'],
-                             'CLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'COUNTYCODE': ['00', 'string'], 'AGENTSELL': ['000000', 'string'],
-                             'DAYSONMARKET': ['0.0', 'float64'], 'SQFTBLDG': ['0', 'string'],
-                             'EXPIREDATE': ['00/00/0000 00:00:00', 'string'], 'GARAGECAP': ['0.0', 'float64'],
-                             'LISTDATE': ['00/00/0000 00:00:00', 'string'],
-                             'LISTPRICE': ['0', 'int64'], 'LOANTERMS_SHORT': ['Unknown', 'string'],
-                             'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
-                             'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
-                             'PARKNBRAVAIL': ['0.0', 'float64'], 'EASEMENT_SHORT': ['N', 'string'],
-                             'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'UNITSTYLE_SHORT': ['Unknown', 'string'],
-                             'REMARKSAGENT': ['None', 'string'], 'REMARKSPUBLIC': ['None', 'string'],
-                             'ROOMS': ['0.0', 'float64'], 'SALESPRICE': ['0.0', 'float64'], 'SHOWSPECIAL': ['None', 'string'],
-                             'STREETNUMDISPLAY': ['0', 'string'], 'SUBDIVISION': ['None', 'string'],
-                             'TAXID': ['0000-00000-0000-00000-0000', 'string'], 'TOWNCODE': ['0', 'string'],
-                             'WITHDRAWNDATE': ['00/00/0000 00:00:00', 'string'],
-                             'YEARBUILT': ['0', 'string'], 'ZIPCODE': ['00000', 'string'], 'SP/LP%': ['0%', 'string'],
-                             'BASEMENT_SHORT': ['N', 'string'], 'BUSRELATION_SHORT': ['Unknown', 'string'],
-                             'AGENTSELLNAME': ['NOT AVAILABLE', 'string'], 'OFFICESELL': ['000000', 'string'],
-                             'LISTTYPE_SHORT': ['Unknown', 'string'], 'BASEDESC_SHORT': ['None', 'string'],
-                             'ASSESSAMOUNTBLDG': ['0.0', 'string'], 'ASSESSAMOUNTLAND': ['0.0', 'string'],
-                             'ASSESSTOTAL': ['0.0', 'string'], 'COMPBUY': [None, 'string'],
-                             'COMPSELL': [None, 'string'], 'COMPTRANS': [None, 'string'], 'ZONING': [None, 'string'],
-                             'UTILITIES_SHORT': ['Unknown', 'string'], 'WATER_SHORT': ['Unknown', 'string'],
-                             'BATHSHALFTOTAL': ['0.0', 'float64'], 'BATHSFULLTOTAL': ['0.0', 'float64'],
-                             'INCOMEGROSSOPERATING': ['0.0', 'string'], 'UNIT4BATHS': ['0', 'int64'], 'UNIT1ROOMS': ['0', 'int64'],
-                             'EXPENSEOPERATING': ['0.0', 'string'], 'EXPENSESINCLUDE_SHORT': [None, 'string'],
-                             'UNIT2BATHS': ['0', 'int64'], 'UNIT2ROOMS': ['0', 'int64'], 'UNIT3BEDS': ['0', 'int64'],
-                             'UNIT3BATHS': ['0', 'int64'], 'UNIT4OWNERTENANTPAYS_SHORT': [None, 'string'],
-                             'UNIT3OWNERTENANTPAYS_SHORT': [None, 'string'], 'UNIT1BEDS': ['0', 'int64'],
-                             'UNIT3ROOMS': ['0', 'int64'], 'UNIT2BEDS': ['0', 'int64'],
-                             'UNIT1OWNERTENANTPAYS_SHORT': [None, 'string'], 'UNIT4BEDS': ['0', 'int64'],
-                             'UNIT2OWNERTENANTPAYS_SHORT': [None, 'string'], 'INCOMENETOPERATING': ['0.0', 'string'],
-                             'NUMUNITS': ['0', 'int64'], 'UNIT4ROOMS': ['0', 'int64'], 'UNIT1BATHS': ['0', 'int64'],
-                             'LATITUDE': ['0E-20', 'string'], 'LONGITUDE': ['0E-20', 'string']
-            }
-
-        elif prop_type == 'LND':
-            datatype_dict = {'ACRES': ['0.0', 'string'], 'AGENTLIST': ['000000', 'string'],
-                             'ANTICCLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'CLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'COUNTYCODE': ['00', 'string'], 'AGENTSELL': ['000000', 'string'],
-                             'DAYSONMARKET': ['0.0', 'float64'],
-                             'EXPIREDATE': ['00/00/0000 00:00:00', 'string'],
-                             'LISTDATE': ['00/00/0000 00:00:00', 'string'], 'LISTPRICE': ['0', 'int64'],
-                             'LOANTERMS': ['Unknown', 'string'], 'LOTSIZE': ['0x0', 'string'], 'MLSNUM': ['000000', 'string'],
-                             'OFFICELIST': ['000000', 'string'], 'OFFICESELLNAME': ['NEW JERSEY', 'string'],
-                             'ORIGLISTPRICE': ['0.0', 'float64'], 'OWNERNAME': ['Not Available', 'string'],
-                             'EASEMENT_SHORT': ['N', 'string'],
-                             'PENDINGDATE': ['00/00/0000 00:00:00', 'string'], 'REMARKSAGENT': ['None', 'string'],
-                             'REMARKSPUBLIC': ['None', 'string'], 'SALESPRICE': ['0.0', 'float64'], 'SHOWSPECIAL': ['None', 'string'],
-                             'STREETNUMDISPLAY': ['0', 'string'], 'SUBDIVISION': ['None', 'string'],
-                             'TAXID': ['0000-00000-0000-00000-0000', 'string'], 'TOWNCODE': ['0', 'string'],
-                             'WITHDRAWNDATE': ['00/00/0000 00:00:00', 'string'],
-                             'ZIPCODE': ['00000', 'string'], 'SP/LP%': ['0%', 'string'],
-                             'BUSRELATION_SHORT': ['Unknown', 'string'], 'LISTTYPE_SHORT': ['Unknown', 'string'],
-                             'AGENTSELLNAME': ['NOT AVAILABLE', 'string'], 'OFFICESELL': ['000000', 'string'],
-                             'ASSESSAMOUNTBLDG': ['0.0', 'string'], 'ASSESSAMOUNTLAND': ['0.0', 'string'],
-                             'ASSESSTOTAL': ['0.0', 'string'], 'COMPBUY': [None, 'string'],
-                             'COMPSELL': [None, 'string'], 'COMPTRANS': [None, 'string'],
-                             'NUMLOTS': ['0', 'int64'], 'ZONINGDESC_SHORT': ['Unknown', 'string'],
-                             'BUILDINGSINCLUDED_SHORT': ['Unknown', 'string'], 'CURRENTUSE_SHORT': ['Unknown', 'string'],
-                             'DEVRESTRICT_SHORT': ['Unknown', 'string'], 'DEVSTATUS_SHORT': ['Unknown', 'string'],
-                             'IMPROVEMENTS_SHORT': ['None', 'string'], 'LOTDESC_SHORT': ['None', 'string'],
-                             'PERCTEST_SHORT': ['Unknown', 'string'], 'ROADFRONTDESC_SHORT': ['Unknown', 'string'],
-                             'ROADSURFACEDESC_SHORT': ['Unknown', 'string'], 'SERVICES_SHORT': ['Unknown', 'string'],
-                             'SEWERINFO_SHORT': ['Unknown', 'string'], 'SITEPARTICULARS_SHORT': ['Unknown', 'string'],
-                             'SOILTYPE_SHORT': ['Unknown', 'string'], 'TOPOGRAPHY_SHORT': ['Unknown', 'string'],
-                             'WATERINFO_SHORT': ['Unknown', 'string'], 'LATITUDE': ['0E-20', 'string'], 'LONGITUDE': ['0E-20', 'string']
-                             }
-
-        elif prop_type == 'RNT':
-            datatype_dict = {'MLSNUM': ['000000', 'string'], 'STREETNUMDISPLAY': ['0', 'string'],
-                             'ZIPCODE': ['00000', 'string'], 'TOWNCODE': ['0', 'string'], 'COUNTYCODE': ['00', 'string'],
-                             'TAXID': ['0000-00000-0000-00000-0000', 'string'], 'DAYSONMARKET': ['0.0', 'float64'],
-                             'RENTPRICEORIG': ['0.0', 'float64'], 'LP': ['0.0', 'float64'], 'RENTMONTHPERLSE': ['0.0', 'float64'],
-                             'RP/LP%': ['0', 'int64'], 'LEASETERMS_SHORT': ['Unknown', 'string'],'ROOMS': ['0.0', 'string'],
-                             'BEDS': ['0.0', 'float64'],'BATHSFULLTOTAL': ['0.0', 'float64'],'BATHSHALFTOTAL': ['0.0', 'float64'],
-                             'BATHSTOTAL': ['0.0', 'float64'], 'SQFTAPPROX': ['0', 'string'], 'SUBDIVISION': ['Unknown', 'string'],
-                             'YEARBUILT': ['0', 'string'], 'PROPERTYTYPEPRIMARY_SHORT': ['Unknown', 'string'],
-                             'PROPSUBTYPERN': ['Unknown', 'string'], 'LOCATION_SHORT': ['Unknown', 'string'],
-                             'PRERENTREQUIRE_SHORT': ['Unknown', 'string'], 'OWNERPAYS_SHORT': ['Unknown', 'string'],
-                             'TENANTPAYS_SHORT': ['Unknown', 'string'], 'TENANTUSEOF_SHORT': ['Unknown', 'string'],
-                             'RENTINCLUDES_SHORT': ['Unknown', 'string'], 'RENTTERMS_SHORT': ['Unknown', 'string'],
-                             'LENGTHOFLEASE': ['0.0', 'float64'], 'AVAILABLE_SHORT': ['Unknown', 'string'],
-                             'AMENITIES_SHORT': ['Unknown', 'string'], 'APPLIANCES_SHORT': ['Unknown', 'string'],
-                             'LAUNDRYFAC': ['Unknown', 'string'], 'FURNISHINFO_SHORT': ['Unknown', 'string'],
-                             'PETS_SHORT': ['Unknown', 'string'], 'PARKNBRAVAIL': ['0.0', 'float64'],
-                             'DRIVEWAYDESC_SHORT': ['Unknown', 'string'], 'BASEMENT_SHORT': ['Unknown', 'string'],
-                             'BASEDESC_SHORT': ['Unknown', 'string'], 'GARAGECAP': ['0.0', 'float64'],
-                             'HEATSRC_SHORT': ['Unknown', 'string'], 'HEATSYSTEM_SHORT': ['Unknown', 'string'],
-                             'COOLSYSTEM_SHORT': ['Unknown', 'string'], 'WATER_SHORT': ['Unknown', 'string'],
-                             'UTILITIES_SHORT': ['Unknown', 'string'], 'FLOORS_SHORT': ['Unknown', 'string'],
-                             'SEWER_SHORT': ['Unknown', 'string'], 'TENLANDCOMM_SHORT': ['Unknown', 'string'],
-                             'REMARKSAGENT': ['Unknown', 'string'], 'REMARKSPUBLIC': ['Unknown', 'string'],
-                             'SHOWSPECIAL': ['Unknown', 'string'], 'RENTEDDATE': ['00/00/0000 00:00:00', 'string'],
-                             'LATITUDE': ['0E-20', 'string'], 'LONGITUDE': ['0E-20', 'string']
-                             }
-
-        elif prop_type == 'TAX':
-            datatype_dict = {'AUTOROW': ['0', 'int64'], 'CITYCODE': ['0', 'int64'],'BLOCKID': ['0', 'int64'],
-                             'BLOCKSUFFIX': ['00', 'string'], 'LOT': ['0', 'int64'], 'LOTSUFFIX': ['00', 'string'],
-                             'PARCEL_NO': ['0000-00000-0000-00000-0000', 'string'], 'MCR': ['Unknown', 'string'],
-                             'MAP': ['00', 'string'], 'LOCNUM': ['00', 'string'], 'LOCDIR': ['Unknown', 'string'],
-                             'LOCSTREET': ['Unknown', 'string'], 'LOCMODE': ['Unknown', 'string'],
-                             'LOCCITY': ['Unknown', 'string'], 'LOCSTATE': ['Unknown', 'string'], 'LOCZIP': ['00000', 'string'],
-                             'PROPERTYDESC': ['Unknown', 'string'], 'PROPERTYUSECODE': ['Unknown', 'string'],
-                             'EQVALUE': ['0.0', 'float64'], 'BANKCODE': ['0', 'string'],
-                             'SALEDATE': ['00/00/0000 00:00:00', 'string'], 'SALEPRICE': ['0', 'int64'],
-                             'TAXES': ['0.0', 'float64'], 'TAXYR': ['0', 'int64'], 'RATE': ['0.0', 'float64'],
-                             'RATIO': ['0.0', 'float64'], 'RATIOYR': ['0', 'int64'], 'TOTALASSESSMENT': ['0', 'int64'],
-                             'ASSESSMENT2': ['0', 'int64'], 'ASSESSMENT1': ['0', 'int64'], 'YEARBUILT': ['0', 'string'],
-                             'BUILDINGDESC': ['Unknown', 'string'], 'BUILDINGCLASSCODE': ['00', 'string'],
-                             'ACRES': ['0.0', 'float64'], 'ADDITIONALLOTS': ['N', 'string'], 'DEEDBOOK': ['Unknown', 'string'],
-                             'DEEDPAGE': ['Unknown', 'string'], 'OWNER': ['Unknown', 'string'], 'OWNERS': ['1', 'int64'],
-                             'MAILNUM': ['Unknown', 'string'], 'MAILDIR': ['Unknown', 'string'], 'MAILSTREET': ['Unknown', 'string'],
-                             'MAILMODE': ['Unknown', 'string'], 'MAILCITY': ['Unknown', 'string'], 'MAILSTATE': ['Unknown', 'string'],
-                             'MAILZIP': ['00000', 'string'], 'PRIOROWNER': ['Unknown', 'string'], 'PRIORSALEAMT': ['0', 'int64'],
-                             'PRIORSALEDATE': ['00/00/0000 00:00:00', 'string'], 'PRIORDEEDBOOK': ['Unknown', 'string'],
-                             'PRIORDEEDPAGE': ['Unknown', 'string'], 'DATEMODIFIED': ['00/00/0000 00:00:00', 'string']}
+        datatype_dict = {'ACRES': ['0.0', 'string'],
+                        'ADDITIONALLOTS': ['N', 'string'],
+                        'AGENTLIST': ['000000', 'string'],
+                        'AGENTSELL': ['000000', 'string'],
+                        'AGENTSELLNAME': ['NOT AVAILABLE', 'string'],
+                        'AMENITIES_SHORT': ['Unknown', 'string'],
+                        'ANTICCLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
+                        'APPFEE': ['0.0', 'string'],
+                        'APPLIANCES_SHORT': ['Unknown', 'string'],
+                        'ASSESSAMOUNTBLDG': ['0.0', 'string'],
+                        'ASSESSAMOUNTLAND': ['0.0', 'string'],
+                        'ASSESSMENT1': ['0', 'int64'],
+                        'ASSESSMENT2': ['0', 'int64'],
+                        'ASSESSTOTAL': ['0.0', 'string'],
+                        'ASSOCFEE': ['0.0', 'float64'],
+                        'AUTOROW': ['0', 'int64'],
+                        'AVAILABLE_SHORT': ['Unknown', 'string'],
+                        'BANKCODE': ['0', 'string'],
+                        'BASEDESC_SHORT': ['None', 'string'],
+                        'BASEMENT_SHORT': ['N', 'string'],
+                        'BATHSFULLTOTAL': ['0.0', 'float64'],
+                        'BATHSHALFTOTAL': ['0.0', 'float64'],
+                        'BATHSTOTAL': ['0.0', 'float64'],
+                        'BEDS': ['0', 'int64'],
+                        'BLOCKID': ['0', 'string'],
+                        'BLOCKSUFFIX': ['00', 'string'],
+                        'BUILDINGCLASSCODE': ['00', 'string'],
+                        'BUILDINGDESC': ['Unknown', 'string'],
+                        'BUILDINGSINCLUDED_SHORT': ['Unknown', 'string'],
+                        'BUSRELATION_SHORT': ['Unknown', 'string'],
+                        'CITYCODE': ['0', 'int64'],
+                        'CLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
+                        'COMPBUY': ['None', 'string'],
+                        'COMPSELL': ['None', 'string'],
+                        'COMPTRANS': ['None', 'string'],
+                        'COOLSYSTEM_SHORT': ['Unknown', 'string'],
+                        'COUNTY': ['Unknown', 'string'],
+                        'COUNTYCODE': ['00', 'string'],
+                        'CURRENTUSE_SHORT': ['Unknown', 'string'],
+                        'DATEMODIFIED': ['00/00/0000 00:00:00', 'string'],
+                        'DAYSONMARKET': ['0.0', 'float64'],
+                        'DEEDBOOK': ['Unknown', 'string'],
+                        'DEEDPAGE': ['Unknown', 'string'],
+                        'DEVRESTRICT_SHORT': ['Unknown', 'string'],
+                        'DEVSTATUS_SHORT': ['Unknown', 'string'],
+                        'DRIVEWAYDESC_SHORT': ['Unknown', 'string'],
+                        'EASEMENT_SHORT': ['N', 'string'],
+                        'EQVALUE': ['0.0', 'float64'],
+                        'EXPENSEOPERATING': ['0.0', 'string'],
+                        'EXPENSESINCLUDE_SHORT': ['None', 'string'],
+                        'EXPIREDATE': ['00/00/0000 00:00:00', 'string'],
+                        'FIREPLACES': ['0', 'int64'],
+                        'FLOORS_SHORT': ['Unknown', 'string'],
+                        'FURNISHINFO_SHORT': ['Unknown', 'string'],
+                        'GARAGECAP': ['0.0', 'float64'],
+                        'HEATSRC_SHORT': ['Unknown', 'string'],
+                        'HEATSYSTEM_SHORT': ['Unknown', 'string'],
+                        'IMPROVEMENTS_SHORT': ['None', 'string'],
+                        'INCOMEGROSSOPERATING': ['0.0', 'string'],
+                        'INCOMENETOPERATING': ['0.0', 'string'],
+                        'LATITUDE': ['0E-20', 'string'],
+                        'LAUNDRYFAC': ['Unknown', 'string'],
+                        'LEASETERMS_SHORT': ['Unknown', 'string'],
+                        'LENGTHOFLEASE': ['0.0', 'float64'],
+                        'LISTDATE': ['00/00/0000 00:00:00', 'string'],
+                        'LISTPRICE': ['0', 'int64'],
+                        'LISTTYPE_SHORT': ['Unknown', 'string'],
+                        'LOANTERMS': ['Unknown', 'string'],
+                        'LOANTERMS_SHORT': ['Unknown', 'string'],
+                        'LOCATION_SHORT': ['Unknown', 'string'],
+                        'LOCCITY': ['Unknown', 'string'],
+                        'LOCDIR': ['Unknown', 'string'],
+                        'LOCMODE': ['Unknown', 'string'],
+                        'LOCNUM': ['00', 'string'],
+                        'LOCSTATE': ['Unknown', 'string'],
+                        'LOCSTREET': ['Unknown', 'string'],
+                        'LOCZIP': ['00000', 'string'],
+                        'LONGITUDE': ['0E-20', 'string'],
+                        'LOT': ['0', 'int64'],
+                        'LOTDESC_SHORT': ['None', 'string'],
+                        'LOTID': ['0', 'string'],
+                        'LOTSIZE': ['0x0', 'string'],
+                        'LOTSUFFIX': ['00', 'string'],
+                        'LP': ['0.0', 'float64'],
+                        'MAILCITY': ['Unknown', 'string'],
+                        'MAILDIR': ['Unknown', 'string'],
+                        'MAILMODE': ['Unknown', 'string'],
+                        'MAILNUM': ['Unknown', 'string'],
+                        'MAILSTATE': ['Unknown', 'string'],
+                        'MAILSTREET': ['Unknown', 'string'],
+                        'MAILZIP': ['00000', 'string'],
+                        'MAP': ['00', 'string'],
+                        'MCR': ['Unknown', 'string'],
+                        'MLSNUM': ['000000', 'string'],
+                        'NUMLOTS': ['0', 'int64'],
+                        'NUMUNITS': ['0', 'int64'],
+                        'OFFICELIST': ['000000', 'string'],
+                        'OFFICESELL': ['000000', 'string'],
+                        'OFFICESELLNAME': ['NEW JERSEY', 'string'],
+                        'ORIGLISTPRICE': ['0.0', 'float64'],
+                        'OWNER': ['Unknown', 'string'],
+                        'OWNERNAME': ['Not Available', 'string'],
+                        'OWNERPAYS_SHORT': ['Unknown', 'string'],
+                        'OWNERS': ['1', 'int64'],
+                        'PARCEL_NO': ['0000-00000-0000-00000-0000', 'string'],
+                        'PARKNBRAVAIL': ['0.0', 'float64'],
+                        'PENDINGDATE': ['00/00/0000 00:00:00', 'string'],
+                        'PERCTEST_SHORT': ['Unknown', 'string'],
+                        'PETS_SHORT': ['Unknown', 'string'],
+                        'POOL_SHORT': ['N', 'string'],
+                        'PRERENTREQUIRE_SHORT': ['Unknown', 'string'],
+                        'PRIORDEEDBOOK': ['Unknown', 'string'],
+                        'PRIORDEEDPAGE': ['Unknown', 'string'],
+                        'PRIOROWNER': ['Unknown', 'string'],
+                        'PRIORSALEAMT': ['0', 'int64'],
+                        'PRIORSALEDATE': ['00/00/0000 00:00:00', 'string'],
+                        'PROPERTYDESC': ['Unknown', 'string'],
+                        'PROPERTYTYPEPRIMARY_SHORT': ['Unknown', 'string'],
+                        'PROPERTYUSECODE': ['Unknown', 'string'],
+                        'PROPSUBTYPERN': ['Unknown', 'string'],
+                        'RATE': ['0.0', 'float64'],
+                        'RATIO': ['0.0', 'float64'],
+                        'RATIOYR': ['0', 'int64'],
+                        'REMARKSAGENT': ['None', 'string'],
+                        'REMARKSPUBLIC': ['None', 'string'],
+                        'RENTEDDATE': ['00/00/0000 00:00:00', 'string'],
+                        'RENTINCLUDES_SHORT': ['Unknown', 'string'],
+                        'RENTMONTHPERLSE': ['0.0', 'float64'],
+                        'RENTPRICEORIG': ['0.0', 'float64'],
+                        'RENTTERMS_SHORT': ['Unknown', 'string'],
+                        'ROADFRONTDESC_SHORT': ['Unknown', 'string'],
+                        'ROADSURFACEDESC_SHORT': ['Unknown', 'string'],
+                        'ROOMS': ['0.0', 'float64'],
+                        'RP/LP%': ['0', 'int64'],
+                        'SALEDATE': ['00/00/0000 00:00:00', 'string'],
+                        'SALEPRICE': ['0', 'int64'],
+                        'SALESPRICE': ['0.0', 'float64'], # Converting to float type shouldn't throw error later
+                        'SERVICES_SHORT': ['Unknown', 'string'],
+                        'SEWERINFO_SHORT': ['Unknown', 'string'],
+                        'SEWER_SHORT': ['Unknown', 'string'],
+                        'SHOWSPECIAL': ['None', 'string'],
+                        'SITEPARTICULARS_SHORT': ['Unknown', 'string'],
+                        'SOILTYPE_SHORT': ['Unknown', 'string'],
+                        'SP/LP%': ['0%', 'string'],
+                        'SQFTAPPROX': ['0', 'string'],
+                        'SQFTBLDG': ['0', 'string'],
+                        'STREETNAME': ['Unknown', 'string'],
+                        'STREETNUMDISPLAY': ['0', 'string'],
+                        'STYLEPRIMARY_SHORT': ['Unknown', 'string'],
+                        'STYLE_SHORT': ['Unknown', 'string'],
+                        'SUBDIVISION': ['None', 'string'],
+                        'SUBPROPTYPE': ['U', 'string'],
+                        'TAXES': ['0.0', 'float64'],
+                        'TAXID': ['0000-00000-0000-00000-0000', 'string'],
+                        'TAXYR': ['0', 'int64'],
+                        'TENANTPAYS_SHORT': ['Unknown', 'string'],
+                        'TENANTUSEOF_SHORT': ['Unknown', 'string'],
+                        'TENLANDCOMM_SHORT': ['Unknown', 'string'],
+                        'TOPOGRAPHY_SHORT': ['Unknown', 'string'],
+                        'TOTALASSESSMENT': ['0', 'int64'],
+                        'TOWN': ['Unknown', 'string'],
+                        'TOWNCODE': ['0', 'string'],
+                        'UNIT1BATHS': ['0.0', 'string'],
+                        'UNIT1BEDS': ['0', 'string'],
+                        'UNIT1OWNERTENANTPAYS_SHORT': ['None', 'string'],
+                        'UNIT1ROOMS': ['0', 'string'],
+                        'UNIT2BATHS': ['0.0', 'string'],
+                        'UNIT2BEDS': ['0', 'string'],
+                        'UNIT2OWNERTENANTPAYS_SHORT': ['None', 'string'],
+                        'UNIT2ROOMS': ['0', 'string'],
+                        'UNIT3BATHS': ['0.0', 'string'],
+                        'UNIT3BEDS': ['0', 'string'],
+                        'UNIT3OWNERTENANTPAYS_SHORT': ['None', 'string'],
+                        'UNIT3ROOMS': ['0', 'string'],
+                        'UNIT4BATHS': ['0.0', 'string'],
+                        'UNIT4BEDS': ['0', 'string'],
+                        'UNIT4OWNERTENANTPAYS_SHORT': ['None', 'string'],
+                        'UNIT4ROOMS': ['0', 'string'],
+                        'UNITSTYLE_SHORT': ['Unknown', 'string'],
+                        'UTILITIES_SHORT': ['Unknown', 'string'],
+                        'WATERINFO_SHORT': ['Unknown', 'string'],
+                        'WATER_SHORT': ['Unknown', 'string'],
+                        'WITHDRAWNDATE': ['00/00/0000 00:00:00', 'string'],
+                        'YEARBUILT': ['0', 'string'],
+                        'ZIPCODE': ['00000', 'string'],
+                        'ZONING': ['None', 'string'],
+                        'ZONINGDESC_SHORT': ['Unknown', 'string']}
 
         for col, default_data in datatype_dict.items():
             try:
-                df_var[col].fillna(default_data[0], inplace=True)
+                df_var[col] = df_var[col].fillna(default_data[0])
                 df_var[col] = df_var[col].astype(default_data[1])
+                # print(f'{col} dtype changed')
 
             except ValueError:
+                # Fill_na value doesn't meet column datatype
+                print(f'Error in type change: {col} - {default_data}')
                 pass
             except KeyError:
-                if col == 'BATHSFULLTOTAL' or col == 'BATHSHALFTOTAL':
-                    df_var.insert(20, col, 0.0)
-                if col == 'AMENITIES_SHORT':
-                    df_var.insert(38, col, None)
+                # Column doesn't exist in this dataframe
+                pass
+            except TypeError as e:
+                print(f'{e}')
+                print(f'Error in type change: {col} - {default_data}')
+
+                raise TypeError
 
         update_bar.update(1)
         return df_var
@@ -527,10 +566,10 @@ class KafkaGSMLSConsumer:
                                    r'IN NEED OF WORK|NEEDS REHAB|TOTAL REHAB|EXTENSIVE REPAIR|COMPLETE OVERHAUL'
                                    r'YOUR OWN RISK|TLC|INVESTOR SPECIAL|203(\s)?K|PROCEED WITH CAUTION'
                                    r'SIGNIFICANT REPAIR|DAMAGE|CASH(\sOFFER(S)?\s)?ONLY|NEED OF REPAIR|FULL GUT(\sRENOVATION)?'
-                                   r'TOTAL GUT(\sRENOVATION)?|MOLD', flags=re.IGNORECASE)
+                                   r'TOTAL GUT(\sRENOVATION)?|(?<!crown\s)(?<!base\s)mold\b(?!ing)', flags=re.IGNORECASE)
         bankowned_pattern = re.compile(r'BANK OWNED|ESTATE SALE|BANK FORECLOSURE|CORPORATE OWNED',flags=re.IGNORECASE)
-        short_sale_pattern = re.compile(r'SHORT SALE|SUBJECT TO LENDER(S)? APPROVAL|SUBJECT TO THIRD PARTY APPROVAL'
-                                       r'SUBJECT TO BANK(S)? APPROVAL', flags=re.IGNORECASE)
+        short_sale_pattern = re.compile(r'(?<!THIS IS NOT A )(?<!NOT A )SHORT SALE|SUBJECT TO LENDER(S)? APPROVAL'
+                                        r'SUBJECT TO THIRD PARTY APPROVAL|SUBJECT TO BANK(S)? APPROVAL', flags=re.IGNORECASE)
         not_short_sale_pattern = re.compile(r'(THIS\sIS\s)?NOT A SHORT SALE', flags=re.IGNORECASE)
 
         for idx, row in temp_df_.iterrows():
@@ -890,23 +929,112 @@ class KafkaGSMLSConsumer:
 
         return int(str(value).split('/')[2][:4])
 
+    def prepare_data(self, df_list, prop_type, wait_time=0, retries=0):
+
+        df = pd.concat(df_list)
+
+        if prop_type in ['RES', 'MUL', 'LND']:
+            # Check the column dtype. Will throw error if not datetime64[ns]
+            scrape_date_column_datatype = df["SCRAPED_DATE"].dtype
+
+            if not isinstance(scrape_date_column_datatype, numpy.dtypes.DateTime64DType):
+                df["SCRAPED_DATE"] = pd.to_datetime(df["SCRAPED_DATE"])
+
+            mask = df["SCRAPED_DATE"] >= pd.Timestamp(datetime.now().date() - timedelta(days=3))
+
+        print(f' ==== PREPARING NEW DATA. COMMITTING CONSUMPTION ====')
+
+        try:
+            if prop_type in ['RES', 'MUL', 'LND']:
+                # Used for RES, MUL, LND property types
+                self.consumer.commit()
+                df = df[mask]
+                return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'LISTDATE'],
+                                          keep='last').reset_index(drop=True)
+
+            elif prop_type == 'RNT':
+                try:
+                    # Used for RNT proeprty types
+                    self.consumer.commit()
+                    return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
+                                              keep='last').reset_index(drop=True)
+                except KeyError:
+                    df.insert(17, 'RENTEDDATE', '00/00/0000 00:00:00')
+                    return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
+                                              keep='last').reset_index(drop=True)
+
+            elif prop_type == 'TAX':
+                # Used for TAX data
+                self.consumer.commit()
+                return df.drop_duplicates(subset=['AUTOROW'], keep='last').reset_index(drop=True)
+
+            else:
+                # Used for property images
+                self.consumer.commit()
+                return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', ],
+                                          keep='last').reset_index(drop=True)
+
+        except RebalanceInProgressError:
+            print(f' ==== BROKER REBALANCING IN PROGRESS. RETRYING EFFORT ==== ')
+
+            assert retries <= 10, " ==== BROKER REBALANCING OVER 50 MINUTES, ENDING PROGRAM ==== "
+            time.sleep(wait_time)
+            self.consumer.poll()
+            self.prepare_data(df_list, prop_type, wait_time=300, retries=retries + 1)
+
+    @staticmethod
+    def process_keys(keys_list):
+
+        municipality_data = {
+            "Counties": {},
+            "prop_type": "",
+            "year": ""
+        }
+
+        for item in keys_list:
+
+            item_list = item.split(" ")
+            county = item_list[-5]
+            municipality = " ".join(item_list[:-5])
+
+            if municipality_data["prop_type"] == "":
+                municipality_data["prop_type"] = item_list[-3]
+
+            if municipality_data["year"] == "":
+                municipality_data["year"] = item_list[-4][-4:]
+
+            if county not in list(municipality_data["Counties"].keys()):
+                municipality_data["Counties"].setdefault(county, [])
+
+            if municipality not in municipality_data["Counties"][county]:
+                municipality_data["Counties"][county].append(municipality)
+
+        for key, value in municipality_data["Counties"].items():
+            # Need to figure out how to properly display counties with more than one word
+            print(f" ==== SUCCESSFULLY STORED {key} COUNTY {municipality_data['prop_type']} PROPERTY DATA IN "
+                  f"{municipality_data['year']} FOR THE FOLLOWING MUNICIPALITIES: ==== \n"
+                  f" ==== {value}")
+
     def produce_images(self, df_var, prop_type):
 
         if prop_type in ['RES', 'MUL', 'RNT']:
             if prop_type == 'RES':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
-                                      'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
+                                   'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
+                                   'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
             elif prop_type == 'MUL':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
-                                      'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS']]
+                                    'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
+                                    'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
 
             elif prop_type == 'RNT':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
-                                      'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
-                                      'RENTEDDATE', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
-                                   'IMAGES', 'PROP_CLASS']]
+                                    'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
+                                    'RENTEDDATE', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
+                                   'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'RENTMONTHPERLSE']]
 
             prepared_image_df = image_df.to_json(orient='split', date_format='iso')
             try:
@@ -917,9 +1045,9 @@ class KafkaGSMLSConsumer:
                 self.reduce_df_size(image_df, 500)
 
             except KafkaTimeoutError:
-                print(f'Images have not been produced to {result_metadata.topic} in Kafka')
+                print(f' === IMAGES HAVE NOT BEEN PRODUCED TO {result_metadata.topic} IN KAFKA')
 
-            print('Images have been produced to Kafka')
+            print(f" ==== SUCCESSFULLY PRODUCED {prop_type} PROPERTY IMAGES TO KAFKA ==== ")
 
     @staticmethod
     def reorder_columns(df_var, prop_type, update_bar):
@@ -951,7 +1079,9 @@ class KafkaGSMLSConsumer:
                             'YEAR': 46,
                             'DAYS_TO_CLOSE': 51,
                             'ANTIC_CLOSEDATE_DIFF': 52,
-                            'LISTING_REMARKS': df_var.shape[1] - 1},
+                            'LISTING_REMARKS': df_var.shape[1] - 1,
+                            'PYSPARK_PROCESSED': df_var.shape[1] - 1,
+                            'SCRAPED_DATE': df_var.shape[1] - 1},
                          'MUL': {'MLS': 1,
                             'LATITUDE': 13,
                             'LONGITUDE': 14,
@@ -975,7 +1105,9 @@ class KafkaGSMLSConsumer:
                             'YEAR': 49,
                             'DAYS_TO_CLOSE': 50,
                             'ANTIC_CLOSEDATE_DIFF': 51,
-                            'LISTING_REMARKS': df_var.shape[1] - 1},
+                            'LISTING_REMARKS': df_var.shape[1] - 1,
+                            'PYSPARK_PROCESSED': df_var.shape[1] - 1,
+                            'SCRAPED_DATE': df_var.shape[1] - 1},
                          'LND': {'MLS': 1,
                             'LATITUDE': 13,
                             'LONGITUDE': 14,
@@ -994,11 +1126,15 @@ class KafkaGSMLSConsumer:
                             'YEAR': 32,
                             'DAYS_TO_CLOSE': 33,
                             'ANTIC_CLOSEDATE_DIFF': 34,
-                            'LISTING_REMARKS': df_var.shape[1] - 1},
+                            'LISTING_REMARKS': df_var.shape[1] - 1,
+                            'PYSPARK_PROCESSED': df_var.shape[1] - 1,
+                            'SCRAPED_DATE': df_var.shape[1] - 1},
                          'RNT': {'MLS': 1,
                             'LATITUDE': 13,
                             'LONGITUDE': 14,
-                                 },
+                            'LISTING_REMARKS': df_var.shape[1] - 1,
+                            'PYSPARK_PROCESSED': df_var.shape[1] - 1,
+                            'SCRAPED_DATE': df_var.shape[1] - 1},
                          'TAX': {'LCR': df_var.shape[1] - 1}
                          }
         if location_dict[prop_type] != {}:
@@ -1063,6 +1199,7 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.standard_cleaning, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.calculate_dates, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
+                .pipe(KafkaGSMLSConsumer.combine_listing_remarks, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.parse_property_attr, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
@@ -1086,7 +1223,6 @@ class KafkaGSMLSConsumer:
             except KafkaTimeoutError:
                 print(f'Images have not been produced to {result_metadata.topic} in Kafka')
 
-
     @staticmethod
     def tax_property_cleaning(df_var, prop_type, update_bar):
 
@@ -1097,13 +1233,12 @@ class KafkaGSMLSConsumer:
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
-
     @staticmethod
     def standard_cleaning(df_var, prop_type, update_bar):
 
         cleaning_dict = {
             'ALL': {'*': {'columns': ['ACRES', 'BLOCKID', 'COUNTY', 'COUNTYCODE', 'LOTID', 'LOTSIZE',
-                                      'OWNERNAME', 'STREETNAME', 'TAXID', 'TOWNCODE', 'ZIPCODE'],
+                                      'OWNERNAME', 'STREETNAME', 'SQFTBLDG', 'TAXID', 'TOWNCODE', 'ZIPCODE'],
                           'default_value': '',
                           'regex': False},
                     '%': {'columns': ['SP/LP%'],
@@ -1170,7 +1305,15 @@ class KafkaGSMLSConsumer:
 
                 if char is not None:
                     for col in collection['columns']:
-                        df_var[col] = df_var[col].str.replace(char, collection['default_value'], regex=collection['regex'])
+                        try:
+                            df_var[col] = df_var[col].str.replace(char, collection['default_value'],
+                                                                  regex=collection['regex'])
+                        except AttributeError as e:
+                            print(f' ==== ERROR AT {col}: {e} ==== ')
+                            raise AttributeError
+
+                        except KeyError as e:
+                            print(f' ==== COLUMN {col} DOES NOT EXISTS FOR {prop_type} DATA ==== ')
 
         df_var = KafkaGSMLSConsumer.baths_empty(df_var, prop_type)
 
@@ -1221,23 +1364,24 @@ class KafkaGSMLSConsumer:
 
             slice_df = df_var[row:row + step]
 
-            with self.connection.raw_connection() as connection:
+            try:
+                # Employs drop column for the following property data types
+                if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
+                    final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
+                                             prop_type=prop_type, update_bar=cleaning_bar)
+                    final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
 
-                try:
-                    # Employs drop column for the following property data types
-                    if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
-                        final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
-                                                 prop_type=prop_type, update_bar=cleaning_bar)
-                        final_df.to_sql(topic, con=connection, if_exists='append', index=False)
+                else:
+                    # Only use for prop_type == 'TAX'
+                    slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
 
-                    else:
-                        # Only use for prop_type == 'TAX'
-                        slice_df.to_sql(topic, con=connection, if_exists='append', index=False)
-                except DataError:
-                    print(f'DataError has been detected in Block {idx}. Now submitting data by individual row...')
-                    self.submit2sql_dataerror(slice_df, topic)
+            # Catches data which is invalid for specific column or breaks the unique key constraints
+            except (DataError, IntegrityError) as e:
+                print(f'{e}')
+                print(f' ==== ERROR HAS BEEN DETECTED IN BLOCK {idx}. NOW SUBMITTING DATA BY INDIVIDUAL ROW ==== ')
+                self.submit2sql_dataerror(slice_df, topic)
 
-        print(f"{topic} has successfully been stored in PostgreSQL")
+        print(f" ==== {topic} HAS SUCCESSFULLY BEEN STORE IN POSTGRESQL ==== ")
 
     def submit2sql_dataerror(self, df_var, topic):
         """
@@ -1252,14 +1396,15 @@ class KafkaGSMLSConsumer:
 
             temp_df = pd.DataFrame(data=row.values.reshape(1, -1), index=[idx], columns=row.index)
 
-            with self.connection.raw_connection() as connection:
-                try:
-                    temp_df.to_sql(topic, con=connection, if_exists='append', index=False)
-                except DataError as de:
-                    print(f'A DataError has occurred: {de}')
-                    continue
+            try:
+                temp_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+            except (DataError, IntegrityError) as e:
+                print(f'Faulty row has been found at Row {idx}.\nError has occurred: {e}')
+                continue
 
-    def submit_data(self, df, prop, table, cleaning_bar):
+    def submit_data(self, df, prop, table, cleaning_bar, keys_list, **kwargs):
+
+        # filepath = f"/opt/airflow/downloads/test_data_{datetime.now().date()}.xlsx"
 
         if prop != 'IMAGES':
             # Produce image data to Kafka topic and relational data to SQL
@@ -1267,38 +1412,48 @@ class KafkaGSMLSConsumer:
                 self.produce_images(df, prop)
 
             self.submit2sql(df, table, prop, cleaning_bar)
+            KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
 
         else:
             # Produce image data to MongoDB
-            RealEstateImages(df).main()
-            print(f"{table} images have successfully been stored in MongoDB")
+            RealEstateImages(df_var=df).main(**kwargs)
+            print(f" ==== {table.upper()} IMAGES HAVE SUCCESSFULLY BEEN STORED IN MONGODB ====")
 
-    def main(self, prop, retry=False):
+    def main(self, prop, logger, retry=False):
 
-        for prop_type, topic_data in zip(prop, self.prop_dict[prop]):
-            # Using the subscribe method instead of directly assigning a topic so Kafka can
-            # handle the re-balancing of partitions for me
-            cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
+        try:
+            while True:
 
-            if retry is False:
-                self.consumer.subscribe([topic_data['topic']])
-                temp_df = self.consume_data()
-                KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
-            else:
-                temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+                for prop_type, topic_data in zip([prop], [self.prop_dict[prop]]):
+                    # Using the subscribe method instead of directly assigning a topic so Kafka can
+                    # handle the re-balancing of partitions for me
+                    cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
 
-            final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop_type, topic_data['clean_type'], cleaning_bar)
-            self.submit_data(final_df, prop_type, topic_data['topic'], cleaning_bar)
+                    if retry is False:
+                        self.consumer.subscribe([topic_data['topic']])
+                        temp_df, associate_keys = self.consume_data(prop_type)
+                        # KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
+                    else:
+                        temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
 
-        self.consumer.close()
-        print('Data consumption is finished')
+                if isinstance(temp_df, pd.DataFrame):
+                    final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop_type, topic_data['clean_type'], cleaning_bar)
+                    self.submit_data(final_df, prop_type, topic_data['topic'], cleaning_bar, associate_keys)
+                else:
+                    break
 
+            self.consumer.close()
+            return True
 
-if __name__ == '__main__':
+        except TypeError as e:
+            logger.warning(f'{e}')
+            logger.warning(f'{traceback.print_exception(e)}')
 
-    current_wd = os.getcwd()
-    os.chdir('F:\\Real Estate Investing\\Kafka_Data_Backups')
+        except AssertionError as e:
+            print(" ==== BROKER REBALANCING OVER 50 MINUTES, ENDING PROGRAM ==== ")
+            return e
 
-    obj = KafkaGSMLSConsumer()
-    obj.main('RES')
-    os.chdir(current_wd)
+        except (DatabaseError, SyntaxError) as e:
+            print(f" ==== A SQL DATABASE ERROR HAS OCCURRED ==== \n{e}")
+            return e
+
