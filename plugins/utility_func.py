@@ -39,8 +39,8 @@ def create_kafka_consumer(client_id, group_id):
         key_deserializer=lambda k: k.decode("utf-8"),
         value_deserializer=lambda v: v.decode("utf-8"),
         heartbeat_interval_ms=5000,  # Send heartbeats in 5s intervals
-        session_timeout_ms=45000,  # How long the consumer waits for heartbeats before considered dead
-        max_poll_interval_ms=3000000,  # How long the consumer goes in between successful polls before considered "stuck"
+        session_timeout_ms=45000,  # How long the consumer waits for heartbeats before considered dead: 45 secondds
+        max_poll_interval_ms=3000000,  # How long the consumer goes in between successful polls before considered "stuck": 50 minutes
         max_poll_records=100,  # Max number of records pulled per poll request
     )
 
@@ -133,10 +133,10 @@ def create_selenium_webdriver(remote=True):
 
     else:
         save_location = (
-            "C:\\Users\\Omar\\Desktop\\Selenium Temp Folder"  # May need to be changed
+            "C:\\Users\\Username\\Desktop\\Selenium Temp Folder"  # May need to be changed
         )
         edge_profile_path = (
-            "C:\\Users\\Omar\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default"
+            "C:\\Users\\Username\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default"
         )
         custom_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
 
