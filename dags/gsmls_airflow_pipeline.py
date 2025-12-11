@@ -4,13 +4,18 @@ import sys
 import kafka.errors
 import pandas as pd
 import os
+import pendulum
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
+from datetime import time as dtime
 from airflow.sdk import task, dag, TaskGroup
 from airflow.utils.email import send_email
-from airflow.providers.standard.operators.python import PythonOperator, ShortCircuitOperator
+from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.providers.standard.sensors.python import PythonSensor
+from airflow.exceptions import AirflowSkipException, AirflowFailException
+from pendulum import timezone
 from kafka.admin import NewTopic
 from kafka.structs import TopicPartition
 from kafka.admin.client import KafkaAdminClient
@@ -25,16 +30,38 @@ from plugins.utility_func import create_sql_engine, create_kafka_producer, creat
 sys.path.append(os.path.join(os.environ.get("AIRFLOW_HOME", "/opt/airflow"), "plugins"))
 
 
-def airflow_data_consumer(prop_type, retry):
+def airflow_data_consumer(prop_type, logger, retry):
 
     consumer = KafkaGSMLSConsumer()
-    consumer.main(prop_type, retry)
+    results = consumer.main(prop_type, logger, retry)
+
+    if not isinstance(results, bool):
+        raise AirflowFailException
+    else:
+        return results
 
 
 def airflow_image_consumer(prop_type='IMAGES', retry=False):
 
     img_consumer = KafkaGSMLSConsumer()
-    img_consumer.main(prop_type, retry)
+    results = img_consumer.main(prop_type, retry)
+
+    if not isinstance(results, bool):
+        raise AirflowFailException
+    else:
+        return results
+
+
+def branching_decision(**kwargs):
+
+    # starting_point returns True or False
+    if starting_point(kwargs['prop_type']):
+
+        # Returns the task_id based on the internal logic
+        return cutoff_condition(kwargs['cutoff_time'], kwargs['tz'], kwargs['prop_type'])
+
+    else:
+        return f"skip_all_tasks_{kwargs['prop_type']}"
 
 
 def condition_function(value):
@@ -45,114 +72,293 @@ def condition_function(value):
         return True
 
 
-def starting_point():
+def cutoff_condition(cutoff_time: dtime, tz, prop_type):
 
-    prop_type_dict = {
-        'RES': 'res_properties',
-        'MUL': 'mul_properties',
-        'LND': 'lnd_properties',
-        'RNT': 'rnt_properties',
-        'TAX': 'tax_properties'
-    }
+    now = pendulum.now(tz)
+    start_hour = cutoff_time.hour
+    start_mins = cutoff_time.minute
 
-    query = """
-            SELECT * FROM gsmls_event_log_new
-            ORDER BY id DESC
-            LIMIT 1;
+    start_time = now.replace(hour=start_hour, minute=start_mins)
+    end_time = start_time + timedelta(hours=1, minutes=30)
+
+    if start_time <= now <= end_time:
+        return f'skip_all_tasks_{prop_type}'
+    else:
+        return f'start_pipeline_{prop_type}'
+
+
+def cutoff_conversion(cutoff_time: dtime, tz):
+
+    now = pendulum.now(tz)
+    next_day = now + timedelta(days=1)
+
+    cutoff_dt = next_day.replace(
+        hour=cutoff_time.hour,
+        minute=cutoff_time.minute
+    )
+
+    print(f" ==== THE CUTOFF TIME IS : {cutoff_dt} ==== ")
+    return cutoff_dt
+
+
+def progress_update(current_data: dict, table_name, prop_type):
+
+    # Create database connections and pull preliminary data
+    subject = "GSMLS Pipeline Update"
+    engine = create_sql_engine("gsmls", remote=True)
+    client = create_mongodb_conn(remote=True)
+    database = client['realEstate']
+    num_of_docs_ = database['propertyImages'].count_documents({})
+    current_data["Documents"].append(num_of_docs_)
+
+    try:
+        # Scrape the event log for the latest saved event which occurred
+        query = f"""
+                    SELECT * FROM gsmls_event_log_new
+                    WHERE id = (SELECT MAX(id) FROM gsmls_event_log_new)
+                """
+        df = pd.read_sql_query(query, con=engine.raw_connection())
+        last_row = df.shape[0] - 1
+        property_type = df.loc[last_row, "property_type"]
+
+        assert prop_type == property_type
+
+    except AssertionError:
+        query = f"""
+                SELECT * FROM gsmls_event_log_new
+                WHERE property_type = '{prop_type}'
+                ORDER BY id DESC
+                LIMIT 1;
+            """
+        df = pd.read_sql_query(query, con=engine.raw_connection())
+        last_row = df.shape[0] - 1
+        property_type = df.loc[last_row, "property_type"]
+
+    rows = 0
+    town_check = df.loc[last_row, "municipality"]
+    finished = df.loc[last_row, "finished"]
+    date_produced = df.loc[last_row, "date_produced"]
+    year = df.loc[last_row, "year_"]
+    county = df.loc[last_row, "county"]
+    split_type = df.loc[last_row, "split_type"]
+    split_index = df.loc[last_row, "split_index"]
+    current_data["Municipality"].append(town_check)
+    current_data["Split_Type"].append(split_type)
+    current_data["Split_Index"].append(split_index)
+
+    message = f"""
+            <br>
+            <b>Program Progress</b><br>
+            <b>Current Year</b>: {year}<br>
+            <b>Last Scraped Municipality</b>: {town_check}<br>
+            <b>County</b>: {county}<br>
+            <b>Finished</b>: {finished}<br>
+            <b>Current Data Produced</b>: {rows} Rows<br>
+            <b>MongoDB Document Count</b>: {num_of_docs_}<br>
+            <b>Property Type</b>: {property_type}<br<br>
             """
 
+    # If the date of the data produced and today doesn't match, no data has been scraped today
+    if (date_produced != datetime.now().date()) or len(current_data["Municipality"]) == 1:
+
+        current_data["County"].append(county)
+        current_data["Year"].append(year)
+        current_data["Rows"].append(rows)
+
+    else:
+        query = f"""
+            SELECT 
+                cnt.total_count,
+                last_row."STATUS_SHORT",
+                last_row."TOWN",
+                last_row."COUNTY",
+                last_row."YEAR",
+                last_row."EXPIREDATE",
+                last_row."WITHDRAWNDATE"
+            FROM
+                (SELECT COUNT("MLSNUM") AS total_count
+                 FROM {table_name}
+                 WHERE "SCRAPED_DATE" >= '{datetime.now().date()}') AS cnt
+            CROSS JOIN
+                (SELECT "STATUS_SHORT", "TOWN", "COUNTY", "YEAR", "EXPIREDATE", "WITHDRAWNDATE"
+                 FROM {table_name}
+                 WHERE "SCRAPED_DATE" >= '{datetime.now().date()}'
+                 ORDER BY "COUNTY" DESC, "TOWN" DESC
+                 LIMIT 1) AS last_row;
+        """
+
+        df = pd.read_sql_query(query, con=engine.raw_connection())
+
+        if not df.empty:
+            last_row = df.shape[0] - 1
+
+            town = df.loc[last_row, "TOWN"]
+            current_data["Municipality"][-1] = town
+            county = df.loc[last_row, "COUNTY"]
+            current_data["County"].append(county)
+            rows = len(df)
+            current_data["Rows"].append(rows)
+            year = df.loc[last_row, "YEAR"]
+            current_data["Year"].append(year)
+            status = df.loc[last_row, "STATUS_SHORT"]
+            delta = rows - current_data["Rows"][-2]
+
+            if year == 0:
+                if status in ['WD', 'W']:
+                    year = df.loc[last_row, "WITHDRAWNDATE"].split('/')[2][:4]
+                elif status in ['XD', 'X']:
+                    year = df.loc[last_row, "EXPIREDATE"].split('/')[2][:4]
+
+            message = f"""
+                    <br>
+                    <b>Program Location</b>
+                    <b>Current Year</b>: {year}<br>
+                    <b>Municipality</b>: {town}<br>
+                    <b>County</b>: {county}<br>
+                    <b>Current Data Produced</b>: {rows} Rows<br>
+                    <b>MongoDB Document Count</b>: {num_of_docs_}<br>
+                    <b>Data Added Since Last Update</b>: {delta}<br><br>
+            """
+
+        else:
+            current_data["County"].append(county)
+            current_data["Rows"].append(rows)
+            current_data["Year"].append(year)
+
+    if len(current_data["Municipality"]) == 1:
+        send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+        return False
+    elif current_data["Rows"][-1] != current_data["Rows"][-2]:
+        send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+        return False
+    elif current_data["Municipality"][-1] != current_data["Municipality"][-2]:
+        send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+        return False
+    elif current_data["Municipality"][-1] == current_data["Municipality"][-2]:
+        if current_data["Split_Type"][-1] != current_data["Split_Type"][-2]:
+            send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+        elif current_data["Split_Type"][-1] == current_data["Split_Type"][-2]:
+            if current_data["Split_Index"][-1] != current_data["Split_Index"][-2]:
+                send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+            elif current_data["Split_Index"][-1] == current_data["Split_Index"][-2]:
+                if finished == 'No':
+                    send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
+                else:
+                    return True
+
+
+def skip_pipeline():
+    raise AirflowSkipException("Time cutoff reached - skipping full pipeline")
+
+
+def starting_point(prop_type):
+
     engine = create_sql_engine("gsmls", remote=True)
+
+    query = f"""
+                SELECT * FROM gsmls_event_log_new
+                WHERE property_type = '{prop_type.upper()}'
+                ORDER BY id DESC
+                LIMIT 1;
+                """
+
     metadata = pd.read_sql_query(query, con=engine.raw_connection())
     last_row = metadata.shape[0] - 1
 
     if metadata.empty:
-
-        for prop_type, topic in prop_type_dict.items():
-            yield prop_type, topic
+        print(f" ==== DATA DOESN'T EXIST. BEGINNING {prop_type} SCRAPE ==== ")
+        return True
 
     else:
-        start_date = metadata.loc[last_row, "start_date"]
         last_scraped_county = metadata.loc[last_row, "county"]
         last_scraped_muni = metadata.loc[last_row, "municipality"]
         finished = metadata.loc[last_row, "finished"]
-        last_scraped_property_type = metadata.loc[last_row, "property_type"]
-        index_num = list(prop_type_dict.keys()).index(last_scraped_property_type)
-        modified_prop_list = list(prop_type_dict.keys())[index_num:]
-        modified_topic_list = list(prop_type_dict.values())[index_num:]
+        date_produced = metadata.loc[last_row, "date_produced"]
+        timeframe = metadata.loc[last_row, "timeframe"]
+        delta = datetime.now() - date_produced
+        print(f' ==== TIME DELTA: {delta}')
 
-        for prop_type, topic in zip(modified_prop_list, modified_topic_list):
-            # All data for the last property type was acquired
-            if (last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes"
-                    and last_scraped_property_type != 'TAX'):
-                try:
-                    if start_date < datetime.now() - timedelta(days=1):
-                        yield prop_type, topic
-                    else:
-                        if last_scraped_property_type == 'TAX':
-                            yield 'complete', 'complete'
-                        else:
-                            # Return the next property in the list
-                            continue
-                except TypeError:
-                    yield prop_type, topic
+        # All data for the last property type was acquired
+        if last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes":
 
-            elif (last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes"
-                    and last_scraped_property_type == 'TAX'):
-                return 'complete', 'complete'
-
+            if timeframe in ["historic", "mixed"]:
+                return True
+            elif delta.days <= 6:
+                print(f' ==== NO NEW DATA AVAILABLE FOR {prop_type.upper()}==== ')
+                return False
             else:
-                return prop_type, topic
+                print(f' ==== BEGINNING {prop_type} SCRAPE ==== ')
+                return True
+
+        else:
+            print(f' ==== BEGINNING {prop_type} SCRAPE ==== ')
+            return True
 
 
 def new_msgs_available(topic, logger_):
 
     offset_dict = {}
     # KafkaConsumer not thread safe, so I need to create one specifically for this task
-    cons = create_kafka_consumer(f"{topic} msg_check", f"{topic} msg_check")
+    cons = create_kafka_consumer(f"{topic}_msg_check", "data_consumer")
 
     # Check the partitions in the consumer. Returns a set of partition ids
     partitions = cons.partitions_for_topic(topic)
+    print(f'{partitions}')
 
-    if not partitions:
-        logger_.warning(f"No partitions found for topic {topic}")
+    try:
+        if not partitions:
+            logger_.warning(f"No partitions found for topic {topic}")
 
-        raise AttributeError(f"No partitions created for {topic}")
+            raise AttributeError(f"No partitions created for {topic}")
 
-    # Create list of TopicPartition objects to check end offsets
-    topic_partitions = [TopicPartition(topic, p) for p in partitions]
-    offset_dict.update({f"{tp}": False for tp in topic_partitions})
+        # Create list of TopicPartition objects to check end offsets
+        topic_partitions = [TopicPartition(topic, p) for p in partitions]
+        offset_dict.update({f"{tp}": False for tp in topic_partitions})
 
-    end_offsets = cons.end_offsets(
-        topic_partitions
-    )  # Returns a dict of partitions and their end offsets
+        # Returns a dict of partitions and their end offsets in key-value pairs
+        end_offsets = cons.end_offsets(topic_partitions)
 
-    for tp in topic_partitions:
-        # tp is the topic partition object
-        committed = cons.committed(tp)
-        latest = end_offsets[tp]
+        for tp in topic_partitions:
+            # tp is the topic partition object
+            committed = cons.committed(tp)
+            latest = end_offsets[tp]
 
-        if committed is None:
-            committed = 0
-        lag = latest - committed
-        logger_.info(
-            f"Partition {tp.partition}: committed={committed}, latest={latest}, lag={lag}"
-        )
+            if committed is None:
+                committed = 0
+            lag = latest - committed
+            logger_.info(
+                f"Partition {tp.partition}: committed={committed}, latest={latest}, lag={lag}"
+            )
 
-        if lag > 0:
-            offset_dict[tp] = True
+            if lag > 0:
+                offset_dict[tp] = True
 
-    if True in list(offset_dict.values()):
-        return True
-    else:
+        if True in list(offset_dict.values()):
+            logger_.info(f"New data found for {topic}")
+
+            return True
+        else:
+            return False
+
+    except AttributeError:
+        logger_.info(f"No partitions found for topic {topic}")
+
         return False
 
 
-@task(task_id="gsmls_producer")
-def airflow_gsmls_producer(prop_type, **kwargs):
+def airflow_gsmls(prop_type, **kwargs):
 
     obj = GSMLS(prop_type)
     kwargs['property_type'] = prop_type
-    obj.airflow_gsmls_producer(**kwargs)
+    kwargs['logger'].info(f'{obj.__dict__}')
+    kwargs['logger'].info('==== ETL STARTED ====')
+    results = obj.airflow_gsmls_producer(**kwargs)
+    kwargs['logger'].info('==== ETL ENDED ====')
+
+    if not isinstance(results, int):
+        raise AirflowFailException
+    else:
+        return results
 
 
 # Task 1: Check the health of Apache Kafka #Connection
@@ -169,33 +375,6 @@ def check_kafka_connection(logger_):
 
     else:
         return False
-
-    # Make sure these brokers are created in the #Docker Compose yaml
-    # brokers_ready = {4: False, 5: False, 6: False}
-    #
-    # admin_client = KafkaClient(
-    #     bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
-    #     client_id="health_check",
-    # )
-    # admin_client.poll(timeout_ms=1000)
-    #
-    # # Step 1: Individual broker checks
-    # while list(brokers_ready.values()).count(True) < 2:
-    #
-    #     for id_ in brokers_ready.keys():
-    #         conn_result = admin_client.is_ready(node_id=id_)
-    #         brokers_ready[id_] = conn_result
-    #
-    #     if not list(brokers_ready.values()).count(True) >= 2:
-    #         # Need this to be able to check if more than one node isn’t connected
-    #         unconnected_node = list(brokers_ready.values()).index(False)
-    #         logger_.info(
-    #             f"Broker {unconnected_node} is not ready. Retrying connection"
-    #         )
-    #
-    # else:
-    #     admin_client.close()
-    #     return True
 
 
 # Task 1a: Check if the correct topics have been created
@@ -290,7 +469,7 @@ def get_postgresql_rows(table_name_, remote=True):
 
 # Task 5: Send pipeline initiation email
 @task(task_id="send_status_email")
-def status_email(postgres_results, mongo_results, phase: str = "Starting"):
+def status_email(postgres_results, mongo_results, phase: str = "Starting", rows_added=None):
 
     # https://airflow.apache.org/docs/apache-airflow/stable/tutorial/taskflow.html
     postgres_table_name = postgres_results['table_name']
@@ -326,11 +505,10 @@ def status_email(postgres_results, mongo_results, phase: str = "Starting"):
                     <b>Property Type</b>: {property_types[postgres_table_name]}<br><br>
 
                     You can view the status and progress of your pipeline from the following ports:<br>
-                    -- <b>Airflow UI</b>: http://{ip_address}:8085<br>
-                    -- <b>Spark UI</b>: http://{ip_address}:8080<br>
-                    -- <b>MongoDB UI</b>: http://{ip_address}:8081 (Mongo Express)<br>
-                    -- <b>PostgreSQL UI</b>: http://{ip_address}:5050 (pgAdmin)<br>
-                    -- <b>Selenium UI</b>: http://{ip_address}:7900 (Install VNC viewer for OS to view browser)<br>
+                    -- <b>Airflow</b>: http://{ip_address}:8085<br>
+                    -- <b>Spark</b>: http://{ip_address}:8080<br>
+                    -- <b>pgAdmin</b>: http://{ip_address}:5050 (pgAdmin)<br>
+                    -- <b>Selenium</b>: http://{ip_address}:7900 <br>
                 """
     else:
 
@@ -343,109 +521,169 @@ def status_email(postgres_results, mongo_results, phase: str = "Starting"):
                     <b>MongoDB Document Count</b>: {mongo_count}<br>
                     <b>Postgres Table Name</b>: {postgres_table_name}<br>
                     <b>Property Type</b>: {property_types[postgres_table_name]}<br>
-                    <b>Postgres Row Count</b>: {postgres_count}<br><br>
+                    <b>Postgres Rows Added</b>: {rows_added}<br><br>
                 """
 
     send_email(to="nj.realestate.pybot@gmail.com", subject=subject, html_content=message)
 
 
 # Define default args
+eastern = timezone("America/New_York")
 default_args = {
     "owner": "Jibreel Hameed",
-    "email": ['jqhameed@gmail.com'],
+    "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2025, 10, 19),
+    "start_date": datetime(2025, 11, 17, hour=9, minute=30, tzinfo=eastern),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
-}
+    }
+
+prop_type_dict = {
+        'RES': 'res_properties',
+        'MUL': 'mul_properties',
+        # 'LND': 'lnd_properties',
+        # 'RNT': 'rnt_properties',
+        # 'TAX': 'tax_properties'
+    }
 
 
 # Define DAG as decorator over final pipeline function
 @dag(
-    "GSMLS_Pipeline",
+    "GSMLS_Scrape_And_Preprocessing",
     description="",
     default_args=default_args,
-    schedule=timedelta(days=7),
+    schedule=timedelta(days=1),
 )
 @logger_decorator
 def gsmls_pipeline(**kwargs):
 
     load_dotenv()
     logger = kwargs["logger"]
+    f_handler = kwargs["f_handler"]
+    c_handler = kwargs["c_handler"]
     previous_group = None
+    cutoff_time = dtime(hour=2, minute=30, tzinfo=eastern)
+    progress_tracker = {
+        'Year': [],
+        'Municipality': [],
+        'County': [],
+        'Rows': [],
+        'Documents': [],
+        'Split_Type': [],
+        'Split_Index': []
+    }
 
-    for prop_type, topic in starting_point():
+    # Check the Kafka connection
+    kafka_conn = check_kafka_connection(logger)
+    mongo_start_results = check_mongodb("realEstate", "propertyImages", logger)
+    # Need to adjust starting point. The DB I/O is causing issues during DAG parsing which corrupts the runs
+    # property_list = starting_point()
 
-        short_circuit = ShortCircuitOperator(
-            task_id=f'short_circuit_{prop_type.lower()}',
-            python_callable=condition_function,
-            op_kwargs={'value': prop_type}
+    for prop_type, topic in prop_type_dict.items():
+
+        branch_decision = BranchPythonOperator(
+            task_id=f'branching_decision_{prop_type.lower()}',
+            python_callable=branching_decision,
+            op_kwargs={'cutoff_time': cutoff_time,
+                       'tz': eastern,
+                       'prop_type': prop_type.lower()},
+            trigger_rule="none_failed"
+        )
+
+        skip_all_tasks = PythonOperator(
+            task_id=f"skip_all_tasks_{prop_type.lower()}",
+            python_callable=skip_pipeline,
+            trigger_rule="all_success"
         )
 
         with TaskGroup(group_id=f"start_pipeline_{prop_type.lower()}") as start_pipeline:
 
-            # Check the Kafka connection
-            kafka_conn = check_kafka_connection(logger)
             # Create Kafka topics if necessary
             _ = create_kafka_topics(logger, topic=topic, status=kafka_conn)
-            mongo_start_results = check_mongodb("realEstate-cloud", "propertyImages", logger)
             postgresql_results1 = get_postgresql_rows(topic)
             status_email(postgresql_results1, mongo_start_results)
 
         with TaskGroup(group_id=f"etl_pipeline_{prop_type.lower()}") as etl_pipeline:
             # Update so table_name and prop type isn't hard-coded
             # Task 5: Start the GSMLS message production
-            airflow_gsmls_producer(prop_type)
+
+            rows_extracted = PythonOperator(
+                task_id="gsmls_producer",
+                python_callable=airflow_gsmls,
+                op_kwargs={"prop_type": prop_type, 'logger': logger,
+                           "f_handler": f_handler, "c_handler": c_handler,
+                           "cutoff_time": cutoff_conversion(cutoff_time, eastern)})
             # The producer will publish data to both the data and image topics first
             # Task decorators don't define __rshift__ ">>" so I need to use classic Operators for dependencies
             kafka_msg_sensor = PythonSensor(
                 task_id="kafka_msg_sensor",
                 python_callable=new_msgs_available,
                 op_kwargs={'topic': topic, 'logger_': logger},
-                poke_interval=300,
+                poke_interval=60,
                 timeout=3600,
                 mode="reschedule"
             )
 
             kafka_img_sensor = PythonSensor(
-                task_id=f"kafka_image_sensor_{prop_type.lower()}",
+                task_id=f"kafka_image_sensor",
                 python_callable=new_msgs_available,
                 op_kwargs={'topic': 'prop_images', 'logger_': logger},
-                poke_interval=300,
+                poke_interval=60,
                 timeout=3600,
+                mode="reschedule"
+            )
+
+            PythonSensor(
+                task_id=f"progress_sensor",
+                python_callable=progress_update,
+                op_kwargs={'table_name': topic, 'current_data': progress_tracker,
+                           'prop_type': prop_type},
+                poke_interval=1800,
+                timeout=86400,
                 mode="reschedule"
             )
 
             # Task 6: Start the GSMLS consumer and MongoDB consumer
             gsmls_consumer = PythonOperator(
-                task_id=f"gsmls_consumer_{prop_type.lower()}",
+                task_id=f"gsmls_consumer",
                 python_callable=airflow_data_consumer,
-                op_kwargs={"prop_type": prop_type, "retry": False})
-    
+                op_kwargs={"prop_type": prop_type, "logger": logger, "retry": False})
+
             image_consumer = PythonOperator(
-                task_id=f"image_consumer_{prop_type.lower()}",
+                task_id=f"image_consumer",
                 python_callable=airflow_image_consumer,
                 op_kwargs={"retry": False})
 
             # ETL Pipeline dependencies
             kafka_msg_sensor >> gsmls_consumer
+            # kafka_msg_sensor >> progress_sensor
             kafka_img_sensor >> image_consumer
+
+        merge = EmptyOperator(
+            task_id=f"merge_tasks_{prop_type.lower()}",
+            trigger_rule="none_failed_min_one_success"
+        )
 
         with TaskGroup(group_id=f"ending_pipeline_{prop_type.lower()}") as ending_pipeline:
 
             mongo_end_results = check_mongodb("realEstate", "propertyImages", logger)
             postgresql_results2 = get_postgresql_rows(topic)
-            status_email(postgresql_results2, mongo_end_results, phase='Ending')
-        #
-        # Total pipeline dependencies
-        # short_circuit >> start_pipeline >> etl_pipeline >> ending_pipeline
-        short_circuit >> start_pipeline >> ending_pipeline
+            status_email(postgresql_results2, mongo_end_results, phase='Ending', rows_added=rows_extracted)
+
+        # # Total pipeline dependencies
+        branch_decision >> skip_all_tasks
+        branch_decision >> start_pipeline
+        start_pipeline >> etl_pipeline >> ending_pipeline
+        skip_all_tasks >> merge
+        ending_pipeline >> merge
 
         if previous_group:
-            previous_group >> short_circuit
+            previous_group >> branch_decision
 
         previous_group = ending_pipeline
 
 
+# dag_instance = gsmls_pipeline()
 gsmls_pipeline()
+
