@@ -1,4 +1,4 @@
-import pymongo
+from pprint import pformat
 import os
 import re
 import requests
@@ -8,9 +8,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from datetime import timedelta
-from dotenv import load_dotenv
 from tqdm import tqdm
-from sqlalchemy import create_engine
 from collections import defaultdict
 from pymongo.errors import CursorNotFound
 from utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
@@ -27,9 +25,7 @@ class RealEstateImages:
         self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
         self.image_df = df_var
-        self.image_dir = (
-            "F:\\Real Estate Investing\\JQH Holding Company LLC\\MLS Photos"
-        )
+        self.image_dir = "/opt/airflow/MLS Photos"
         self.home_sections = {
             "Bathroom": re.compile(
                 r"bath(\s)?room|bath|powder|master bath", flags=re.IGNORECASE
@@ -77,108 +73,80 @@ class RealEstateImages:
     ______________________________________________________________________________________________________________
     """
 
-    def alternates_image_capture(
-        self, style_type, title, property_condition, address, image_num, url, imagedict
-    ):
+    def alternates_image_capture(self, image_num, imagedict, **kwargs):
 
-        if (
-            (style_type is not None)
-            and ("Image of listing" == title)
-            and (image_num == 0)
-        ):
+        if ((kwargs["Section_Type"] is not None)
+                and ("Image of listing" == kwargs["Section"])
+                and (image_num == 0)):
 
-            self.capture_front_image_url(
-                style_type, property_condition, address, image_num, url, imagedict
-            )
+            self.capture_front_image_url(image_num, imagedict, **kwargs)
 
-        elif ("Image of listing" in title) and (image_num >= 0):
+        elif ("Image of listing" in kwargs["Section"]) and (image_num >= 0):
 
             for section, pattern in self.home_sections.items():
                 try:
-                    if pattern.search(title[16:]) is not None:
+                    if pattern.search(kwargs["Section"][16:]) is not None:
 
                         if section != "Alternates":
 
                             if section == "Front":
 
-                                self.capture_front_image_url(
-                                    style_type,
-                                    property_condition,
-                                    address,
-                                    image_num,
-                                    url,
-                                    imagedict,
-                                )
+                                self.capture_front_image_url(image_num, imagedict, **kwargs)
                             else:
-                                self.capture_image_url(
-                                    section,
-                                    property_condition,
-                                    address,
-                                    image_num,
-                                    url,
-                                    imagedict,
-                                )
+                                self.capture_image_url(image_num, imagedict, **kwargs)
 
                     elif (
-                        pattern.search(title[16:]) is None
+                        pattern.search(kwargs["Section"]) is None
                     ) and section != "Alternates":
                         continue
 
                     else:
                         # The category of the image is unknown. Save and categorize it later
-                        self.default_image_capture(
-                            property_condition, address, image_num, url, imagedict
-                        )
+                        self.default_image_capture(image_num, imagedict, **kwargs)
 
                 except IndexError:
-                    self.default_image_capture(
-                        property_condition, address, image_num, url, imagedict
-                    )
+                    self.default_image_capture(image_num, imagedict, **kwargs)
 
-    def capture_image_url(
-        self, section_type, property_condition, address, image_num, url, imagedict
-    ):
+    def capture_image_url(self, image_num, imagedict, **kwargs):
 
         filename = os.path.join(
             self.image_dir,
-            section_type,
-            property_condition,
-            address + " - " + section_type + f"_{image_num}.png",
+            kwargs["Section_Type"],
+            kwargs["Condition"],
+            kwargs["Address"] + " - " + kwargs["Section_Type"] + f"_{image_num}.png",
         )
-        imagedict[section_type].append(
-            {"Condition": property_condition, "URL": url, "Directory": filename}
+        imagedict[kwargs["Section_Type"]].append(
+            {"Condition": kwargs["Condition"], "URL": kwargs["image_url"], "Directory": filename}
         )
 
-    def capture_front_image_url(
-        self, style_type, property_condition, address, image_num, url, imagedict
-    ):
+    def capture_front_image_url(self, image_num, imagedict, **kwargs):
 
         try:
             filename = os.path.join(
                 self.image_dir,
-                style_type,
-                property_condition,
-                address + " - " + "Front" + f"_{image_num}.png",
-            )
+                kwargs["Prop_Style"],
+                kwargs["Condition"],
+                kwargs["Address"] + " - " + "Front" + f"_{image_num}.png")
+
         except TypeError:
             filename = os.path.join(
                 self.image_dir,
                 "Front",
-                property_condition,
-                address + " - " + "Front" + f"_{image_num}.png",
+                kwargs["Condition"],
+                kwargs["Address"] + " - " + "Front" + f"_{image_num}.png",
             )
 
         imagedict["Front"].append(
-            {"Condition": property_condition, "URL": url, "Directory": filename}
+            {"Condition": kwargs["Condition"], "URL": kwargs["image_url"], "Directory": filename}
         )
 
     def check_for_database(self):
         if self.db_name in self.mongo_db_conn.list_database_names():
-            print(f"Cursor connected to {self.db_name} database")
+            print(f" ==== CURSER CONNECTED TO {self.db_name} DATABASE ==== ")
 
         else:
             print(
-                f"The {self.db_name} database previously didn't exists but has been created."
+                f"THE {self.db_name} DATABASE PREVIOUSLY DID NOT EXIST, BUT HAS BEEN CREATED ==== "
             )
 
         return self.mongo_db_conn[self.db_name]
@@ -190,18 +158,110 @@ class RealEstateImages:
             pass
         else:
             os.makedirs(directory)
-            print(f"New directory created: {directory}")
+            print(f" ==== NEW DIRECTORY CREATED: {directory} ==== ")
 
     def check_for_collection(self):
         if self.col_name in self.database.list_collection_names():
-            print(f"The {self.col_name} collection exists.")
+            print(f" ==== THE {self.col_name} COLLECTION EXISTS ==== ")
 
         else:
             print(
-                f"The {self.col_name} collection previously didn't exists but has been created."
+                f" ==== THE {self.col_name} COLLECTION PREVIOUSLY DID NOT EXIST, BUT HAS BEEN CREATED ==== "
             )
 
         return self.database[self.col_name]
+
+    @staticmethod
+    def clean_image_key(property_data):
+
+        raw_data = property_data["Images"].copy()
+
+        for section, result_list in raw_data.items():
+            if len(result_list) == 0:
+                del property_data["Images"][section]
+                # print(f' === {section.upper()} LIST EMPTY. DELETING KEY ==== ')
+
+        return property_data
+
+    def collect_image_data(self, target_row, property_data, **kwargs):
+
+        if isinstance(target_row["IMAGES"], str):
+            image_dict = self.create_image_dict()
+            image_list = kwargs["image_pattern"].findall(target_row["IMAGES"])
+
+            for image_num, image in enumerate(image_list):
+
+                kwargs["Section"] = section = image[0].strip("'").split("-")[1].strip()
+                kwargs["image_url"] = image[1].strip().strip("'")
+
+                for section_type, pattern in self.home_sections.items():
+                    kwargs["Section_Type"] = section_type
+                    if pattern.search(section) is not None:
+                        if section_type != "Alternates":
+
+                            if section_type == "Front":
+
+                                self.capture_front_image_url(image_num, image_dict, **kwargs)
+                                break
+                            else:
+                                self.capture_image_url(image_num, image_dict, **kwargs)
+                                break
+                        else:
+                            # Image of listing is the main image title and/or there's detail about the image
+                            # in the subtext. Need to use a different method to capture the image name
+                            self.alternates_image_capture(image_num, image_dict, **kwargs)
+
+                    elif (pattern.search(section) is None) and section_type != "Alternates":
+                        continue
+
+                    else:
+                        # The category of the image is unknown. Save and categorize it later
+                        self.default_image_capture(image_num, image_dict, **kwargs)
+
+            property_data["Images"] = image_dict
+            RealEstateImages.clean_image_key(property_data)
+
+    @staticmethod
+    def create_base_document(target_row, **kwargs):
+
+        replace_pattern = re.compile("\.?\(\d{4}\)\*?")
+        property_data = defaultdict(str)
+
+        address = " ".join([str(target_row["STREETNUMDISPLAY"]), str(target_row["STREETNAME"]).upper()])
+        target_date, condition = RealEstateImages.date_and_condition(target_row)
+        date_str = target_date.split("T")[0]
+        target_date = datetime.strptime(date_str, "%Y-%m-%d")
+        new_town = re.sub(replace_pattern, "", str(target_row["TOWN"])).upper()
+        prop_type, prop_style_type = RealEstateImages.property_style(target_row, property_data)
+
+        kwargs["Address"] = property_data["Address"] = address.title()
+        kwargs["MLSNum"] = property_data["MLSNum"] = int(target_row["MLSNUM"])
+        kwargs["State"] = property_data["State"] = "NJ"
+        kwargs["ListDate"] = property_data["Date"] = target_date
+        kwargs["Condition"] = property_data["Condition"] = condition.title()
+        kwargs["Town"] = property_data["Town"] = new_town.title()
+        kwargs["Prop_Style"] = property_data["Prop_Style"] = prop_style_type
+        kwargs["Zipcode"] = property_data["Zipcode"] = target_row["ZIPCODE"]
+        kwargs["CountyCode"] = property_data["CountyCode"] = target_row["COUNTYCODE"]
+        kwargs["BlockID"] = property_data["BlockID"] = target_row["BLOCKID"]
+        kwargs["LotID"] = property_data["LotID"] = target_row["LOTID"]
+
+        try:
+            if prop_type != 'RNT':
+                kwargs["SalesPrice"] = property_data["Sales_Price"] = int(target_row["SALESPRICE"])
+            else:
+                kwargs["RentPrice"] = property_data["Rental_Price"] = int(target_row["RENTMONTHPERLSE"])
+        except KeyError:
+            pass
+
+        try:
+            property_data["Listing_Remarks"] = target_row["LISTING_REMARKS"]
+            property_data["Geo_Data"] = {'Latitude': float(target_row["LATITUDE"]),
+                                         'Longitude': float(target_row["LONGITUDE"])}
+        except ValueError:
+            pass
+
+        return property_data, kwargs
 
     @staticmethod
     def create_new_filename(filepath, mlsnum):
@@ -211,6 +271,17 @@ class RealEstateImages:
         filepath_list[-1] = str(mlsnum) + " - " + file_address
 
         return "\\".join(filepath_list)
+
+    def create_image_dict(self):
+
+        imagedict = {}
+        image_sections_list = list(self.home_sections.keys())
+        image_sections_list.append("Other")
+
+        for section in image_sections_list:
+            imagedict.setdefault(section, [])
+
+        return imagedict
 
     @staticmethod
     def create_image_list(image_dict: dict):
@@ -367,19 +438,17 @@ class RealEstateImages:
 
             return "0000-00-00", "Unknown"
 
-    def default_image_capture(
-        self, property_condition, address, image_num, url, imagedict
-    ):
+    def default_image_capture(self, image_num, imagedict, **kwargs):
 
         filename = os.path.join(
             self.image_dir,
             "Other",
-            property_condition,
-            address + " - " + "Other" + f"_{image_num}.png",
+            kwargs["Condition"],
+            kwargs["Address"] + " - " + "Other" + f"_{image_num}.png",
         )
 
         imagedict["Other"].append(
-            {"Condition": property_condition, "URL": url, "Directory": filename}
+            {"Condition": kwargs["Condition"], "URL": kwargs["image_url"], "Directory": filename}
         )
 
     def delete_duplicates(self, doc_count, id_num, old_id, logger):
@@ -388,7 +457,7 @@ class RealEstateImages:
 
             # Log how many documents will be deleted
             print(
-                f"MLSNum {id_num} has {doc_count} duplicate documents stored. "
+                f" ==== MLSNUM {id_num} HAS {doc_count} DUPLICATED DOCUMENTS STORED ==== "
                 f"Program will delete {int(doc_count) - 1} documents"
             )
 
@@ -831,29 +900,21 @@ class RealEstateImages:
             if record.get("Images_Downloaded") is None:
                 table.update_one(query_filter, outer_update_operation)
 
-    def main(self):
+    def main(self, **kwargs):
         """
         Stores real estate property image data from a Pandas dataframe
         :return:
         """
 
-        # Include a column for Property Style. Some messages won't have this data available so set to "Unknown"
-        target_columns = ["MLSNum", "ListDate", "Address", "Town",
-                          "State", "Zipcode", "CountyCode", "BlockID",
-                          "LotID", "Condition", "Prop_Style","Images"]
-        image_pattern = re.compile(
-            r"'(\d{1,5}(?:-\d{1,5}|-\w)?(?: )?(?:\w\.)? [\w+ ]*(?:\.)?, [\w+ ]*(?:\.)? - [\w+ ,&.\/!-]* - \d{0,3})': '(https:\/\/img\.gsmls\.com\/imagedb\/highres\/a\/\d{1,3}\/\d{1,15}(?:_\d{1,3})?\.jpg)'"
-        )
-        # image_pattern = re.compile(r"'(\d{1,5}(?:-\d{1,5})?(?: )?(?:\w\.)? [\w+ ]*(?:\.)?, [\w+ ]*(?:\.)? - [\w+ ]* - \d{0,3})': '(https:\/\/img\.gsmls\.com\/imagedb\/highres\/a\/\d{1,3}\/\d{1,15}(?:_\d{1,3})?\.jpg)'")
-        replace_pattern = re.compile("\.?\(\d{4}\)\*?")
+        # image_pattern = re.compile(
+        #     r"'(\d{1,5}(?:-\d{1,5}|-\w)?(?: )?(?:\w\.)? [\w+ ]*(?:\.)?, [\w+ ]*(?:\.)? - [\w+ ,&.\/!-]* - \d{0,3})': '(https:\/\/img\.gsmls\.com\/imagedb\/highres\/a\/\d{1,3}\/\d{1,15}(?:_\d{1,3})?\.jpg)'"
+        # )
+        image_pattern = re.compile(r"'([^']+?)'\s*:\s*'(https:\/\/img\.gsmls\.com\/imagedb\/highres\/[^']+?\.jpg)'")
+        kwargs["image_pattern"] = image_pattern
 
-        for _, row_data in zip(
-            tqdm(range(len(self.image_df)), "Row"), self.image_df.iterrows()
-        ):
+        for _, row_data in zip(tqdm(range(len(self.image_df)), "Row"), self.image_df.iterrows()):
 
-            property_data = defaultdict(str)
             target_row = row_data[1]
-            target_date, condition = RealEstateImages.date_and_condition(target_row)
             # target_date, condition = self.sql_query(target_row)
             try:
                 if (
@@ -861,123 +922,15 @@ class RealEstateImages:
                     or isinstance(target_row["IMAGES"], float)
                     or (image_pattern.findall(target_row["IMAGES"]) == [])
                 ):
+                    print(f" ==== NO DATA FOUND ==== ")
                     continue
             except TypeError:
+                print(f" ==== TYPEERROR: NO DATA FOUND ==== ")
                 continue
 
-            for col in target_columns:
-                if col == "Address":
-                    address = " ".join(
-                        [
-                            str(target_row["STREETNUMDISPLAY"]),
-                            str(target_row["STREETNAME"]).upper(),
-                        ]
-                    )
-                    property_data[col] = address
-                elif col == "MLSNum":
-                    property_data[col] = target_row["MLSNUM"]
-                elif col == "State":
-                    property_data[col] = "NJ"
-                elif col == "ListDate":
-                    property_data["Date"] = target_date
-                elif col == "Condition":
-                    property_data[col] = condition.upper()
-                elif col == "Town":
-                    new_town = re.sub(
-                        replace_pattern, "", str(target_row["TOWN"])
-                    ).upper()
-                    property_data[col] = new_town
-                elif col == "Prop_Style":
-                    type_, style_type = RealEstateImages.property_style(
-                        target_row, property_data
-                    )
-                    property_data[col] = style_type
-
-                elif col == "Images":
-                    imagedict = {}
-
-                    for section in self.home_sections.keys():
-                        imagedict.setdefault(section, [])
-
-                    imagedict.setdefault("Other", [])
-
-                    if isinstance(target_row["IMAGES"], str):
-                        image_list = image_pattern.findall(target_row["IMAGES"])
-                        for image_num, image in enumerate(image_list):
-
-                            section = image[0].strip("'").split("-")[1].strip()
-                            image_url = image[1].strip().strip("'")
-
-                            for section_type, pattern in self.home_sections.items():
-                                if pattern.search(section) is not None:
-                                    if section_type != "Alternates":
-
-                                        if section_type == "Front":
-
-                                            self.capture_front_image_url(
-                                                style_type,
-                                                property_data["Condition"],
-                                                address,
-                                                image_num,
-                                                image_url,
-                                                imagedict,
-                                            )
-                                            break
-                                        else:
-                                            self.capture_image_url(
-                                                section_type,
-                                                property_data["Condition"],
-                                                address,
-                                                image_num,
-                                                image_url,
-                                                imagedict,
-                                            )
-                                            break
-                                    else:
-                                        # Image of listing is the main image title and/or there's detail about the image
-                                        # in the subtext. Need to use a different method to capture the image name
-                                        self.alternates_image_capture(
-                                            style_type,
-                                            section,
-                                            property_data["Condition"],
-                                            address,
-                                            image_num,
-                                            image_url,
-                                            imagedict,
-                                        )
-
-                                elif (
-                                    pattern.search(section) is None
-                                ) and section_type != "Alternates":
-                                    continue
-
-                                else:
-                                    # The category of the image is unknown. Save and categorize it later
-                                    self.default_image_capture(
-                                        property_data["Condition"],
-                                        address,
-                                        image_num,
-                                        image_url,
-                                        imagedict,
-                                    )
-
-                        property_data["Images"] = imagedict
-
-                else:
-                    property_data[col] = target_row[col.upper()]
-
+            property_data, kwargs = RealEstateImages.create_base_document(target_row, **kwargs)
+            self.collect_image_data(target_row, property_data, **kwargs)
             self.collection.insert_one(dict(property_data))
-            # del property_data
-
-
-if __name__ == "__main__":
-
-    current_wd = os.getcwd()
-    os.chdir("F:\\Real Estate Investing\\Kafka_Data_Backups")
-    # image_data = pd.read_excel('prop_images.xlsx')
-    # obj = RealEstateImages(image_data)
-    # obj.main()
-    obj = RealEstateImages()
-    # obj.download_images_main()
-    obj.database_cleanup()
-    os.chdir(current_wd)
+            print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
+                  f"{property_data["MLSNum"]} - {property_data["Address"]}, {property_data["Town"]} ==== ")
+            # print(pformat(dict(property_data)))
