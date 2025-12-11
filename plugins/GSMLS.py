@@ -32,12 +32,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
 from selenium.common.exceptions import TimeoutException
-from selenium.common.exceptions import UnexpectedAlertPresentException
+from selenium.common.exceptions import UnexpectedAlertPresentException, WebDriverException
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from psycopg2.errors import SyntaxError
 from sqlalchemy.exc import DatabaseError
+from pandas.errors import ParserError
 
 
 class GSMLS:
@@ -124,7 +125,7 @@ class GSMLS:
         else:
             x_path = f'//*[@id="advance-search-fields"]/li[{target_dict[target_name]}]'
 
-        property_tab = WebDriverWait(driver_var, 10).until(
+        property_tab = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, x_path))
         )
         property_tab.click()
@@ -134,12 +135,12 @@ class GSMLS:
 
         # Locate and click the property type in the Advanced Search
         x_path = f"//select[@id='ptype']"
-        property_menu = WebDriverWait(driver_var, 10).until(
+        property_menu = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, x_path))
         )
         property_menu.click()
         choice_path = f"//option[@value='{self.prop_type}']"
-        WebDriverWait(driver_var, 10).until(
+        WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, choice_path))
         ).click()
         time.sleep(1)
@@ -161,7 +162,9 @@ class GSMLS:
             "Property_Type": [],
             "Timeframe": [],
             "Split_Type": [],
-            "Split_Index": []
+            "Split_Index": [],
+            "Expected_Data": [],
+            "File_Type": []
         }
 
         return clean_log
@@ -181,10 +184,9 @@ class GSMLS:
                                  kwargs["County_Name"], str(kwargs["New_Qtr"]) + str(kwargs["Year"]),
                                  f"{self.prop_type} Sales GSMLS"])
 
-
         else:
 
-            return os.path.join(base_path, kwargs["Filename"] + ".XLS")
+            return os.path.join(base_path, kwargs["Filename"])
 
     def create_state_dictionary(self, driver_var):
 
@@ -266,36 +268,88 @@ class GSMLS:
 
             return new_timeframe
 
+    def data_quality_check(self, base_path, file_ending=None, **kwargs):
+
+        path_to_file = self.create_filename(base_path=base_path, **kwargs)
+
+        if file_ending is None:
+
+            xls_df = pd.read_excel(path_to_file + ".xls", engine="xlrd")
+            try:
+                tsv_df = pd.read_table(path_to_file + ".tsv")
+            except ParserError:
+                tsv_df = pd.read_table(path_to_file + ".tsv",
+                                       on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
+                                       engine="python")
+            xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
+            tsv_data_captured = round((len(tsv_df) / kwargs["Expected_Data"]) * 100, 2)
+
+            if xls_data_captured > tsv_data_captured:
+                print(f' ==== XLS FILETYPE CAPTURED {xls_data_captured}% OF DATA FOR {kwargs["Filename"]}==== ')
+                self.download_log["File_Type"][-1] = 'xls'
+                return xls_df
+            elif tsv_data_captured > xls_data_captured:
+                print(f' ==== TSV FILETYPE CAPTURED {tsv_data_captured}% OF DATA FOR {kwargs["Filename"]}==== ')
+                self.download_log["File_Type"][-1] = 'tsv'
+                return tsv_df
+            elif tsv_data_captured == xls_data_captured:
+                print(f' ==== BOTH FILE TYPES CAPTURED {xls_data_captured}% OF DATA FOR {kwargs["Filename"]}==== ')
+                self.download_log["File_Type"][-1] = 'both'
+                return xls_df
+
+        elif file_ending == 'xls':
+            df = pd.read_excel(path_to_file + ".xls", engine="xlrd")
+            print(f' ==== ONLY XLS FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
+            self.download_log["File_Type"][-1] = 'xls'
+            return df
+        elif file_ending == 'tsv':
+            try:
+                df = pd.read_table(path_to_file + ".tsv")
+            except ParserError:
+                df = pd.read_table(path_to_file + ".tsv",
+                                   on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
+                                   engine="python")
+            print(f' ==== ONLY TSV FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
+            self.download_log["File_Type"][-1] = 'tsv'
+            return df
+
     def download_complete(self, **kwargs):
 
         download_folder = "/opt/airflow/downloads"
-        for _ in range(1, 16):
-            abspath_ = self.create_filename(base_path=download_folder, **kwargs)
-            print(abspath_)
-            if os.path.exists(abspath_):
-                return True
-            else:
-                time.sleep(0.5)
+        path_to_file = self.create_filename(base_path=download_folder, **kwargs)
+        status_dict = {
+            'xls_complete': False,
+            'tsv_complete': False
+        }
 
-        return False
-        # raise TimeoutError(f'{filename} did not download in a timely manner')
+        for status, file_end in zip(list(status_dict.keys()), [".xls", ".tsv"]):
+            for idx in range(1, 16):
+                abspath_ = path_to_file + file_end
+                if os.path.exists(abspath_):
+                    if status_dict[status] is False:
+                        print(abspath_)
+                        status_dict[status] = True
+                elif idx < 15:
+                    time.sleep(0.5)
+
+        return status_dict['xls_complete'], status_dict['tsv_complete']
 
     @staticmethod
     def download_error(driver_var, logger):
 
         # Search for the message box div and check if the container is active
         try:
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 30).until(
                 lambda d: d.execute_script("return document.readyState") == "complete"
             )
             # WebDriverWait(driver_var, 5).until(
             #     EC.presence_of_element_located((By.XPATH, "//div[@id='message-box-container']")))
-            WebDriverWait(driver_var, 5).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located(
                     (By.XPATH, "//div[@class='popup_inner']")
                 )
             )
-            WebDriverWait(driver_var, 5).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.visibility_of_element_located(
                     (By.XPATH, "//h2[normalize-space()='Error']")
                 )
@@ -320,11 +374,11 @@ class GSMLS:
                 logger.warning(f"GSMLS Server Error Occurred: {message_text}")
 
                 # Close the message box and close page
-                WebDriverWait(driver_var, 5).until(
+                WebDriverWait(driver_var, 30).until(
                     EC.presence_of_element_located((By.XPATH, "//input[@value='Ok']"))
                 ).click()
                 GSMLS.explicit_page_load("Server Error", driver_var)
-                WebDriverWait(driver_var, 5).until(
+                WebDriverWait(driver_var, 30).until(
                     EC.presence_of_element_located((By.XPATH, "//a[@id='closect']"))
                 ).click()
 
@@ -356,41 +410,18 @@ class GSMLS:
         GSMLS.explicit_page_load("Download", driver_var)
 
         # Locate the option to download as a xls file and name it
-        excel_file_input = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.ID, "downloadfiletype3"))
-        )
-        excel_file_input.click()
-        filename_input = driver_var.find_element(By.ID, "filename")
-        filename_input.click()
-        filename = self.create_filename(**kwargs)
-        AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
-            Keys.CONTROL
-        ).send_keys(filename).perform()
-        time.sleep(0.5)
-
-        # Request the download and close the page
-        download_button = WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//a[normalize-space()='Download']")
-            )
-        )
-        download_button.click()
-        error_result = GSMLS.download_error(driver_var, kwargs["logger"])
+        results_from_download = self.get_xls_tsv_files(driver_var, **kwargs)
 
         # driver_var.switch_to.window(kwargs["Main_Window"])
         time.sleep(1)
-        close_page = WebDriverWait(driver_var, 5).until(
+        close_page = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//*[@id='sub-navigation-container']/div/nav[1]/a[2]")
             )
         )
         close_page.click()
 
-        if error_result is True:
-            return "Server Error"
-
-        elif error_result is False:
-            return filename
+        return results_from_download
 
     def enrich_raw_data(self, df, meta_dict, **kwargs):
 
@@ -430,7 +461,7 @@ class GSMLS:
 
         page_source = driver_var.page_source
         close_idx = GSMLS.find_link_index("Close", page_source)
-        close_button = WebDriverWait(driver_var, 5).until(
+        close_button = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located(
                 (
                     By.XPATH,
@@ -483,6 +514,7 @@ class GSMLS:
                 "//table[@class='df-table sticky sticky-gray']",
                 "//a[@class='last show']",
             ],
+            "No Results": ["//div[@class='popup_inner']", "//input[@value='OK']"],
             "Download": [
                 "//h2[normalize-space()='Download']",
                 "//div[@id='sub-navigation-container']",
@@ -494,8 +526,8 @@ class GSMLS:
                 "//div[@class='side-bar-padding']",
                 f"//div[normalize-space()='{mlsnum}']",
             ],
-            "Media Page": [
-                "//div[@id='menu-selectBox']//div[2]",
+            "Media Page": ["//*[@id='menu-selectBox']",
+                # "//div[@id='menu-selectBox']//div[2]",
                 "//div[@class='imagesReportTitle']",
                 f'//*[@id="{prop_id}"]/div/form',
             ],
@@ -527,30 +559,30 @@ class GSMLS:
             #     lambda d: d.execute_script("return document.readyState") == "complete"
             # )
             # Wait 1
-            WebDriverWait(driver_var, 15).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.text_to_be_present_in_element(
                     (By.XPATH, arg_dict[page_name][0]), page_name
                 )
             )
             # Wait 2
-            WebDriverWait(driver_var, 15).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][1]))
             )
             if page_name == "Results" and property_type == "TAX":
                 # Wait 3
-                WebDriverWait(driver_var, 15).until(
+                WebDriverWait(driver_var, 30).until(
                     EC.visibility_of_element_located(
                         (By.XPATH, "//div[@class='result-table map_adjust']")
                     )
                 )
             else:
-                WebDriverWait(driver_var, 15).until(
+                WebDriverWait(driver_var, 30).until(
                     EC.visibility_of_element_located((By.XPATH, arg_dict[page_name][2]))
                 )
             if page_name == "Results":
                 # Wait 4
                 # Additional check needed for Results page to make sure everything is loaded
-                WebDriverWait(driver_var, 10).until(
+                WebDriverWait(driver_var, 30).until(
                     EC.element_to_be_clickable((By.XPATH, arg_dict[page_name][3]))
                 )
 
@@ -571,19 +603,32 @@ class GSMLS:
                     EC.visibility_of_element_located((By.XPATH, path_var))
                 )
 
+        elif page_name == "No Results":
+
+            WebDriverWait(driver_var, 30).until(
+                EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0]))
+            )
+            WebDriverWait(driver_var, 30).until(
+                EC.element_to_be_clickable((By.XPATH, arg_dict[page_name][1]))
+            )
+
         elif page_name in ["Media Page", "Property Report"]:
             assert window_id == driver_var.current_window_handle
             # Wait 1
-            WebDriverWait(driver_var, 15).until(
-                EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0]))
-            )
+            # WebDriverWait(driver_var, 30).until(
+            #     EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0]))
+            # )
             # # Wait 2
             try:
                 # There are times when the ImageReportTitle Xpath doesn't show up and there no images
                 for path_var in arg_dict[page_name]:
-                    WebDriverWait(driver_var, 15).until(
+                    try:
+                        WebDriverWait(driver_var, 30).until(
                         EC.presence_of_element_located((By.XPATH, path_var))
-                    )
+                        )
+                    except WebDriverException as e:
+                        print(f' ==== WEBDRIVER ERROR OCCURRED FOR {page_name}/XPATH: {path_var} ==== ')
+                        print(f'{e}')
 
             except TimeoutException:
                 pass
@@ -760,10 +805,38 @@ class GSMLS:
             if not sub_table.empty:
                 self.level_set[level_type] += sub_table['split_index'].max()
 
-                # if level_type == 'monthly':
-                #     self.level_set['quarterly'] += 1
-                # elif level_type == 'weekly':
-                #     self.level_set['monthly'] += 1
+    def get_xls_tsv_files(self, driver_var, **kwargs):
+
+        excel_file_output = WebDriverWait(driver_var, 30).until(
+            EC.presence_of_element_located((By.ID, "downloadfiletype3")))
+        tsv_file_output = WebDriverWait(driver_var, 30).until(
+            EC.presence_of_element_located((By.ID, "downloadfiletype2")))
+        filename = self.create_filename(**kwargs)
+
+        for idx, input_type in enumerate([excel_file_output, tsv_file_output]):
+            input_type.click()
+
+            if idx == 0:
+                filename_input = driver_var.find_element(By.ID, "filename")
+                filename_input.click()
+                AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
+                    Keys.CONTROL
+                ).send_keys(filename + ".xls").perform()
+            time.sleep(0.5)
+
+            # Request the download and close the page
+            download_button = WebDriverWait(driver_var, 30).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//a[normalize-space()='Download']")
+                )
+            )
+            download_button.click()
+            error_result = GSMLS.download_error(driver_var, kwargs["logger"])
+
+            if error_result is True:
+                return "Server Error"
+
+        return filename
 
     def input_download_log_data(self, split_type=None, split_index=None, results_found=None, **kwargs):
 
@@ -774,15 +847,16 @@ class GSMLS:
         self.download_log["Initiated"].append("Yes")
         self.download_log["Finished"].append("No")
         self.download_log["Rows_Produced"].append(0)
-        self.download_log["Start_Date"].append(self.start_date)
+        self.download_log["Start_Date"].append(self.start_date.date())
         self.download_log["Date_Produced"].append(datetime.now().date())
         self.download_log["Property_Type"].append(self.prop_type)
         self.download_log["Timeframe"].append(self.timeframe)
         self.download_log["Split_Type"].append(split_type)
         self.download_log["Split_Index"].append(split_index)
+        self.download_log["Expected_Data"].append(0)
+        self.download_log["File_Type"].append(None)
         if results_found is not None:
             self.download_log["Results_Found"].append("Yes")
-
 
     @staticmethod
     def kill_logger(logger_var, file_handler, console_handler):
@@ -847,7 +921,7 @@ class GSMLS:
                     # For a current timeframe, date of last run + 1 day will be new start date
                     try:
                         self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1)
-                        assert datetime.now() > self.start_date
+                        assert datetime.now(tz=timezone("America/New_York")) > self.true_date()
                         print(f" ==== START DATE : {self.start_date} ==== ")
                     except AssertionError:
                         # In the event of a complete program shutdown, the class will initiate a new
@@ -860,13 +934,14 @@ class GSMLS:
                 # self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1) Used for debugging
 
             # All data from last run was scraped. Reset the value to scrape all new data
-            if (
-                self.last_scraped_county == 30
-                and self.last_scraped_muni == "White Twp."
-                and self.finished == "Yes"
-            ):
+            if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
                 self.last_scraped_muni = None
                 self.last_scraped_county = None
+                if self.timeframe in ["historic", "mixed"]:
+                    self.last_scraped_year += 1
+                    default_date = f'{self.last_scraped_year}-01-01 00:00:00'
+                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                    print(f" ==== NEW START DATE : {self.start_date} ==== ")
 
     def login(self, website, driver_var):
         """
@@ -904,7 +979,7 @@ class GSMLS:
             },
         )
         if type(duplicate) == bs4.element.Tag:
-            terminate_duplicate_session = WebDriverWait(driver_var, 10).until(
+            terminate_duplicate_session = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located(
                     (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input[1]')
                 )
@@ -919,7 +994,7 @@ class GSMLS:
         # Check if there's a GSMLS popup notice. If so, close the message
         if type(notice_msg) == bs4.element.Tag:
             try:
-                ok_button = WebDriverWait(driver_var, 10).until(
+                ok_button = WebDriverWait(driver_var, 30).until(
                     EC.presence_of_element_located((By.XPATH, "//input[@value='OK']"))
                 )
                 ok_button.click()
@@ -936,25 +1011,17 @@ class GSMLS:
     @staticmethod
     def no_results(driver_var):
 
-        # page_source = driver_var.page_source
-        # soup = BeautifulSoup(page_source, 'html.parser')
-        # message_box = soup.find('div', {'id': 'message-box-container', 'class': 'active-container'})
-
-        # if message_box:
-        WebDriverWait(driver_var, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@class='popup_inner']"))
-        )
-        no_results_found = WebDriverWait(driver_var, 10).until(
+        GSMLS.explicit_page_load("No Results", driver_var)
+        no_results_found = WebDriverWait(driver_var, 30).until(
             EC.element_to_be_clickable((By.XPATH, "//input[@value='OK']"))
         )
         no_results_found.click()
-        # time.sleep(1)  # Built-in latency
 
     def page_criteria(self, driver_var):
 
         # Locate and click the Status tab
         x_path = '//*[@id="advance-search-fields"]/li[2]'
-        status_tab = WebDriverWait(driver_var, 10).until(
+        status_tab = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, x_path))
         )
         status_tab.click()
@@ -1008,7 +1075,7 @@ class GSMLS:
         soup = BeautifulSoup(page_results, "html.parser")
         target = soup.find("li", {"class": "nav-header", "id": "2"})
         submenu_id = target.find("a", {"href": "#", "class": "has-submenu"})["id"]
-        main_search = WebDriverWait(driver_var, 5).until(
+        main_search = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, submenu_id))
         )
         main_search.click()
@@ -1018,13 +1085,13 @@ class GSMLS:
         quicksearch_menu_id = quicksearch_menu.find(
             "a", {"href": "#", "class": "disabled has-submenu"}
         )["id"]
-        extended_search_menu = WebDriverWait(driver_var, 5).until(
+        extended_search_menu = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, quicksearch_menu_id))
         )
         extended_search_menu.click()
 
         # Click the XPY option which allows the access of RES, MUL and LND sales data
-        xpy_search = WebDriverWait(driver_var, 5).until(
+        xpy_search = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, f"2_{search_type}_1"))
         )
         xpy_search.click()
@@ -1043,56 +1110,62 @@ class GSMLS:
             kwargs["Topic"] = topic_dict[self.prop_type]
 
         base_path = "/opt/airflow/downloads"
+        xls_complete, tsv_complete = self.download_complete(**kwargs)
 
-        if self.download_complete(**kwargs) is True:
-            sold_df = pd.read_excel(self.create_filename(base_path=base_path, **kwargs), engine="xlrd")
-            print(f' ==== SIZE OF DF AFTER LOADING: {len(sold_df)}')
-            sold_df.columns = sold_df.columns.str.upper()
-            sold_df = self.return_target_columns(sold_df)
+        if xls_complete is True and tsv_complete is True:
+            sold_df = self.data_quality_check(base_path=base_path, **kwargs)
+        elif tsv_complete is True:
+            sold_df = self.data_quality_check(base_path=base_path, file_ending='tsv', **kwargs)
+        elif xls_complete is True:
+            sold_df = self.data_quality_check(base_path=base_path, file_ending='xls', **kwargs)
 
-            # Merge the Latitude and Longitude data from the image df to the sold listings df
-            if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
-                raw_data = self.enrich_raw_data(sold_df, soldlistings, **kwargs)
-                print(f' ==== SIZE OF DF AFTER DATA ENRICHMENT: {len(sold_df)}')
+        print(f' ==== SIZE OF DF AFTER LOADING: {len(sold_df)}')
+        sold_df.columns = sold_df.columns.str.upper()
+        sold_df = self.return_target_columns(sold_df)
 
-            elif self.prop_type == "TAX":
-                raw_data = sold_df
+        # Merge the Latitude and Longitude data from the image df to the sold listings df
+        if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
+            raw_data = self.enrich_raw_data(sold_df, soldlistings, **kwargs)
+            print(f' ==== SIZE OF DF AFTER DATA ENRICHMENT: {len(sold_df)}')
 
-            # Send to Kafka
-            final_df = raw_data.to_json(orient="split", date_format="iso")
+        elif self.prop_type == "TAX":
+            raw_data = sold_df
 
-            try:
-                result = kwargs["data-producer"].send(
-                    topic_dict[self.prop_type],
-                    key=kwargs["Filename"],
-                    value=final_df,
-                )
-                result_metadata = result.get(timeout=10)
+        # Send to Kafka
+        final_df = raw_data.to_json(orient="split", date_format="iso")
 
-            except KafkaTimeoutError as kte:
-                kwargs["logger"].warning(
-                    f"Kafka Producer Error: {kwargs["Filename"]} was not produced to {topic_dict[self.prop_type]}"
-                )
-                kwargs["logger"].warning(f"{kte}")
-                kwargs["logger"].info(f"Re-attempting to send {kwargs["Filename"]}")
-                self.publish_data_2kafka(soldlistings, **kwargs)
-                GSMLS.sendfile2trash(kwargs["Filename"])
+        try:
+            result = kwargs["data-producer"].send(
+                topic_dict[self.prop_type],
+                key=kwargs["Filename"],
+                value=final_df,
+            )
+            result_metadata = result.get(timeout=10)
 
-            except MessageSizeTooLargeError:
+        except KafkaTimeoutError as kte:
+            kwargs["logger"].warning(
+                f"Kafka Producer Error: {kwargs["Filename"]} was not produced to {topic_dict[self.prop_type]}"
+            )
+            kwargs["logger"].warning(f"{kte}")
+            kwargs["logger"].info(f"Re-attempting to send {kwargs["Filename"]}")
+            self.publish_data_2kafka(soldlistings, **kwargs)
+            GSMLS.sendfile2trash()
 
-                # Reduce the size of the raw dataframe and send to Kafka in chunks
-                GSMLS.reduce_df_size(raw_data,500, **kwargs)
-                GSMLS.sendfile2trash(kwargs["Filename"])
+        except MessageSizeTooLargeError:
 
-            else:
-                kwargs["logger"].info(
-                    f'{kwargs["Filename"]} was produced to "{result_metadata.topic}" in "Partition '
-                    f'{result_metadata.partition}" on "Offset {result_metadata.offset}"'
-                )
-                self.rows_counted[self.prop_type] += len(sold_df)
-                self.download_log["Rows_Produced"][-1] = len(sold_df)
-                self.download_log["Date_Produced"][-1] = str(datetime.now())
-                GSMLS.sendfile2trash(kwargs["Filename"])
+            # Reduce the size of the raw dataframe and send to Kafka in chunks
+            GSMLS.reduce_df_size(raw_data,500, **kwargs)
+            GSMLS.sendfile2trash()
+
+        else:
+            kwargs["logger"].info(
+                f'{kwargs["Filename"]} was produced to "{result_metadata.topic}" in "Partition '
+                f'{result_metadata.partition}" on "Offset {result_metadata.offset}"'
+            )
+            self.rows_counted[self.prop_type] += len(sold_df)
+            self.download_log["Rows_Produced"][-1] = len(sold_df)
+            self.download_log["Date_Produced"][-1] = str(datetime.now().date())
+            GSMLS.sendfile2trash()
 
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
@@ -1213,7 +1286,7 @@ class GSMLS:
 
         # Locate and click the County tab
         x_path = '//*[@id="advance-search-fields"]/li[11]'
-        property_tab = WebDriverWait(driver_var, 10).until(
+        property_tab = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, x_path))
         )
         property_tab.click()
@@ -1238,7 +1311,7 @@ class GSMLS:
             "TwnIntUn",
             "Triplex",
         ]:
-            WebDriverWait(driver_var, 10).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, type_))
             ).click()
 
@@ -1255,7 +1328,9 @@ class GSMLS:
         if filename != "Server Error":
             # Scrape the mlsnum, lat/long and image data to merge into Kafka data
             additional_info = self.format_data_for_kafka(driver_var, **kwargs)
+            kwargs["Expected_Data"] = expected_data = len(additional_info["MLSNUM"])
             self.publish_data_2kafka(additional_info, **kwargs)
+            self.download_log["Expected_Data"][-1] = expected_data
 
         GSMLS.exit_results_page(driver_var)
         self.download_log["Finished"][-1] = "Yes"
@@ -1671,7 +1746,7 @@ class GSMLS:
         # Step 1: Find the respective media link and open it
         # print('Before media:', driver_var.window_handles)
         current_windows = driver_var.window_handles
-        media_link = WebDriverWait(driver_var, 10).until(
+        media_link = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located(
                 (
                     By.XPATH,
@@ -1739,7 +1814,7 @@ class GSMLS:
                 try:
                     # Step 4: Find 'NEXT' link to cycle through the list of property pictures
                     time.sleep(random.uniform(0.8, 1.7))
-                    next_button = WebDriverWait(driver_var, 10).until(
+                    next_button = WebDriverWait(driver_var, 30).until(
                         EC.presence_of_element_located(
                             (By.XPATH, "//a[normalize-space()='Next']")
                         )
@@ -1777,7 +1852,7 @@ class GSMLS:
     @staticmethod
     def search_listing(mls_number, driver_var, logger_var, mls_address=None):
         # Type in the MLS number or address. Create own function thats able to use both if necessary
-        search_listing = WebDriverWait(driver_var, 10).until(
+        search_listing = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, "qcksrchmlstxt"))
         )
         search_listing.click()
@@ -1789,25 +1864,26 @@ class GSMLS:
         return page_results
 
     @staticmethod
-    def sendfile2trash(xls_file_name: str):
+    def sendfile2trash():
 
-        os.remove(
-            os.path.join(
-                "/opt/airflow/downloads", xls_file_name + ".XLS"
-            )
-        )
+        print(' ==== DELETING FILES ==== ')
+        base_path = "/opt/airflow/downloads"
+        for file in os.listdir(base_path):
+            path_to_file = os.path.join(base_path, file)
+            if os.path.isfile(path_to_file):
+                os.remove(path_to_file)
 
     @staticmethod
     def set_city(search_type, city_id_var, driver_var):
 
         if search_type == 1:
-            click_city = WebDriverWait(driver_var, 10).until(
+            click_city = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, city_id_var))
             )
             click_city.click()
         else:
             # The ID variable should have "town" in front of it
-            click_city = WebDriverWait(driver_var, 10).until(
+            click_city = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, "town" + str(city_id_var)))
             )
             click_city.click()
@@ -1816,13 +1892,13 @@ class GSMLS:
     def set_county(search_type, county_id_var, driver_var):
 
         if search_type == 1:
-            click_county = WebDriverWait(driver_var, 10).until(
+            click_county = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, county_id_var))
             )
             click_county.click()
         else:
             # The ID variable should have "county" in front of it
-            click_county = WebDriverWait(driver_var, 10).until(
+            click_county = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, "county" + str(county_id_var)))
             )
             click_county.click()
@@ -1860,20 +1936,20 @@ class GSMLS:
         for value, daterangeids in zip(values[self.prop_type], target_list):
             # Locate and click the target tab
             x_path = f'//*[@id="advance-search-fields"]/li[{value}]'
-            target_tab = WebDriverWait(driver_var, 10).until(
+            target_tab = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.XPATH, x_path))
             )
             target_tab.click()
             time.sleep(1)
 
-            starting_close_date = WebDriverWait(driver_var, 10).until(
+            starting_close_date = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, daterangeids[0]))
             )
             starting_close_date.click()  # Step 5: Choose start date
             AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
                 Keys.CONTROL
             ).send_keys(date_range[0]).perform()
-            ending_close_date = WebDriverWait(driver_var, 10).until(
+            ending_close_date = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located((By.ID, daterangeids[1]))
             )
             ending_close_date.click()  # Step 6: Choose end date
@@ -1884,24 +1960,24 @@ class GSMLS:
     @staticmethod
     def show_results(driver_var):
 
-        show_results = WebDriverWait(driver_var, 10).until(
+        show_results = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.CLASS_NAME, "show"))
         )
         show_results.click()
 
         # Search for the message box div and check if the container is active
         try:
-            WebDriverWait(driver_var, 10).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
+            # WebDriverWait(driver_var, 10).until(
+            #     lambda d: d.execute_script("return document.readyState") == "complete"
+            # )
             # WebDriverWait(driver_var, 5).until(
             #     EC.presence_of_element_located((By.XPATH, "//div[@id='message-box-container']")))
-            WebDriverWait(driver_var, 5).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located(
                     (By.XPATH, "//div[@class='popup_inner']")
                 )
             )
-            WebDriverWait(driver_var, 5).until(
+            WebDriverWait(driver_var, 30).until(
                 EC.visibility_of_element_located(
                     (By.XPATH, "//h2[normalize-space()='Alert']")
                 )
@@ -1931,11 +2007,11 @@ class GSMLS:
     @staticmethod
     def sign_out(driver_var):
 
-        user = WebDriverWait(driver_var, 5).until(
+        user = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, '//*[@id="user"]/span[2]'))
         )
         user.click()
-        sign_out_button = WebDriverWait(driver_var, 5).until(
+        sign_out_button = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH, '//*[@id="logout"]'))
         )
         sign_out_button.click()
@@ -2077,6 +2153,14 @@ class GSMLS:
         self.set_dates(kwargs["Dates"], driver_var)
         self.click_target_tab("Town", driver_var)
         GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
+
+    def true_date(self):
+
+        year = self.start_date.year
+        month = self.start_date.month
+        day = self.start_date.day
+
+        return datetime(year, month, day, tzinfo=timezone('America/New_York'))
 
     def value_generator(self, key_name, update_bar, values=None):
 
