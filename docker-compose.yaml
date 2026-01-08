@@ -112,6 +112,7 @@ services:
       - ./.pgpass:/pgpass:ro
 
   # https://hub.docker.com/r/selenium/standalone-edge
+  # https://github.com/SeleniumHQ/docker-selenium/blob/trunk/README.md#mounting-volumes-to-retrieve-downloaded-files
   selenium-edge:
     image: selenium/standalone-edge:4.13.0
     container_name: selenium-edge
@@ -122,7 +123,7 @@ services:
       - '7900:7900' # For viewing browser through VNC Server since container will run Selenium headless
     shm_size: 2g # Host's shared memory
     volumes:
-      - ./downloads:/home/seluser/downloads
+      - ./data/stage_one/downloads:/home/seluser/downloads
 
   # https://hub.docker.com/r/bitnami/spark/
   # https://cloudinfrastructureservices.co.uk/create-apache-spark-docker-container-using-docker-compose/
@@ -135,11 +136,14 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
+    user: root  # Use the same root and group IDs as the host
+    volumes:
+      - ./data:/workspace/data
     networks:
       - airflow_network
     ports:
-      # Use the cloud VM’s public IP if deployed remotely for the local port
-      - '8080:8080'
+      - '8080:8080'  # Spark Master Port
+      - '7077:7077'  # Spark Worker Port
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep -v grep | grep org.apache.spark.deploy.master.Master || exit 1"]
       interval: 30s
@@ -159,6 +163,9 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
+    user: root
+    volumes:
+      - ./data:/workspace/data
     networks:
       - airflow_network
     healthcheck:
@@ -471,33 +478,29 @@ services:
       start_period: 30s
     restart: always
 
-  airflow-debug:
-    <<: *airflow-common
+  job-debug:
+    build:
+      context: .
+      dockerfile: Dockerfile.debug
+    container_name: gsmls-job-debug
     profiles:
       - debug
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-    environment:
-      <<: *airflow-common-env
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    volumes:
-      # Local directory for the pycharm_helpers
-      - /root/.cache/JetBrains/RemoteDev/dist/9c8c4d9f91629_pycharm-professional-2023.3.7/plugins/python/helpers:/opt/.pycharm_helpers
-      - ${AIRFLOW_PROJ_DIR:-.}:/opt/project
-      - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-      - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-      - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
-      - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-      - ${AIRFLOW_PROJ_DIR:-.}/.env:/opt/airflow/.env
-      - ${AIRFLOW_PROJ_DIR:-.}/requirements.txt:/opt/airflow/requirements.txt
-      - ${AIRFLOW_PROJ_DIR:-.}/downloads:/opt/airflow/downloads
-    user: "50000:0"
     tty: true
-    entrypoint: [ ""]
-    command: ["sleep", "infinity"]
+    stdin_open: true
+    # Join the same network as Airflow + Kafka + Selenium
+    networks:
+      - airflow_network
+    environment:
+      PYTHONPATH: /workspace
+      PYTHONNOUSERSITE: "1"
+    # Shared data volume (same one jobs use)
+    volumes:
+      - .:/workspace
+    # Load environment variables (same as everything else)
+    env_file:
+      - .env
+    working_dir: /workspace
+    command: bash
 
   airflow-apiserver:
     <<: *airflow-common
