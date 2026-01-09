@@ -10,12 +10,10 @@ RUN apt-get update && apt-get install -y \
 # 2. Set working directory
 WORKDIR /app
 
-# 3. Install Python deps (cache-friendly)
-COPY jobs/gsmls_cleaning/requirements.txt .
+# 3. Copys requirements.txt and jobs script. Install Python deps (cache-friendly)
+# Build context jobs/gsmls_cleaning
+COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy job code + plugins
-COPY jobs/gsmls_cleaning .
-
-# 5. Entrypoint
+# 4. Entrypoint
 ENTRYPOINT ["python", "/app/jobs/gsmls_cleaning/phased_cleaning.py"]
