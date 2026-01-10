@@ -8,9 +8,9 @@ import time
 from tqdm import tqdm
 from datetime import datetime
 from datetime import timedelta
-from gsmls_core.gsmls.utility_func import create_sql_engine, create_kafka_producer, create_kafka_consumer, logger_decorator
+from gsmls.utility_func import create_sql_engine, create_kafka_producer, create_kafka_consumer, logger_decorator
 from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
-from gsmls_core.gsmls.RealEstateImages import RealEstateImages
+from gsmls.RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError, IntegrityError
 # from psycopg2.errors import SyntaxError
 from sqlalchemy.exc import DatabaseError

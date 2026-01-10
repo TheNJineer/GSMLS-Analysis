@@ -11,7 +11,7 @@ from datetime import timedelta
 from tqdm import tqdm
 from collections import defaultdict
 from pymongo.errors import CursorNotFound
-from gsmls_core.gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
+from gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
 
 
 class RealEstateImages:

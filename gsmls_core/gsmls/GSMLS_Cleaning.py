@@ -7,7 +7,7 @@ import pandas as pd
 import psycopg2
 from tqdm import tqdm
 from dotenv import load_dotenv
-from gsmls_core.gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
+from gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
 
 
 class GSMLSCleaning:
