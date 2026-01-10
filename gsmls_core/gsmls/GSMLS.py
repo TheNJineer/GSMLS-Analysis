@@ -11,7 +11,7 @@ import pandas as pd
 import sys, traceback
 import logging
 from dotenv import load_dotenv
-from gsmls_core.gsmls.utility_func import (
+from gsmls.utility_func import (
     create_sql_engine,
     create_kafka_producer, logger_decorator,
     create_selenium_webdriver, get_filepath
@@ -23,7 +23,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import date
 from pendulum import timezone
-from gsmls_core.gsmls.utility_func import get_us_pw
+from gsmls.utility_func import get_us_pw
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.alert import Alert
