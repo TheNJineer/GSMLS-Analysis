@@ -40,15 +40,19 @@ def check_pipeline_metadata(pipeline, key=None, status=None):
             if pipeline in pipelines:
                 if status is not None:
                     data_file[pipeline][key] = status
+                    print(f" ==== SAVING {key} STATUS OF {pipeline} TO {status} ==== ")
                 else:
                     data_file[pipeline][key] = False
+                    print(f" ==== RE-WRITING {key} STATUS OF {pipeline} TO {status} ==== ")
                 data_file.sync()
             else:
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
+                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
     else:
         with shelve.open("metadata") as data_file:
             data_file[pipeline] = create_pipeline_metadata(pipeline)
+            print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
 
 def create_pipeline_metadata(pipeline):
