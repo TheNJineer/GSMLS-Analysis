@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import time
+import shelve
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
@@ -26,6 +27,42 @@ class TqdmLoggingHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
         tqdm.write(msg)
+
+
+def check_pipeline_metadata(pipeline, key=None, status=None):
+    data_path = f"/app/pipeline_metadata"
+    metadata_path = os.path.join(data_path, "metadata.dat")
+
+    if os.path.exists(metadata_path):
+        with shelve.open("metadata") as data_file:
+            pipelines = list(data_file.keys())
+
+            if pipeline in pipelines:
+                if status is not None:
+                    data_file[pipeline][key] = status
+                else:
+                    data_file[pipeline][key] = False
+                data_file.sync()
+            else:
+                data_file[pipeline] = create_pipeline_metadata(pipeline)
+
+    else:
+        with shelve.open("metadata") as data_file:
+            data_file[pipeline] = create_pipeline_metadata(pipeline)
+
+
+def create_pipeline_metadata(pipeline):
+
+    if pipeline == "gsmls_airflow_pipeline":
+        return {"producer": False, "data_consumer": False, "image_consumer": False}
+
+    elif pipeline == "gsmls_cleaning_pipeline":
+
+        return {"cleaning": False}
+
+    elif pipeline == "gsmls_download_images":
+
+        return {"download_images": False}
 
 
 def create_postgres_connection(con_type: str, db_name=None):
