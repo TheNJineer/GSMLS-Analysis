@@ -58,7 +58,10 @@ def check_pipeline_metadata(pipeline, key=None, status=None):
 def create_pipeline_metadata(pipeline):
 
     if pipeline == "gsmls_airflow_pipeline":
-        return {"producer": False, "data_consumer": False, "image_consumer": False}
+        return {"producer": False, "data_consumer": False,
+                "image_consumer": False, "mongodb_start": None,
+                "mongodb_final": None, "postgresql_start": None,
+                "postgresql_final": None}
 
     elif pipeline == "gsmls_cleaning_pipeline":
 
