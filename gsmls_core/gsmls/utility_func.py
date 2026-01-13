@@ -65,7 +65,7 @@ def create_pipeline_metadata(pipeline):
 
     elif pipeline == "gsmls_cleaning_pipeline":
 
-        return {"cleaning": False}
+        return {"cleaning": False,}
 
     elif pipeline == "gsmls_download_images":
 
