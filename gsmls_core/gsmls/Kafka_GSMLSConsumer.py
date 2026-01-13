@@ -1428,7 +1428,7 @@ class KafkaGSMLSConsumer:
             # Produce image data to Kafka topic and relational data to SQL
             if prop in ['RES', 'MUL', 'RNT']:
                 print(' ==== IMAGES PRODUCED ==== ')
-                # self.produce_images(df, prop)
+                self.produce_images(df, prop)
 
             self.submit2sql(df, table, prop, cleaning_bar)
             KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed

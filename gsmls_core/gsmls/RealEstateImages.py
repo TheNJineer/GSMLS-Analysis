@@ -930,7 +930,7 @@ class RealEstateImages:
 
             property_data, kwargs = RealEstateImages.create_base_document(target_row, **kwargs)
             self.collect_image_data(target_row, property_data, **kwargs)
-            self.collection.insert_one(dict(property_data))
+            # self.collection.insert_one(dict(property_data))
             print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
                   f"{property_data['MLSNum']} - {property_data['Address']}, {property_data['Town']} ==== ")
-            # print(pformat(dict(property_data)))
+            print(pformat(dict(property_data)))
