@@ -31,10 +31,10 @@ class TqdmLoggingHandler(logging.Handler):
 
 def check_pipeline_metadata(pipeline, key=None, status=None):
     data_path = f"/app/pipeline_metadata"
-    metadata_path = os.path.join(data_path, "metadata.dat")
+    metadata_path = os.path.join(data_path, "metadata")
 
     if os.path.exists(metadata_path):
-        with shelve.open("metadata") as data_file:
+        with shelve.open(metadata_path) as data_file:
             pipelines = list(data_file.keys())
 
             if pipeline in pipelines:
@@ -50,7 +50,7 @@ def check_pipeline_metadata(pipeline, key=None, status=None):
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
     else:
-        with shelve.open("metadata") as data_file:
+        with shelve.open(metadata_path) as data_file:
             data_file[pipeline] = create_pipeline_metadata(pipeline)
             print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
