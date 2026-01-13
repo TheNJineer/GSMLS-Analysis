@@ -8,7 +8,8 @@ import time
 from tqdm import tqdm
 from datetime import datetime
 from datetime import timedelta
-from gsmls.utility_func import create_sql_engine, create_kafka_producer, create_kafka_consumer, logger_decorator
+from gsmls.utility_func import create_sql_engine, create_kafka_producer
+from gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
 from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
 from gsmls.RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError, IntegrityError
@@ -132,12 +133,11 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def checkpoint(df_var, topic):
 
-        current_wd_ = os.getcwd()
-        os.chdir('F:\\Real Estate Investing\\Kafka_Data_Backups')
+        base_path = get_filepath('backups')
+        filepath = os.path.join(base_path, f'{topic}.xlsx')
 
-        df_var.to_excel(f'{topic}.xlsx', index=False)
-
-        os.chdir(current_wd_)
+        print(f' ==== PROCESSING ERROR OCCURRED. CREATING DATA CHECKPOINT FOR {topic} ==== ')
+        df_var.to_excel(filepath, index=False)
 
     @staticmethod
     def combine_listing_remarks(df_var, update_bar):
@@ -219,6 +219,17 @@ class KafkaGSMLSConsumer:
 
         else:
             return df
+
+    @staticmethod
+    def delete_checkpoint(topic):
+
+        base_path = get_filepath('backups')
+        filepath = os.path.join(base_path, f'{topic}.xlsx')
+
+        if os.path.isfile(filepath):
+            print(f' ==== DELETING CHECKPOINT: {filepath} ==== ')
+            os.remove(filepath)
+
 
     @staticmethod
     def drop_columns(df_var, prop_type, update_bar):
@@ -634,7 +645,12 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def load_checkpoint(topic):
 
-        return pd.read_excel(f'{topic}.xlsx')
+        base_path = get_filepath('backups')
+        filepath = os.path.join(base_path, f'{topic}.xlsx')
+
+        print(f' ==== PROCESSING ERROR OCCURRED DURING LAST CONSUMPTION ==== ')
+        print(f' ==== CONSUMING DATA FROM CHECKPOINT ==== ')
+        return pd.read_excel(filepath)
 
     @staticmethod
     def original_lp_diff(df_var, update_bar):
@@ -1426,25 +1442,28 @@ class KafkaGSMLSConsumer:
     def main(self, prop, retry=False, **kwargs):
 
         logger = kwargs['logger']
+        topic_data = self.prop_dict[prop]
+        cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
+        self.consumer.subscribe([topic_data['topic']])
+        # Using the subscribe method instead of directly assigning a topic so Kafka can
+        # handle the re-balancing of partitions for me
 
         try:
             while True:
 
-                for prop_type, topic_data in zip([prop], [self.prop_dict[prop]]):
-                    # Using the subscribe method instead of directly assigning a topic so Kafka can
-                    # handle the re-balancing of partitions for me
-                    cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
+                if retry is False:
+                    print(f' ==== CONSUMING {prop} DATA FROM KAFKA ==== ')
+                    temp_df, associate_keys = self.consume_data(prop)
 
-                    if retry is False:
-                        self.consumer.subscribe([topic_data['topic']])
-                        temp_df, associate_keys = self.consume_data(prop_type)
-                        # KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
-                    else:
-                        temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+                else:
+                    temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+                    retry = False
+                    KafkaGSMLSConsumer.delete_checkpoint(topic_data['topic'])
 
                 if isinstance(temp_df, pd.DataFrame):
-                    final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop_type, topic_data['clean_type'], cleaning_bar)
-                    self.submit_data(final_df, prop_type, topic_data['topic'], cleaning_bar, associate_keys)
+                    final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop,
+                                                                  topic_data['clean_type'], cleaning_bar)
+                    self.submit_data(final_df, prop, topic_data['topic'], cleaning_bar, associate_keys)
                 else:
                     break
 
@@ -1454,6 +1473,7 @@ class KafkaGSMLSConsumer:
         except TypeError as e:
             logger.warning(f'{e}')
             logger.warning(f'{traceback.print_exception(e)}')
+            KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
 
         except AssertionError as e:
             print(" ==== BROKER REBALANCING OVER 50 MINUTES, ENDING PROGRAM ==== ")

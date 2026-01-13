@@ -238,7 +238,9 @@ def get_filepath(usecase: str):
     filepaths = {
         'downloads': ['/workspace/data/stage_one/downloads', '/app/downloads'],
         'env': ['/workspace/.env', '/app/.env', '/opt/airflow/.env'],
-        'logger': ['/workspace/data/stage_one/logs', '/app/logs']
+        'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
+        'backups': ['/workspace/consumer_backup_data', '/app/consumer_backup_data'],
+        'metadata': ['/workspace/pipeline_metadata', '/app/pipeline_metadata']
     }
 
     for path in filepaths[usecase]:
