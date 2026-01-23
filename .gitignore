@@ -32,3 +32,4 @@ servers.json
 .pgpass
 .env
 /data
+/gsmls_airflow_pipeline_old.py
