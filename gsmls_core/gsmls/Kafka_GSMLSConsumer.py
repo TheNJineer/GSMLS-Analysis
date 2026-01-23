@@ -8,10 +8,10 @@ import time
 from tqdm import tqdm
 from datetime import datetime
 from datetime import timedelta
-from gsmls.utility_func import create_sql_engine, create_kafka_producer
-from gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
+from gsmls_core.gsmls.utility_func import create_sql_engine, create_kafka_producer
+from gsmls_core.gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
 from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
-from gsmls.RealEstateImages import RealEstateImages
+from gsmls_core.gsmls.RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError, IntegrityError
 # from psycopg2.errors import SyntaxError
 from sqlalchemy.exc import DatabaseError
@@ -986,7 +986,7 @@ class KafkaGSMLSConsumer:
 
             else:
                 # Used for property images
-                self.consumer.commit()
+                # self.consumer.commit()
                 return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', ],
                                           keep='last').reset_index(drop=True)
 
