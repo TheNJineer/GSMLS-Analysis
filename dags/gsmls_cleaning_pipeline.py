@@ -1,87 +1,92 @@
-import time
-import pandas as pd
 import os
-import pendulum
-from dotenv import load_dotenv
+import shelve
+import json
 from datetime import datetime
 from datetime import timedelta
-from datetime import time as dtime
-from airflow.sdk import task, dag, TaskGroup
-from airflow.utils.email import send_email
-from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
-from airflow.providers.standard.operators.empty import EmptyOperator
-from airflow.providers.standard.sensors.python import PythonSensor
-from airflow.exceptions import AirflowSkipException, AirflowFailException
 from pendulum import timezone
-from plugins.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from plugins.utility_func import logger_decorator, create_sql_engine
+from airflow.sdk import task, dag
+from airflow.providers.standard.operators.python import ShortCircuitOperator, PythonOperator
+from airflow.providers.docker.operators.docker import DockerOperator
+from gsmls_core.gsmls.utility_func import get_filepath, create_volume_mounts
 
 
-def data_sensor():
-    pass
+def data_sensor(**context):
+    # Short circuit the cleaning if the gsmls_airflow_pipeline is currently running or
+    # if the prop_type isn't RES
+    pulled_value = context['ti'].xcom_pull(task_ids='get_pipeline_status', key='pipeline_status')
+    value = json.loads(pulled_value)
+    if value['prop_type'] != 'RES':
+        return False
+    elif value['prop_type'] == 'RES' and isinstance(value['pipeline_status'], bool):
+        return False
+    else:
+        return True
 
-def stage_one_cleaning():
-    pass
 
+def get_pipeline_status(**context):
 
-def stage_two_cleaning():
-    pass
+    data_path = get_filepath("metadata")
+    metadata_path = os.path.join(data_path, "metadata")
 
+    with shelve.open(metadata_path) as reader:
+        result = reader["gsmls_airflow_pipeline"]
+        prop_type = result["prop_type"]
+        pipeline_status = result["producer"]
 
-def stage_three_cleaning():
-    pass
+    value = json.dumps({'prop_type': prop_type, 'pipeline_status': pipeline_status})
+    context['ti'].xcom_push(key='pipeline_status', value=value)
 
 
 # Define default args
-eastern = timezone("America/New_York")
 default_args = {
     "owner": "Jibreel Hameed",
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2025, 12, 17, hour=9, minute=30, tzinfo=eastern),
+    "start_date": datetime(2025, 12, 17,
+                           hour=9, minute=30, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     }
+description = """
+    GSMLS_Staged_Cleaning is a pipeline that prepares data from the GSMLS_Scrape_And_Preprocessing
+    pipeline and further cleans and prepares it for use in training Deep Neural Networks.
+    Stage 1: Correcting municipal and county codes and correcting datatypes
+    Stage 2: Use PySpark to load municipal tax data and merge specific columns with the target data
+    Stage 3: Data enrichment and final cleaning
+"""
 
 
 @dag(
     "GSMLS_Staged_Cleaning",
-    description="",
+    description=description,
     default_args=default_args,
-    schedule=timedelta(days=1),
+    schedule=timedelta(days=7),
 )
-@logger_decorator
-def gsmls_cleaning_pipeline(**kwargs):
+def gsmls_cleaning_pipeline():
 
-    logger = kwargs["logger"]
-    f_handler = kwargs["f_handler"]
-    c_handler = kwargs["c_handler"]
+    status = PythonOperator(
+        task_id='get_pipeline_status',
+        python_callable=get_pipeline_status,
+        provide_context=True
+    )
 
-    data_ready = PythonSensor(
+    data_ready = ShortCircuitOperator(
         task_id='data_ready',
         python_callable=data_sensor,
-        timeout=3600,
-        mode='reschedule'
+        provide_context=True
     )
 
-    stage_one = PythonOperator(
-        task_id='stage_one_cleaning',
-        python_callable=stage_one_cleaning,
-        op_kwargs={'logger': logger}
-    )
+    data_cleaning = DockerOperator(
+                task_id="data_cleaning",
+                image="gsmls-jobs:latest",
+                command=f"{get_filepath('jobs_major')}/phased_cleaning.py",
+                api_version="auto",
+                auto_remove=True,
+                docker_url="unix://var/run/docker.sock",
+                network_mode="airflow_network",
+                mount=create_volume_mounts('cleaning')
+            )
 
-    stage_two = PythonOperator(
-        task_id='stage_two_cleaning',
-        python_callable=stage_two_cleaning,
-        op_kwargs={'logger': logger}
-    )
-
-    stage_three = PythonOperator(
-        task_id='stage_three_cleaning',
-        python_callable=stage_three_cleaning,
-        op_kwargs={'logger': logger}
-    )
-
-    data_ready >> stage_one >> stage_two >> stage_three
+    status >> data_ready >> data_cleaning
 
