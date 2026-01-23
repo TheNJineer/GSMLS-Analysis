@@ -1,29 +1,53 @@
-from pprint import pformat
+import shelve
 import os
 import re
 import requests
 import random
 import time
+import boto3
+import pendulum
 import pandas as pd
 import numpy as np
+from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
+from pendulum import timezone
+from pprint import pformat
+from pprint import pprint
 from tqdm import tqdm
 from collections import defaultdict
+from requests_futures.sessions import FuturesSession
+from concurrent.futures import as_completed
 from pymongo.errors import CursorNotFound
-from gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
+from botocore.exceptions import ClientError
+from urllib3.exceptions import ProtocolError, IncompleteRead
+from requests.exceptions import ChunkedEncodingError, ConnectionError, SSLError, ProxyError, HTTPError
+from gsmls_core.gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
+from gsmls_core.gsmls.utility_func import get_filepath, check_pipeline_metadata
 
 
 class RealEstateImages:
 
-    def __init__(self, db_name="realEstate", col_name="propertyImages", remote=True, df_var=None):
+    def __init__(self, db_name="realEstate", col_name="propertyImages",
+                 latest_order_num=None, local=False, remote=True, df_var=None):
         self.db_name = db_name
         self.col_name = col_name
         self.sql_conn = create_sql_engine("nj_tax_assessor", remote=remote)
-        self.mongo_db_conn = create_mongodb_conn(remote=remote)
-        self.database = self.check_for_database()
-        self.collection = self.check_for_collection()
+        if local is False:
+            self.mongo_db_conn = create_mongodb_conn(remote=remote)
+            self.database = self.check_for_database()
+            self.collection = self.check_for_collection()
+        else:
+            self.mongo_db_conn = create_mongodb_conn(remote=False)
+            self.database = self.check_for_database()
+            self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
+        self.isp_ips = None
+        self.dead_ips = []
+        self.ip_api = RealEstateImages.load_ip_api()
+        self.latest_isp_order_num = latest_order_num
+        self.static_ip_status = "active"
+        self.proxy_manager()
         self.image_df = df_var
         self.image_dir = "/opt/airflow/MLS Photos"
         self.home_sections = {
@@ -141,6 +165,7 @@ class RealEstateImages:
         )
 
     def check_for_database(self):
+
         if self.db_name in self.mongo_db_conn.list_database_names():
             print(f" ==== CURSER CONNECTED TO {self.db_name} DATABASE ==== ")
 
@@ -161,6 +186,7 @@ class RealEstateImages:
             print(f" ==== NEW DIRECTORY CREATED: {directory} ==== ")
 
     def check_for_collection(self):
+
         if self.col_name in self.database.list_collection_names():
             print(f" ==== THE {self.col_name} COLLECTION EXISTS ==== ")
 
@@ -222,6 +248,62 @@ class RealEstateImages:
             RealEstateImages.clean_image_key(property_data)
 
     @staticmethod
+    def create_agg_pipeline():
+
+        pipeline = [
+            # Match string OR date types
+            {
+                "$match": {
+                    "Date": {
+                        "$type": ["string", "date"]
+                    }
+                }
+            },
+
+            # Group by MLSNum
+            {
+                "$group": {
+                    "_id": "$MLSNum",
+
+                    "Date": {"$push": "$Date"},
+                    "Address": {"$push": "$Address"},
+                    "Town": {"$push": "$Town"},
+                    "Zipcode": {"$push": "$Zipcode"},
+                    "Condition": {"$push": "$Condition"},
+                    "Images": {"$push": "$Images"},
+
+                    # Push Geo_Data only if it exists
+                    "Geo_Data": {
+                        "$push": {
+                            "$cond": [
+                                {"$ne": ["$Geo_Data", None]},
+                                "$Geo_Data",
+                                "$$REMOVE"
+                            ]
+                        }
+                    },
+
+                    # Count documents per MLSNum
+                    "document_count": {"$sum": 1},
+
+                    # Preserve old _id
+                    "property_attr": {
+                        "$push": {
+                            "old_id": "$_id"
+                        }
+                    },
+                }
+            },
+
+            # Sort descending
+            {
+                "$sort": {"document_count": -1}
+            }
+        ]
+
+        return pipeline
+
+    @staticmethod
     def create_base_document(target_row, **kwargs):
 
         replace_pattern = re.compile("\.?\(\d{4}\)\*?")
@@ -266,11 +348,18 @@ class RealEstateImages:
     @staticmethod
     def create_new_filename(filepath, mlsnum):
 
-        filepath_list = filepath.split("\\")
-        file_address = filepath_list[-1]
-        filepath_list[-1] = str(mlsnum) + " - " + file_address
+        filepath_list = filepath.split('/')
 
-        return "\\".join(filepath_list)
+        if filepath_list[1] != 'raw':
+
+            filepath_list = filepath_list[-3:]
+            file_address = str(mlsnum) + " - " + filepath_list[-1]
+            section = filepath_list[0]
+            condition = filepath_list[1]
+
+            return os.path.join('raw', 'images', 'original', section, condition, file_address)
+        else:
+            return filepath
 
     def create_image_dict(self):
 
@@ -296,121 +385,6 @@ class RealEstateImages:
                 total_image_list.extend(image_dict[category])
 
         return total_image_list
-
-    @logger_decorator
-    def database_cleanup(self, **kwargs):
-        """
-        Cleanup the database with the following actions:
-            - Deleting duplicate documents
-            - Update the date field to ISODate or Datetime formats
-            - Delete the "Image_Downloaded" field if it exists
-            - Use title case for the Address, Town and Condition fields
-            - Make the _id field the MLSNum
-
-        :return:
-        """
-
-        logger = kwargs["logger"]
-        # pipeline = [
-        #     {'$match': {"Date": {"$type": "string"}}},
-        #     {"$group": {"_id": {"mlsnum": "$MLSNum", "Date": "$Date", "Address": "$Address",
-        #             "Town": "$Town", "Zipcode": "$Zipcode",
-        #             "Condition": "$Condition", "Images": "$Images", "Geo_Data": "$Geo_Data"},  # Group common fields together
-        #             "document_count": {"$count": {}},  # Count the number of duplicate documents
-        #             "property_attr": {'$push': {"old_id": "$_id"}}}},  # List all the document ids of the duplicates
-        #     {"$sort": {"document_count": -1}}  # Sort documents in descending order
-        # ]
-
-        pipeline = [
-            {"$match": {"Date": {"$type": "string"}}},
-            {
-                "$group": {"_id": "$MLSNum"},
-                "Date": {"$push": "$Date"},
-                "Address": {"$push": "$Address"},
-                "Town": {"$push": "$Town"},
-                "Zipcode": {"$push": "$Zipcode"},
-                "Condition": {"$push": "$Condition"},
-                "Images": {"$push": "$Images"},
-                "Geo_Data": {
-                    "$push": {"$ifNull": ["$Geo_Data", "$$REMOVE"]}
-                },  # If field doesn't exist then remove from results
-                "document_count": {
-                    "$count": {}
-                },  # Count the number of duplicate documents
-                "property_attr": {"$push": {"old_id": "$_id"}},
-            },  # List all the document ids of the duplicates
-            {"$sort": {"document_count": -1}},  # Sort documents in descending order
-        ]
-
-        logger.info(
-            f"Current document count for {self.db_name} collection: {self.collection.count_documents({})}"
-        )
-
-        while True:
-
-            try:
-                # The cursor will die if idle for 10+ minutes. Each document result takes about 6 seconds to go through
-                # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
-                # at 85 to account for time variances
-                for res in tqdm(
-                    self.collection.aggregate(
-                        pipeline, batchSize=85, allowDiskUse=True
-                    ),
-                    desc="Records",
-                ):
-
-                    update_operation = {
-                        "$set": {},  # Dictionary to hold all update operations
-                        "$unset": {
-                            "Image_Downloaded": ""
-                        },  # Delete the fields if they exists
-                    }
-
-                    address = res["_id"]["Address"]
-                    condition = res["_id"]["Condition"]
-                    current_doc_count = res["document_count"]
-                    date = res["_id"]["Date"]
-                    images = res["_id"]["Images"]
-                    old_id = res["property_attr"][-1]["old_id"]
-                    targ_id = res["_id"]["mlsnum"]
-                    town = res["_id"]["Town"]
-                    query_filter = {"MLSNum": targ_id}
-                    zipcode = res["_id"]["Zipcode"]
-                    geo_data = res["_id"].get("Geo_data", None)
-
-                    # Log the current document information
-                    logger.info(f"Current document: {targ_id}")
-
-                    # Delete duplicate documents
-                    self.delete_duplicates(current_doc_count, targ_id, old_id, logger)
-
-                    # Update the longitude and latitude data
-                    self.update_geodata(targ_id, geo_data, update_operation)
-
-                    # Check _id datatype, if it's a str object, switch to the int
-                    RealEstateImages.update_mlsnum(targ_id, update_operation)
-
-                    # Check Date datatype
-                    RealEstateImages.update_date_datatype(date, update_operation)
-
-                    # Update the string values
-                    RealEstateImages.update_str_values(
-                        town, address, condition, zipcode, update_operation
-                    )
-
-                    # Update the Image value to remove empty arrays
-                    RealEstateImages.update_image_object(images, update_operation)
-
-                    # Update the document
-                    self.collection.update_one(query_filter, update_operation)
-
-            except CursorNotFound as cnf:
-                logger.warning(f"{cnf}")
-                logger.info("Starting new aggregate cursor")
-                continue
-            else:
-                logger.info("Database cleanup has been completed")
-                break
 
     @staticmethod
     def date_and_condition(series):
@@ -451,7 +425,7 @@ class RealEstateImages:
             {"Condition": kwargs["Condition"], "URL": kwargs["image_url"], "Directory": filename}
         )
 
-    def delete_duplicates(self, doc_count, id_num, old_id, logger):
+    def delete_duplicates(self, doc_count, id_num, logger):
 
         if int(doc_count) >= 2:
 
@@ -467,42 +441,190 @@ class RealEstateImages:
             logger.info(
                 f'New document count for {id_num}: {self.collection.count_documents({"MLSNum": id_num})}'
             )
-            logger.info(f"The last existing document ObjectID for {id_num} is {old_id}")
 
-        else:
-            logger.info(f"No duplicate documents for {id_num}")
+    def fetch_duplicate_mlsnums(self, batch_size=500):
+        """
+        Returns a list of MLSNum values >= start_mls.
+        If start_mls is None, just return first batch_size documents.
+        """
 
-    def generate_proxy(self, logger):
+        while True:
+            query = {}
+            start_mls = RealEstateImages.get_latest_mlsnum("gsmls_cleaning_pipeline", "start_mls")
 
-        num = random.randint(1, 100)
+            if start_mls is not None:
+                print(f" ==== DUPLICATE MLS QUERY WILL START FROM: {start_mls} ==== ")
+                query["MLSNum"] = {"$gte": start_mls}
+
+            cursor = self.collection.find(
+                query,
+                {"MLSNum": 1, "_id": 0}
+            ).sort("MLSNum", 1).limit(batch_size)
+
+            mls_list = [doc["MLSNum"] for doc in cursor]
+
+            if len(mls_list) >= 1:
+                for mls_num in mls_list:
+                    yield mls_num
+            else:
+                break
+
+    def fetch_mlsnums(self, batch_size=85):
+        """
+        Returns a list of MLSNum values
+        """
+
+        last_mls = RealEstateImages.get_latest_mlsnum("gsmls_download_images", "last_mls")
+        match = {"Images_Downloaded": {"$exists": False}}
+
+        if last_mls is not None:
+            print(f' ==== STARTING IMAGE DOWNLOAD FROM MLSNUM {last_mls} ==== ')
+            match["MLSNum"] = {"$lt": last_mls}
+
+        pipeline = [
+            {"$match": match},
+            {"$sort": {"MLSNum": -1}},
+            {"$limit": batch_size},
+        ]
+
+        print(f' ==== GENERATING DOCUMENT BATCH OF SIZE {batch_size} FOR IMAGE DOWNLOADS ==== ')
+        return self.collection.aggregate(
+            pipeline,
+            batchSize=batch_size,
+            allowDiskUse=True
+        )
+
+    def generate_current_isps(self, current_proxies):
+
+        isps = {}
+
+        for idx, isp in enumerate(current_proxies['proxies']):
+            isps[idx] = {"proxy": f"{isp['ip']}:{current_proxies['ports']['http|https']}",
+                         "proxy_auth": f"{isp['username']}:{isp['password']}"}
+
+        # pprint(isps)
+        self.isp_ips = isps
+        print(" ==== TESTING PROXIES ==== ")
+        self.test_proxies()
+
+    def generate_duplicate_mlsnums(self, batch_size=500):
+
+        for mls_num in self.fetch_duplicate_mlsnums(batch_size=batch_size):
+            count = self.collection.count_documents({"MLSNum": mls_num})
+
+            if count <= 1:
+                # No duplicates, skip
+                continue
+
+            # Fetch all documents for inspection / cleanup
+            docs = list(self.collection.find({"MLSNum": mls_num}))
+
+            # Yield or process: MLSNum, docs, count
+            yield mls_num, docs, count
+            check_pipeline_metadata("gsmls_cleaning_pipeline", "start_mls", mls_num)
+
+    def generate_image_docs(self):
+
+        while True:
+
+            batch = list(self.fetch_mlsnums())
+
+            if len(batch) < 1:
+                break
+
+            for doc in batch:
+                mls_num = doc["MLSNum"]
+                yield doc
+
+                check_pipeline_metadata("gsmls_download_images", "last_mls", mls_num)
+
+    def generate_proxy(self, logger=None):
 
         # Only use static proxies which have authentication to access https://img.gsmls.com
         proxy_dict = {
-            1: {"proxy": "45.131.15.176:12323", "proxy_auth": "user34:pwpwpw"},
-            2: {
-                "proxy": "geo.iproyal.com:12321",
-                "proxy_auth": "EC0m7tQy2GtYN9nv:QgurSG8NEOo6TYE3_country-us_session-sRVzhKss_lifetime-30m",
-            },
+            'residential': {"proxy": "geo.iproyal.com:12321",
+                            "proxy_auth": "EC0m7tQy2GtYN9nv:QgurSG8NEOo6TYE3"},
+            'isp': self.isp_ips
         }
 
-        if num >= 50:
-            proxy = proxy_dict[1]["proxy"]
-            proxy_auth = proxy_dict[1]["proxy_auth"]
+        if datetime.now() >= self.proxy_check_time + timedelta(minutes=10):
+            print(" ==== TESTING PROXIES ==== ")
+            self.proxy_check_time = datetime.now()
+            self.test_proxies(logger)
+
+        num = random.randint(1, 100)
+
+        if num <= 25:
+            proxy = proxy_dict['residential']["proxy"]
+            proxy_auth = proxy_dict['residential']["proxy_auth"]
 
         else:
-            proxy = proxy_dict[2]["proxy"]
-            proxy_auth = proxy_dict[2]["proxy_auth"]
+            idx = random.randint(0, 9)
+            proxy = proxy_dict['isp'][idx]["proxy"]
+            proxy_auth = proxy_dict['isp'][idx]["proxy_auth"]
+            if idx in self.dead_ips:
+                # proxy 1 and 2 failed during the test
+                proxy = proxy_dict['residential']["proxy"]
+                proxy_auth = proxy_dict['residential']["proxy_auth"]
 
         proxies = {
             "http": f"http://{proxy_auth}@{proxy}",
             "https": f"http://{proxy_auth}@{proxy}",
         }
 
-        if datetime.now() >= self.proxy_check_time + timedelta(minutes=30):
-            self.proxy_check_time = datetime.now()
-            RealEstateImages.log_proxies(proxy_dict, logger)
-
+        # print(f' ==== PROXY IN USE: {proxies} ==== ')
         return proxies
+
+    @staticmethod
+    def get_latest_mlsnum(pipeline, key):
+
+        data_path = get_filepath("metadata")
+        metadata_path = os.path.join(data_path, "metadata")
+
+        try:
+            with shelve.open(metadata_path) as reader:
+                result = reader[pipeline]
+
+            return result[key]
+        except KeyError:
+            check_pipeline_metadata(pipeline, key=key)
+            with shelve.open(metadata_path) as reader:
+                result = reader[pipeline]
+
+            return result[key]
+
+    def get_residential_hash(self):
+
+        # Obtain the residential user hash to conduct actions in IPRoyal
+        url = 'https://resi-api.iproyal.com/v1/me'
+        headers = {'Authorization': f'Bearer {self.ip_api}'}
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+
+            data = response.json()
+            return data
+
+    def get_static_proxy_order(self):
+
+        url_isp = f'https://apid.iproyal.com/v1/reseller/orders/{self.latest_isp_order_num}'
+        # url_isp = f'https://apid.iproyal.com/v1/reseller/orders'
+        headers_isp = {'X-Access-Token': f'{self.ip_api}', 'Content-Type': 'application/json'}
+        # params = {
+        #     'product_id': 22,
+        #     'page': 1,
+        #     'per_page': 10,
+        #     'status': 'confirmed',
+        #     'order_ids': [64872924]
+        # }
+
+        response_isp = requests.get(url_isp, headers=headers_isp)
+
+        if response_isp.status_code == 200:
+            print(' ==== PREVIOUS ORDERS FOR ISP PROXIES ==== ')
+            data_isp = response_isp.json()
+            return data_isp
 
     @staticmethod
     def get_us_pw(website):
@@ -525,38 +647,19 @@ class RealEstateImages:
         return username, base_url, pw
 
     @staticmethod
-    def log_proxies(proxy_dict, logger):
+    def load_ip_api():
 
-        proxy_list = []
+        filepath = get_filepath('env')
+        load_dotenv(filepath)
 
-        for key, value in proxy_dict.items():
+        return os.getenv('IPROYAL_API')
 
-            proxy = proxy_dict[key]["proxy"]
-            proxy_auth = proxy_dict[key]["proxy_auth"]
+    @staticmethod
+    def prepare_data(image_list):
 
-            proxies = {
-                "http": f"http://{proxy_auth}@{proxy}",
-                "https": f"http://{proxy_auth}@{proxy}",
-            }
-
-            try:
-                response = requests.get(
-                    "https://httpbin.org/ip", proxies=proxies, timeout=5
-                )
-                proxy_list.append(response.json()["origin"])
-
-            except requests.exceptions.JSONDecodeError as error:
-                logger.warning(
-                    f"{error} occured while checking IP for http://{proxy_auth}@{proxy}"
-                )
-                logger.info(
-                    f"IP at http://{proxy_auth}@{proxy} as not added to the list"
-                )
-
-        assert "72.90.153.78" not in proxy_list
-
-        logger.info(f"IPs Currently in Use: {proxy_list}")
-        logger.info(f"Home IP is not being traced")
+        batch_size = 10
+        for i in range(0, len(image_list), batch_size):
+            yield image_list[i:i + batch_size]
 
     @staticmethod
     def property_style(series, prop_data):
@@ -613,51 +716,56 @@ class RealEstateImages:
         elif not isinstance(rnt_style, float):
             return "RNT", RealEstateImages.style_type_split(rnt_style, prop_data)
 
-    def request_image(self, url, filepath, logger, max_retries=None):
+    def proxy_manager(self):
 
-        try:
+        # Obtain the residential user hash to conduct actions in IPRoyal
+        user_data = self.get_residential_hash()
+        isp_orders = self.get_static_proxy_order()
+        isp_expiration = pendulum.parse(isp_orders['expire_date'])
+        available_traffic = float(user_data['available_traffic'])
+        print(f' ==== CURRENT AVAILABLE PROXY TRAFFIC: {available_traffic} ==== ')
 
-            response = requests.get(
-                url, proxies=self.generate_proxy(logger), timeout=30, stream=True
-            )
+        # Only purchase data if the latest proxy purchase is 30 days old and there's less than 1.5GB
+        # of available traffic left
+        if available_traffic < 6.5:
+            print(f' ==== RESIDENTIAL PROXY DATA HAS REACHED ITS LOWER LIMIT. DETERMINING DATA INCREASE ==== ')
 
-            if response.status_code == 200:
-                with open(filepath, "wb") as writer:
-                    for chunk in response.iter_content(
-                        chunk_size=51200
-                    ):  # Stream in 50KB chunks
-                        writer.write(chunk)
+        if isp_expiration < pendulum.now(tz=timezone("America/New_York")):
+            print(f' ==== MORE STATIC PROXY DATA NEEDS TO BE PURCHASED ==== ')
+            # try:
+            #     purchasing_data()
+            # except some_error:
+            #     print(f' ==== DATA PURCHASE UNSUCCESSFUL ==== ')
+            #     self.static_ip_status = "Expired"
 
-                logger.info(f"Image from {url} saved to {filepath}")
+        elif isp_expiration > pendulum.now(tz=timezone("America/New_York")):
+            print(f' ==== ISP PROXIES ARE STILL ACTIVE ==== ')
 
-            else:
-                response.raise_for_status()
+        self.generate_current_isps(isp_orders['proxy_data'])
+        # self.generate_current_res_ip()
 
-        except requests.exceptions.ReadTimeout as error:
-            logger.warning(f"Image Timeout for {url}. Error: {error}")
+    def request_image(self, session, image_list: list, **kwargs):
 
-        except requests.exceptions.HTTPError as error:
-            logger.warning(f"Request Status Code: {error} for {url}")
+        total_images = 0
+        mlsnum = kwargs['metadata']['mlsnum']
+        futures = []
+        files_data = {
+            'url': [],
+            'directory': []
+        }
 
-        # requests.exceptions.ChunkedEncodingError occurs from the urllib3.IncompleteRead when the connection closes when all chunks weren't read
-        # requests.exceptions.ConnectionError occurs from SSLerror, RemoteDisconnectedError or ProxyError issues dealing with connecting to the server
-        #  with the proxy
-        except (
-            requests.exceptions.ChunkedEncodingError,
-            requests.exceptions.ConnectionError,
-        ) as error:
-            logger.warning(f"{error}. Max Retries: {max_retries}")
+        for batch in RealEstateImages.prepare_data(image_list):
+            for image in batch:
+                url = image["URL"]
+                file_directory = RealEstateImages.create_new_filename(image["Directory"], mlsnum)
+                files_data['url'].append(url)
+                files_data['directory'].append(file_directory)
+                future = session.get(url, stream=True, proxies=self.generate_proxy(logger=kwargs['logger']))
+                futures.append(future)
+                total_images += 1
 
-            try:
-                if max_retries is not None:
-                    assert max_retries <= 3
-
-                if max_retries is None:
-                    self.request_image(url, filepath, logger, 1)
-                else:
-                    self.request_image(url, filepath, logger, max_retries + 1)
-            except AssertionError as error:
-                logger.warning(f"{error} on {url}. Max Retries: {max_retries}")
+        print(f" ==== STORING {total_images} IMAGES FOR {kwargs['metadata']['mlsnum']} - {kwargs['metadata']['address']} ==== ")
+        RealEstateImages.store_in_aws(futures, files_data, **kwargs)
 
     @staticmethod
     def sleep_variation(image_num: int):
@@ -702,6 +810,46 @@ class RealEstateImages:
         except KeyError:
 
             return "0000-00-00", "Unknown"
+
+    @staticmethod
+    def store_in_aws(futures_list, file_data, **kwargs):
+
+        max_retries = 5
+        retriable_errors = (ProtocolError, IncompleteRead,
+                            ChunkedEncodingError, ConnectionError,
+                            SSLError, ProxyError)
+
+        for future in as_completed(futures_list):
+            for attempt in range(max_retries):
+                try:
+                    response = future.result()
+                    url = response.url
+                    idx = file_data['url'].index(url)
+                    filepath = file_data['directory'][idx]
+
+                    if response.status_code == 200:
+                        response.raw.decode_content = True
+                        aws_response = kwargs['s3_client'].upload_fileobj(response.raw, "amzn-s3-gsmls-propertyimages",
+                                                                filepath, ExtraArgs={'Metadata': kwargs['metadata']})
+                except ClientError as e:
+                    kwargs['logger'].warning(f'{e}')
+                except retriable_errors as e:
+                    if attempt < max_retries:
+                        sleep_time = 2 ** attempt
+                        kwargs['logger'].warning(f' ==== {e}==== ')
+                        kwargs['logger'].warning(f' ==== SLEEPING FOR {sleep_time} SECS THEN RETRYING ==== ')
+                        time.sleep(sleep_time)
+                        continue
+                    kwargs['logger'].warning(f' ==== MAX TRIES REACHED. IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
+                    kwargs['logger'].warning(
+                        f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {url} ===== FILE: {filepath}")
+                    break
+                else:
+                    if aws_response is False:
+                        kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
+                        kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {url} ===== FILE: {filepath}")
+                    break
+
 
     @staticmethod
     def style_type_split(style_type, prop_data):
@@ -752,6 +900,39 @@ class RealEstateImages:
         else:
 
             return style_type
+
+    def test_proxies(self, logger=None):
+
+        for key, value in self.isp_ips.items():
+
+            proxy = value["proxy"]
+            proxy_auth = value["proxy_auth"]
+
+            proxies = {
+                "http": f"http://{proxy_auth}@{proxy}",
+                "https": f"http://{proxy_auth}@{proxy}",
+            }
+
+            try:
+                response = requests.get("https://httpbin.org/ip", proxies=proxies, timeout=20)
+                if response.status_code == 200:
+                    if response.json()['origin'] != proxy.split(':')[0]:
+                        if key not in self.dead_ips:
+                            self.dead_ips.append(key)
+                else:
+                    response.raise_for_status()
+
+            except (requests.exceptions.Timeout, ProxyError, HTTPError):
+                if logger is not None:
+                    logger.warning(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST")
+                else:
+                    print(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST")
+                if key not in self.dead_ips:
+                    self.dead_ips.append(key)
+        if logger is not None:
+            logger.info(f" ==== DEAD IPS HAVE BEEN CAPTURED. RESUMING IMAGE DOWNLOADS ==== ")
+        else:
+            print(f" ==== DEAD IPS HAVE BEEN CAPTURED. RESUMING IMAGE DOWNLOADS ==== ")
 
     @staticmethod
     def update_date_datatype(date_value, update_op):
@@ -834,71 +1015,152 @@ class RealEstateImages:
         elif len(zip_val) == 4:
             update_op["$set"].update({"Zipcode": "0" + zip_val})
 
-    @logger_decorator
-    def download_images_main(self, **kwargs):
-        """
-        Queries each document and downloads the images stored in the Images field
+    """
+    ----------------------------------------------------------------------------------------------------------------
+                                                MAJOR FUNCTIONS
+    ----------------------------------------------------------------------------------------------------------------
+    """
 
-        :param kwargs:
+    @logger_decorator
+    def database_cleanup(self, cutoff_time, **kwargs):
+        """
+        Cleanup the database with the following actions:
+            - Deleting duplicate documents
+            - Update the date field to ISODate or Datetime formats
+            - Delete the "Image_Downloaded" field if it exists
+            - Use title case for the Address, Town and Condition fields
+            - Make the _id field the MLSNum
+
         :return:
         """
 
         logger = kwargs["logger"]
+        logger.info(f" ==== CURRENT DOCUMENT COUNT FOR {self.db_name}.{self.col_name} ==== \n"
+                    f" ==== TOTAL: {self.collection.count_documents({})}")
 
-        # Check if the database exists. If it doesn't, create it
-        db_name = "realEstate"
-        database = RealEstateImages.check_for_database(db_name, self.mongo_db_conn)
+        try:
+            # The cursor will die if idle for 10+ minutes. Each document result takes about 6 seconds to go through
+            # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
+            # at 85 to account for time variances
+            print(' ==== GATHERING DOCUMENTS FROM AGGREGATE PIPELINE ==== ')
+            for mlsnum, docs, count in self.generate_duplicate_mlsnums(batch_size=100):
 
-        # Check if a collection (table) exists. If it doesn't, create it
-        col_name = "propertyImages"
-        table = database[col_name]
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
+                update_operation = {
+                    "$set": {},  # Dictionary to hold all update operations
+                    "$unset": {
+                        "Image_Downloaded": ""
+                    },  # Delete the fields if they exists
+                }
 
-        outer_update_operation = {"$set": {"Images_Downloaded": "Yes"}}
+                res = docs[0]
+                address = res["Address"]
+                condition = res["Condition"]
+                current_doc_count = count
+                date = res["Date"]
+                images = res["Images"]
+                town = res["Town"]
+                query_filter = {"MLSNum": mlsnum}
+                zipcode = res["Zipcode"]
+                geo_data = res.get("Geo_data", None)
 
-        # Find all the records, filtering for distinct MLSNum, which haven't been downloaded yet
-        batchsize = 200
+                # Log the current document information
+                logger.info(f"Current document: {mlsnum}")
 
-        pipeline = [
-            {
-                "$match": {"Images_Downloaded": {"$exists": False}}
-            },  # Find all records which haven't been downloaded yet
-            {"$group": {"_id": "$MLSNum", "doc": {"$first": "$$ROOT"}}},
-            {"$replaceRoot": {"newRoot": "$doc"}},
-            {"$sort": {"MLSNum": -1}},  # Sort the records in descending order by MLSNum
-        ]
+                # Delete duplicate documents
+                self.delete_duplicates(current_doc_count, mlsnum, logger)
 
-        results = table.aggregate(pipeline, batchSize=batchsize)
+                # Update the longitude and latitude data
+                self.update_geodata(mlsnum, geo_data, update_operation)
 
-        for _, record in zip(tqdm(range(batchsize), desc="Records"), results):
+                # Check _id datatype, if it's a str object, switch to the int
+                RealEstateImages.update_mlsnum(mlsnum, update_operation)
 
-            # Access the Images key in the main dictionary
-            image_dict = record["Images"]
-            query_filter = {"MLSNum": record["MLSNum"]}
+                # Check Date datatype
+                RealEstateImages.update_date_datatype(date, update_operation)
 
-            # Loop through all the image categories and access each image
-            image_list = RealEstateImages.create_image_list(image_dict)
-
-            for idx, item in zip(
-                tqdm(range(len(image_list)), desc="Images", colour="blue"), image_list
-            ):
-                url = item["URL"]
-                file_directory = RealEstateImages.create_new_filename(
-                    item["Directory"], record["MLSNum"]
+                # Update the string values
+                RealEstateImages.update_str_values(
+                    town, address, condition, zipcode, update_operation
                 )
-                base_dir_list = item["Directory"].split("\\")
-                base_dir = "\\".join(base_dir_list[0:-1])
-                RealEstateImages.check_for_directory(base_dir)
 
-                # Request and save the image
-                if not os.path.exists(file_directory):
-                    self.request_image(url, file_directory, logger)
+                # Update the Image value to remove empty arrays
+                RealEstateImages.update_image_object(images, update_operation)
+                temp_dict = update_operation.copy()
+                temp_dict["$unset"].pop("Image_Downloaded")
+
+                set_operations = len(list(temp_dict['$set'].keys()))
+                unset_operations = len(list(temp_dict['$unset'].keys()))
+
+                # Update the document
+                if set_operations != 0 and unset_operations != 0:
+                    # self.collection.update_one(query_filter, update_operation)
+                    pprint(update_operation)
+                    pprint(res)
+
+        except CursorNotFound as cnf:
+            logger.warning(f"{cnf}")
+            logger.info("Starting new aggregate cursor")
+        except AssertionError:
+            logger.info(f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== ")
+            logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
+        else:
+            logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
+
+    @logger_decorator
+    def download_images_main(self, cutoff_time, **kwargs):
+        """
+        Queries each document and downloads the images stored in the Images field
+
+        :param cutoff_time:
+        :param kwargs:
+        :return:
+        """
+        try:
+            try:
+                assert self.static_ip_status == "active", (" ==== STATIC IPS HAVE EXPIRED. "
+                                                       "PURCHASE MORE DATA TO DOWNLOAD IMAGES ==== ")
+            except AssertionError as e:
+                print(f'{e}')
+                return "Expired"
+
+            outer_update_operation = {"$set": {"Images_Downloaded": "Yes"}}
+            session = FuturesSession(max_workers=5)
+            kwargs['s3_client'] = boto3.client('s3')
+
+            while True:
+                for _, record in zip(tqdm(range(85), desc='Records'), self.generate_image_docs()):
+
+                    assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
+                    # Access the Images key in the main dictionary
+                    image_dict = record["Images"]
+                    query_filter = {"MLSNum": record["MLSNum"]}
+                    kwargs['metadata'] = {
+                        'address': str(record["Address"]),
+                        'mlsnum': str(record["MLSNum"]),
+                        'town': str(record["Town"]),
+                        'prop_style': str(record["Prop_Style"]),
+                        'condition': str(record['Condition'])
+                        }
+
+                    # Loop through all the image categories and access each image
+                    image_list = RealEstateImages.create_image_list(image_dict)
+                    self.request_image(session, image_list, **kwargs)
 
                     # Function which introduces variability between the image requests
-                    RealEstateImages.sleep_variation(idx)
+                    RealEstateImages.sleep_variation(len(image_list))
 
-            # If the key doesn't exist in the dictionary, create the field
-            if record.get("Images_Downloaded") is None:
-                table.update_one(query_filter, outer_update_operation)
+                    # If the key doesn't exist in the dictionary, create the field
+                    if record.get("Images_Downloaded", None) is None:
+                        self.collection.update_one(query_filter, outer_update_operation)
+                break
+        except AssertionError:
+            print(f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== ")
+            print(f" ==== PROGRAM COMPLETED ==== ")
+            return False
+        else:
+            print(f" ==== PROGRAM COMPLETED ==== ")
+            return False
 
     def main(self, **kwargs):
         """
@@ -906,9 +1168,6 @@ class RealEstateImages:
         :return:
         """
 
-        # image_pattern = re.compile(
-        #     r"'(\d{1,5}(?:-\d{1,5}|-\w)?(?: )?(?:\w\.)? [\w+ ]*(?:\.)?, [\w+ ]*(?:\.)? - [\w+ ,&.\/!-]* - \d{0,3})': '(https:\/\/img\.gsmls\.com\/imagedb\/highres\/a\/\d{1,3}\/\d{1,15}(?:_\d{1,3})?\.jpg)'"
-        # )
         image_pattern = re.compile(r"'([^']+?)'\s*:\s*'(https:\/\/img\.gsmls\.com\/imagedb\/highres\/[^']+?\.jpg)'")
         kwargs["image_pattern"] = image_pattern
 
@@ -934,3 +1193,9 @@ class RealEstateImages:
             print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
                   f"{property_data['MLSNum']} - {property_data['Address']}, {property_data['Town']} ==== ")
             print(pformat(dict(property_data)))
+
+
+if __name__ == '__main__':
+
+    obj = RealEstateImages(latest_order_num=64872924)
+    # obj.generate_current_isps()
