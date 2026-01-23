@@ -7,7 +7,7 @@ import pandas as pd
 import psycopg2
 from tqdm import tqdm
 from dotenv import load_dotenv
-from gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
+from gsmls_core.gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
 
 
 class GSMLSCleaning:
@@ -421,9 +421,8 @@ class GSMLSCleaning:
 
         print(' ==== IMPUTING NULL/ZERO VALUES ==== ')
 
-        for _, row in temp_data.iterrows():
-            idx = row[0]
-            data = row[1]
+        for idx, data in temp_data.iterrows():
+
             mask = agg_data[(agg_data['YEAR'] == data['YEAR']) & (agg_data['COUNTY'] == data['COUNTY']) & (
                         agg_data['TOWN'] == data['TOWN'])]
 
@@ -695,7 +694,8 @@ class GSMLSCleaning:
 
     def save_cleaned_data(self, df: pd.DataFrame):
 
-        df.to_sql('cleaned_data_for_dnn', con=self.tax_connection, if_exists='append', index=False)
+        # df.to_sql('cleaned_data_for_dnn', con=self.tax_connection, if_exists='append', index=False)
+        df.to_sql('temp_data_for_dnn', con=self.tax_connection, if_exists='replace', index=False)
 
     @staticmethod
     def update_pyspark_processed(mls_list: list, table_name: str):
