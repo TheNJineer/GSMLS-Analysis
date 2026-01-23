@@ -3,7 +3,11 @@ import logging
 import json
 import time
 import shelve
+import pendulum
 import pandas as pd
+from pendulum import timezone
+from docker.types import Mount
+from pprint import pprint
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
@@ -30,46 +34,53 @@ class TqdmLoggingHandler(logging.Handler):
 
 
 def check_pipeline_metadata(pipeline, key=None, status=None):
-    data_path = f"/app/pipeline_metadata"
+    data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
 
     if os.path.exists(metadata_path):
-        with shelve.open(metadata_path) as data_file:
+        with shelve.open(metadata_path, writeback=True) as data_file:
             pipelines = list(data_file.keys())
 
             if pipeline in pipelines:
                 if status is not None:
                     data_file[pipeline][key] = status
-                    print(f" ==== SAVING {key} STATUS OF {pipeline} TO {status} ==== ")
+                    data_file.sync()
+                    # print(f" ==== SAVING {key} STATUS OF {pipeline} TO {status} ==== ")
+                    # print(f' ==== CURRENT STATUS OF {pipeline} ==== \n')
+                    # pprint(data_file[pipeline])
                 else:
                     data_file[pipeline][key] = False
-                    print(f" ==== RE-WRITING {key} STATUS OF {pipeline} TO {status} ==== ")
-                data_file.sync()
+                    data_file.sync()
+                    # print(f" ==== RE-WRITING {key} STATUS OF {pipeline} TO {status} ==== ")
+                    # print(f' ==== CURRENT STATUS OF {pipeline} ==== \n')
+                    # pprint(data_file[pipeline])
             else:
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
     else:
-        with shelve.open(metadata_path) as data_file:
+        with shelve.open(metadata_path, writeback=True) as data_file:
             data_file[pipeline] = create_pipeline_metadata(pipeline)
+            data_file[pipeline][key] = status
             print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
 
 def create_pipeline_metadata(pipeline):
 
     if pipeline == "gsmls_airflow_pipeline":
-        return {"producer": False, "data_consumer": False,
-                "image_consumer": False, "mongodb_start": None,
-                "mongodb_final": None, "postgresql_start": None,
-                "postgresql_final": None}
+        return {"prop_type": "RES", "start_point": False, "new_msgs": False,
+                "kafka_connection": False, "producer": False, "data_consumer": False,
+                "image_consumer": False, "mongodb_start": None, "mongodb_final": None,
+                "postgresql_start": None, "postgresql_final": None, "progress_message": None,
+                "progress_tracker": None}
 
     elif pipeline == "gsmls_cleaning_pipeline":
 
-        return {"cleaning": False,}
+        return {"cleaning_completed": None, "start_mls": None}
 
     elif pipeline == "gsmls_download_images":
 
-        return {"download_images": False}
+        return {"downloads_completed": None, "last_mls": None}
 
 
 def create_postgres_connection(con_type: str, db_name=None):
@@ -233,14 +244,74 @@ def create_sql_engine(database: str, remote=True):
     return engine
 
 
+def create_volume_mounts(job: str):
+
+    mount_list = []
+    source_base = '/root/home/projects/GSMLS-Analysis'
+    container_base = '/app'
+    jobs_dict = {
+        'minor_job': {'source': ['pipeline_metadata'],
+                      'target': ['pipeline_metadata']},
+        'producer': {'source': ['pipeline_metadata', 'data/stage_one/downloads'],
+                     'target': ['pipeline_metadata', 'downloads']},
+        'consumer': {'source': ['pipeline_metadata', 'consumer_backup_data'],
+                     'target': ['pipeline_metadata', 'consumer_backup_data']},
+        'image_consumer': {'source': ['pipeline_metadata'],
+                           'target': ['pipeline_metadata']},
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files'],
+                     'target': ['pipeline_metadata', 'parquet_files']},
+    }
+
+    source_list = jobs_dict[job]['source']
+    target_list = jobs_dict[job]['target']
+
+    for source, target in zip(source_list, target_list):
+        mount_obj = Mount(
+            source=os.path.join(source_base, source),
+            target=os.path.join(container_base, target),
+            type='bind'
+        )
+        mount_list.append(mount_obj)
+
+    return mount_list
+
+
+def cutoff_time(
+    days: int = 0,
+    hours: int = None,
+    minutes: int = None,
+    seconds: int = None,
+    tz: str = None,
+):
+
+    start = pendulum.now(tz=timezone(tz))
+    day = start.day
+    day_delta = day + days
+    finish = start.set(
+        day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0
+    )
+
+    assert finish > start, f" ==== CUTOFF TIME IS LESS THAN THE CURRENT DATETIME ==== "
+    print(f" ==== THE CUTOFF TIME IS : {finish} ==== ")
+
+    return finish
+
+
 def get_filepath(usecase: str):
 
     filepaths = {
-        'downloads': ['/workspace/data/stage_one/downloads', '/app/downloads'],
-        'env': ['/workspace/.env', '/app/.env', '/opt/airflow/.env'],
+        'backups': ['/root/home/projects/GSMLS-Analysis/consumer_backup_data',
+                    '/workspace/consumer_backup_data', '/app/consumer_backup_data'],
+        'base': ['/root/home/projects/GSMLS-Analysis', '/workspace', '/app'],
+        'downloads': ['/root/home/projects/GSMLS-Analysis/data/stage_one/downloads',
+                      '/workspace/data/stage_one/downloads', '/app/downloads'],
+        'env': ['/root/home/projects/GSMLS-Analysis/.env', '/workspace/.env', '/app/.env', '/opt/airflow/.env'],
+        'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
+        'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
         'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
-        'backups': ['/workspace/consumer_backup_data', '/app/consumer_backup_data'],
-        'metadata': ['/workspace/pipeline_metadata', '/app/pipeline_metadata']
+        'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
+                     '/workspace/pipeline_metadata', '/app/pipeline_metadata'],
+        'refined_data': ['/workspace/data/stage_one/parquet_files', '/app/parquet_files'],
     }
 
     for path in filepaths[usecase]:
@@ -313,4 +384,5 @@ def logger_decorator(original_function):
             return result
 
     return wrapper
+
 
