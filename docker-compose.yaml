@@ -491,7 +491,6 @@ services:
     networks:
       - airflow_network
     environment:
-      PYTHONPATH: /workspace
       PYTHONNOUSERSITE: "1"
     # Shared data volume (same one jobs use)
     volumes:
@@ -500,7 +499,11 @@ services:
     env_file:
       - .env
     working_dir: /workspace
-    command: bash
+    command: >
+      bash -c "
+      pip install -e /workspace/gsmls_core &&
+      exec bash
+      "
 
   airflow-apiserver:
     <<: *airflow-common
