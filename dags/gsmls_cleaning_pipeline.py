@@ -43,8 +43,8 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2025, 12, 17,
-                           hour=9, minute=30, tzinfo=timezone("America/New_York")),
+    "start_date": datetime(2026, 2, 10,
+                           hour=3, minute=15, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     }
@@ -77,16 +77,34 @@ def gsmls_cleaning_pipeline():
         provide_context=True
     )
 
+    # This job needs to be created
+    # clean_duplicates = DockerOperator(
+    #     task_id="data_cleaning",
+    #     image="gsmls-jobs:latest",
+    #     command=f"{get_filepath('jobs_major')}/remove_duplicate_data.py",
+    #     api_version="auto",
+    #     auto_remove=True,
+    #     docker_url="unix://var/run/docker.sock",
+    #     network_mode="airflow_network",
+    #     mount=create_volume_mounts('cleaning'),
+    #     env_file='/root/home/projects/GSMLS-Analysis/.env'
+    # )
+
     data_cleaning = DockerOperator(
-                task_id="data_cleaning",
-                image="gsmls-jobs:latest",
-                command=f"{get_filepath('jobs_major')}/phased_cleaning.py",
-                api_version="auto",
-                auto_remove=True,
-                docker_url="unix://var/run/docker.sock",
-                network_mode="airflow_network",
-                mount=create_volume_mounts('cleaning')
-            )
+        task_id="data_cleaning",
+        image="gsmls-jobs:latest",
+        command=f"{get_filepath('jobs_major')}/phased_cleaning.py",
+        api_version="auto",
+        auto_remove=True,
+        docker_url="unix://var/run/docker.sock",
+        network_mode="airflow_network",
+        mount=create_volume_mounts('cleaning'),
+        env_file='/root/home/projects/GSMLS-Analysis/.env'
+    )
 
     status >> data_ready >> data_cleaning
+
+
+# DAG Initiation
+gsmls_cleaning_pipeline()
 

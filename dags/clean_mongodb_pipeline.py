@@ -5,7 +5,7 @@ from pendulum import timezone
 from airflow.sdk import task, dag
 from airflow.providers.standard.operators.python import ShortCircuitOperator
 from airflow.providers.docker.operators.docker import DockerOperator
-from gsmls_core.gsmls.utility_func import cutoff_time, get_filepath, create_volume_mounts
+from gsmls.utility_func import cutoff_time, get_filepath, create_volume_mounts
 
 
 # Use pendulum to restrict the cleaning to specific times of the day, when images aren't being downloaded
@@ -15,8 +15,8 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 1, 14,
-                           hour=4, minute=45, tzinfo=timezone("America/New_York")),
+    "start_date": datetime(2026, 2, 10,
+                           hour=3, minute=45, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     }
@@ -32,8 +32,8 @@ description = """
 
 def cutoff_decision(tz: timezone):
 
-    start = cutoff_time(hours=4, minutes=45, tz="America/New_York")
-    end = cutoff_time(hours=7, tz="America/New_York")
+    start = cutoff_time(hours=3, minutes=45, tz="America/New_York")
+    end = cutoff_time(hours=4, minutes=30, tz="America/New_York")
 
     if start <= pendulum.now(tz) < end:
         return True
@@ -62,7 +62,13 @@ def database_cleaning():
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",
         network_mode="airflow_network",
-        mount=create_volume_mounts('cleaning')
+        mount=create_volume_mounts('cleaning'),
+        env_file='/root/home/projects/GSMLS-Analysis/.env'
     )
 
     decision >> cleaning
+
+
+# DAG Initiation
+database_cleaning()
+

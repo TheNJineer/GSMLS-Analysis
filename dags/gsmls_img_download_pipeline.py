@@ -15,8 +15,8 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 1, 13,
-                           hour=7, minute=5, tzinfo=timezone("America/New_York")),
+    "start_date": datetime(2026, 2, 10,
+                           hour=4, minute=45, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     }
@@ -31,8 +31,8 @@ description = """
 
 
 def cutoff_decision(tz: timezone):
-    start = cutoff_time(hours=7, tz="America/New_York")
-    end = cutoff_time(hours=9, tz="America/New_York")
+    start = cutoff_time(hours=4, minutes=40, tz="America/New_York")
+    end = cutoff_time(hours=7, tz="America/New_York")
 
     if start <= pendulum.now(tz) < end:
         return True
@@ -61,7 +61,13 @@ def download_images():
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",
         network_mode="airflow_network",
-        mount=create_volume_mounts('cleaning')
+        mount=create_volume_mounts('cleaning'),
+        env_file='/root/home/projects/GSMLS-Analysis/.env'
     )
 
     decision >> downloads
+
+
+# DAG Initiation
+download_images()
+

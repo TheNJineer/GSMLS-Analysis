@@ -14,8 +14,8 @@ from datetime import datetime
 from datetime import timedelta
 from kafka.structs import TopicPartition
 from pendulum import timezone
-from gsmls_core.gsmls.utility_func import create_kafka_consumer, get_filepath
-from gsmls_core.gsmls.utility_func import create_volume_mounts, cutoff_time
+from gsmls.utility_func import create_kafka_consumer, get_filepath
+from gsmls.utility_func import create_volume_mounts, cutoff_time
 
 # That guarantees the DAG loader process can find the plugins module even if
 # Airflow ignores the PYTHONPATH
@@ -240,7 +240,8 @@ def gsmls_pipeline():
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",
         network_mode="airflow_network",
-        mount=create_volume_mounts('minor_job')
+        mount=create_volume_mounts('minor_job'),
+        env_file='/root/home/projects/GSMLS-Analysis/.env'
     )
 
     for prop_type, topic in prop_type_dict.items():
@@ -253,7 +254,8 @@ def gsmls_pipeline():
             auto_remove=True,
             docker_url="unix://var/run/docker.sock",
             network_mode="airflow_network",
-            mount=create_volume_mounts('minor_job')
+            mount=create_volume_mounts('minor_job'),
+            env_file='/root/home/projects/GSMLS-Analysis/.env'
         )
 
         start_result = PythonOperator(
@@ -308,7 +310,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job')
+                mount=create_volume_mounts('minor_job'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
 
             # Task 5: Send pipeline initiation email
@@ -328,7 +331,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('producer')
+                mount=create_volume_mounts('producer'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
 
             # The producer will publish data to both the data and image topics first
@@ -360,7 +364,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('consumer')
+                mount=create_volume_mounts('consumer'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
 
             image_consumer = DockerOperator(
@@ -371,7 +376,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('image_consumer')
+                mount=create_volume_mounts('image_consumer'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
 
             # ETL Pipeline dependencies
@@ -394,7 +400,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job')
+                mount=create_volume_mounts('minor_job'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
             postgresql_final = DockerOperator(
                 task_id="postgresql_final_data",
@@ -405,7 +412,8 @@ def gsmls_pipeline():
                 auto_remove=True,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job')
+                mount=create_volume_mounts('minor_job'),
+                env_file='/root/home/projects/GSMLS-Analysis/.env'
             )
 
             status_email(phase='Ending')

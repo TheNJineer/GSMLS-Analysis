@@ -96,14 +96,15 @@ def gsmls_email():
     progress = DockerOperator(
         task_id="pipeline_progress",
         image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_major')}/progress_update.py "
+        command=f"{get_filepath('jobs_minor')}/progress_update.py "
                 f"--prop_type {{ ti.xcom_pull(task_ids='get_metadata', key='prop_type') }} "
                 f"--pipeline gsmls_airflow_pipeline",
         api_version="auto",
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",
         network_mode="airflow_network",
-        mount=create_volume_mounts('minor_job')
+        mount=create_volume_mounts('minor_job'),
+        env_file='/root/home/projects/GSMLS-Analysis/.env'
     )
 
     status = ShortCircuitOperator(
@@ -120,6 +121,12 @@ def gsmls_email():
 
     property_type >> progress
     status >> status_email
+
+
+# DAG Initiation
+gsmls_email()
+
+
 
 
 
