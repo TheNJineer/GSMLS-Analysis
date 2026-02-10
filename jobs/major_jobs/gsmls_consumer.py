@@ -1,8 +1,8 @@
 import argparse
 import sys
 import os
-from gsmls_core.gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from gsmls_core.gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
+from gsmls.utility_func import get_filepath, check_pipeline_metadata
 
 
 def parse_args():
