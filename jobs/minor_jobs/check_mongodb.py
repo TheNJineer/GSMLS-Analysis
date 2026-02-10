@@ -2,7 +2,7 @@ import sys
 import argparse
 import time
 from pymongo.errors import ConnectionFailure
-from gsmls_core.gsmls.utility_func import create_mongodb_conn, check_pipeline_metadata
+from gsmls.utility_func import create_mongodb_conn, check_pipeline_metadata
 
 
 def parse_args():
