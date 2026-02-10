@@ -42,9 +42,11 @@ def create_kafka_topics(topic: str = 'res_properties', status: bool = True):
                         new_topics=[topic_obj], validate_only=False, timeout_ms=1500
                     )
                     print(f'TOPIC {t} CREATED IN APACHE KAFKA TOPIC LIST ==== ')
+                else:
+                    print(f' ==== TOPIC {t} ALREADY EXISTS IN KAFKA ==== ')
 
             except kafka.errors.TopicAlreadyExistsError:
-                print(f' ==== TOPIC {t} ALREADY EXISTS ==== ')
+                print(f' ==== TOPIC {t} ALREADY EXISTS IN KAFKA ==== ')
 
 
 if __name__ == '__main__':

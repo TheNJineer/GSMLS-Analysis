@@ -3,8 +3,8 @@ import argparse
 import os
 import shelve
 import sys
-from gsmls_core.gsmls.utility_func import create_sql_engine, create_mongodb_conn
-from gsmls_core.gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.utility_func import create_sql_engine, create_mongodb_conn
+from gsmls.utility_func import get_filepath, check_pipeline_metadata
 
 
 def create_message(prop_type: str, tracker: dict):
@@ -37,6 +37,7 @@ def create_progress_tracker():
         'finished': None
     }
 
+    print(f' ==== CREATING NEW PROGRESS CONTAINER ==== ')
     return progress_tracker
 
 
@@ -45,10 +46,12 @@ def current_status():
     data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
 
+    print(f' ==== CHECKING CURRENT STATUS OF GSMLS PIPELINE ==== ')
     with shelve.open(metadata_path) as reader:
         tracker = reader["gsmls_airflow_pipeline"]["progress_tracker"]
         message = reader["gsmls_airflow_pipeline"]["progress_message"]
 
+    print(f' ==== STATUS OF GSMLS PIPELINE ACQUIRED ==== ')
     return tracker, message
 
 
@@ -80,20 +83,23 @@ def progress_update(prop_type, pipeline):
     if tracker["municipality"] is not None and prev_tracker is None:
         check_pipeline_metadata(pipeline, key="progress_tracker", status=tracker)
         check_pipeline_metadata(pipeline, key="progress_message", status=message)
+        print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
     elif (tracker["municipality"] != prev_tracker["municipality"]) and (tracker["county"] != prev_tracker["county"]):
         check_pipeline_metadata(pipeline, key="progress_tracker", status=tracker)
         check_pipeline_metadata(pipeline, key="progress_message", status=message)
+        print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
 
 
 def query_property_data(prop_type, engine):
 
+    print(f' ==== ACQUIRING LATEST DATA FROM GSMLS EVENT LOG  ==== ')
     try:
         # Scrape the event log for the latest saved event which occurred
         query = f"""
                     SELECT * FROM gsmls_event_log_new
                     WHERE id = (SELECT MAX(id) FROM gsmls_event_log_new)
                 """
-        df = pd.read_sql_query(query, con=engine.raw_connection())
+        df = pd.read_sql_query(query, con=engine)
         last_row = df.shape[0] - 1
         property_type = df.loc[last_row, "property_type"]
 
@@ -123,6 +129,8 @@ def update_tracker(data: pd.DataFrame, tracker: dict):
                 tracker[key] = data.loc[last_row, key]
         except KeyError:
             pass
+
+    print(f' ==== PROGRESS TRACKER UPDATED WITH MOST RECENT INFORAMTION ==== ')
 
     return tracker
 

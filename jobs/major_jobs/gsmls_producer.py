@@ -1,7 +1,7 @@
 import argparse
 import sys
-from gsmls_core.gsmls.GSMLS import GSMLS
-from gsmls_core.gsmls.utility_func import check_pipeline_metadata, cutoff_time
+from gsmls.GSMLS import GSMLS
+from gsmls.utility_func import check_pipeline_metadata, cutoff_time
 
 
 def parse_args():
@@ -16,14 +16,13 @@ if __name__ == "__main__":
 
     args = parse_args()
     # Creates a pendulum object of the next day 2:30AM
-    program_cutoff = cutoff_time(hours=2, minutes=30, tz="America/New_York")
+    program_cutoff = cutoff_time(days=1, hours=2, minutes=30, tz="America/New_York")
     kwargs = {
         'prop_type': args.prop_type,
         'cutoff_time': program_cutoff
     }
 
-    print(f'This is the prop type: {args.prop_type}')
-    print(f'This is the cutoff time: {program_cutoff}')
+    print(f' ==== CURRENT PROP TYPE: {args.prop_type}')
 
     obj = GSMLS(args.prop_type)
     check_pipeline_metadata("gsmls_airflow_pipeline", key="producer")
@@ -35,12 +34,12 @@ if __name__ == "__main__":
 
     if not isinstance(results, int):
         # Need to be able to log something here
-        print(f' === JOB FINISHED INCORRECTLY. ERROR OCCURRED SAVING INTO SQL DATABASE ==== ')
+        print(f' === ETL FINISHED INCORRECTLY. ERROR OCCURRED SAVING INTO SQL DATABASE ==== ')
         print(results)
         sys.exit(1)
     else:
         # Save results in s shelf file to be shared across volumes
-        print(f' === JOB FINISHED ==== ')
+        print(f' === ETL FINISHED ==== ')
         check_pipeline_metadata("gsmls_airflow_pipeline", key="producer", status=results)
         sys.exit(0)
 

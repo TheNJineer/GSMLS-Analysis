@@ -2,7 +2,7 @@ import argparse
 import sys
 import pandas as pd
 from datetime import datetime
-from gsmls_core.gsmls.utility_func import create_sql_engine, check_pipeline_metadata
+from gsmls.utility_func import create_sql_engine, check_pipeline_metadata
 
 
 def parse_args():
@@ -39,22 +39,23 @@ def starting_point(prop_type):
         date_produced = metadata.loc[last_row, "date_produced"]
         timeframe = metadata.loc[last_row, "timeframe"]
         delta = datetime.now() - date_produced
-        print(f' ==== TIME DELTA: {delta}')
+        print(f' ==== TIME DELTA BETWEEN LAST SCRAPE: {delta.days}')
 
         # All data for the last property type was acquired
         if last_scraped_county == 30 and last_scraped_muni == "White Twp." and finished == "Yes":
 
             if timeframe in ["historic", "mixed"]:
+                print(f' ==== BEGINNING {prop_type} SCRAPE FROM HISTORIC/MIXED TIMEFRAME ==== ')
                 return True
             elif delta.days <= 6:
                 print(f' ==== NO NEW DATA AVAILABLE FOR {prop_type} ==== ')
                 return False
             else:
-                print(f' ==== BEGINNING {prop_type} SCRAPE ==== ')
+                print(f' ==== NEW DATA AVAILABLE. BEGINNING {prop_type} SCRAPE ==== ')
                 return True
 
         else:
-            print(f' ==== BEGINNING {prop_type} SCRAPE ==== ')
+            print(f' ==== BEGINNING {prop_type} SCRAPE FROM PREVIOUS POINT ==== ')
             return True
 
 

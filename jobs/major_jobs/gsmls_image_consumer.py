@@ -1,6 +1,6 @@
 import sys
-from gsmls_core.gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from gsmls_core.gsmls.utility_func import check_pipeline_metadata
+from gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
+from gsmls.utility_func import check_pipeline_metadata
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import sys
-from gsmls_core.gsmls.utility_func import create_kafka_producer, check_pipeline_metadata
+from gsmls.utility_func import create_kafka_producer, check_pipeline_metadata
 
 
 def check_kafka_connection():

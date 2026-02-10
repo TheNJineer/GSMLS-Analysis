@@ -1,7 +1,7 @@
 import argparse
 import sys
 from kafka.structs import TopicPartition
-from gsmls_core.gsmls.utility_func import create_kafka_consumer, check_pipeline_metadata
+from gsmls.utility_func import create_kafka_consumer, check_pipeline_metadata
 
 
 def parse_args():
@@ -20,7 +20,7 @@ def new_msgs_available(topic):
 
     # Check the partitions in the consumer. Returns a set of partition ids
     partitions = cons.partitions_for_topic(topic)
-    print(f'{partitions}')
+    print(f' ==== CURRENT PARTITIONS AVAILABLE: {partitions} ==== ')
 
     try:
         if not partitions:
@@ -68,5 +68,5 @@ if __name__ == '__main__':
     args = parse_args()
     status = new_msgs_available(args.topic)
     check_pipeline_metadata("gsmls_airflow_pipeline", key="new_msgs", status=status)
-    # sys.exit(0)
+    sys.exit(0)
 

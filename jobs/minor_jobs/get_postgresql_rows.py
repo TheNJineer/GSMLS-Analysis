@@ -1,7 +1,7 @@
 import argparse
 import sys
 import pandas as pd
-from gsmls_core.gsmls.utility_func import create_sql_engine, check_pipeline_metadata
+from gsmls.utility_func import create_sql_engine, check_pipeline_metadata
 
 
 def parse_args():
@@ -22,7 +22,8 @@ def get_postgresql_rows(table_name_, remote=True):
     # The version discrepancy between Pandas 2.x and SQLAlchemy 1.4.x forces
     # the user to create a raw DBAPI connection which Pandas expects
     # Throws AttributeError "Engine/Connection object has no .cursor() method"
-    df = pd.read_sql_query(query, con=engine.raw_connection())
+    df = pd.read_sql_query(query, con=engine)
+    print(f' ==== TOTAL ROW COUNT FROM POSTGRESQL ACQUIRED: {int(df.loc[0].values[0])} ==== ')
 
     return {'table_name': table_name_, 'prop_count': int(df.loc[0].values[0])}
 

@@ -2,8 +2,8 @@ import os
 import sys
 import argparse
 import shelve
-from gsmls_core.gsmls.RealEstateImages import RealEstateImages
-from gsmls_core.gsmls.utility_func import check_pipeline_metadata, cutoff_time, get_filepath
+from gsmls.RealEstateImages import RealEstateImages
+from gsmls.utility_func import check_pipeline_metadata, cutoff_time, get_filepath
 
 
 def parse_args():
@@ -28,15 +28,18 @@ def ips_status():
 if __name__ == "__main__":
 
     args = parse_args()
-    program_cutoff = cutoff_time(hours=11, minutes=41, tz="America/New_York")
+    program_cutoff = cutoff_time(hours=7, minutes=30, tz="America/New_York")
     status = ips_status()
 
     if bool(args.local) is False and status != "Expired":
         if status is not False:
             check_pipeline_metadata("gsmls_airflow_pipeline", key="image_consumer")
 
-        results = RealEstateImages(latest_order_num=64872924).download_images_main(cutoff_time=program_cutoff)
+        obj = RealEstateImages(latest_order_num=64872924)
+        results = obj.download_images_main(cutoff_time=program_cutoff)
         check_pipeline_metadata("gsmls_airflow_pipeline", key="image_consumer", status=results)
+        print(f" ==== TOTAL PROPERTIES QUERIED: {obj.total_props} ==== ")
+        print(f" ==== TOTAL IMAGES DOWNLOADED: {obj.total_images} ==== ")
         sys.exit(0)
 
     elif bool(args.local) is True and status != "Expired":
