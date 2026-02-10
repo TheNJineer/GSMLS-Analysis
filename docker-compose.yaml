@@ -125,10 +125,11 @@ services:
     volumes:
       - ./data/stage_one/downloads:/home/seluser/downloads
 
-  # https://hub.docker.com/r/bitnami/spark/
+  # https://hub.docker.com/r/bitnami/spark/ (docker.io/bitnami/spark:4.0)
+  # https://hub.docker.com/r/bitnamilegacy/spark/tags?page=11
   # https://cloudinfrastructureservices.co.uk/create-apache-spark-docker-container-using-docker-compose/
   spark:
-    image: docker.io/bitnami/spark:4.0
+    image: bitnamilegacy/spark:3.5.0
     environment:
       - SPARK_MODE=master
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
@@ -139,6 +140,7 @@ services:
     user: root  # Use the same root and group IDs as the host
     volumes:
       - ./data:/workspace/data
+      - ./logs/pyspark_logs:/opt/bitnami/spark/work
     networks:
       - airflow_network
     ports:
@@ -152,7 +154,7 @@ services:
       start_period: 30s
 
   spark-worker:
-    image: docker.io/bitnami/spark:4.0
+    image: bitnamilegacy/spark:3.5.0
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark:7077
@@ -166,6 +168,7 @@ services:
     user: root
     volumes:
       - ./data:/workspace/data
+      - ./logs/pyspark_logs:/opt/bitnami/spark/work
     networks:
       - airflow_network
     healthcheck:
@@ -174,6 +177,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # Spark-Worker needs to install pandas and numpy in order to save to PostgreSQL
+    # The PySpark worker follows the metadata which discovers whats needed to save the data
+    # Work directory ownership given back to Spark from root
+    entrypoint: >
+      /bin/bash -c "
+      chown -R 1001:1001 /opt/bitnami/spark/work &&
+      pip install pyarrow pandas==2.3.3 numpy==1.26.4 
+      && /opt/bitnami/scripts/spark/entrypoint.sh /opt/bitnami/scripts/spark/run.sh"
 
   # Multi-broker Apache Kafka Setup. Will need to add more environment variables
   # May need to modify the local hosts ports to the cloud IPs
@@ -492,6 +503,7 @@ services:
       - airflow_network
     environment:
       PYTHONNOUSERSITE: "1"
+      PYTHONPATH: /workspace/gsmls_core:/workspace
     # Shared data volume (same one jobs use)
     volumes:
       - .:/workspace
@@ -502,7 +514,7 @@ services:
     command: >
       bash -c "
       pip install -e /workspace/gsmls_core &&
-      exec bash
+      tail -f /dev/null
       "
 
   airflow-apiserver:
