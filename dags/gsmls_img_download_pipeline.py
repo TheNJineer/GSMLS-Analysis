@@ -56,7 +56,7 @@ def download_images():
     downloads = DockerOperator(
         task_id="data_cleaning",
         image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_major')}/download_images.py",
+        command=f"{get_filepath('jobs_major')}/download_images.py --local",
         api_version="auto",
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",

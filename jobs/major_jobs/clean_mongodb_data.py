@@ -8,7 +8,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Cleaning the MongoDB Database of duplicate documents')
     parser.add_argument("--local", required=True)
 
-    return parser.parse_args(['--local', ''])
+    # return parser.parse_args(['--local', ''])
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

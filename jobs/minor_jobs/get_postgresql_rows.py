@@ -10,7 +10,8 @@ def parse_args():
     parser.add_argument("--table_name", required=True)
     parser.add_argument("--key", required=True)
 
-    return parser.parse_args(['--table_name', 'res_properties', "--key", "postgresql_start"])
+    # return parser.parse_args(['--table_name', 'res_properties', "--key", "postgresql_start"])
+    return parser.parse_args()
 
 
 def get_postgresql_rows(table_name_, remote=True):

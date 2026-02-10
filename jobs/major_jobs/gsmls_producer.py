@@ -9,7 +9,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='GSMLS Data Production')
     parser.add_argument("--prop_type", required=True)
 
-    return parser.parse_args(['--prop_type', 'RES'])
+    # return parser.parse_args(['--prop_type', 'RES'])
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

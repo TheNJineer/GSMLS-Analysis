@@ -9,7 +9,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Check for new messages in TopicPartitons')
     parser.add_argument("--topic", required=True)
 
-    return parser.parse_args(['--topic', 'res_properties'])
+    # return parser.parse_args(['--topic', 'res_properties'])
+    return parser.parse_args()
 
 
 def new_msgs_available(topic):

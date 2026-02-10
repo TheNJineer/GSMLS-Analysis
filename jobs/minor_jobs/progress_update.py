@@ -61,7 +61,8 @@ def parse_args():
     parser.add_argument("--prop_type", required=True)
     parser.add_argument("--pipeline", required=True)
 
-    return parser.parse_args(['--prop_type', 'RES', '--pipeline', "gsmls_airflow_pipeline"])
+    # return parser.parse_args(['--prop_type', 'RES', '--pipeline', "gsmls_airflow_pipeline"])
+    return parser.parse_args()
 
 
 def progress_update(prop_type, pipeline):

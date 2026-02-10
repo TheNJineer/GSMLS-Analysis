@@ -12,9 +12,10 @@ def parse_args():
     parser.add_argument("--table_name", required=True)
     parser.add_argument("--key", required=True)
 
-    return parser.parse_args(['--db_name', 'realEstate',
-                              "--table_name", "propertyImages",
-                              "--key", "mongodb_start"])
+    # return parser.parse_args(['--db_name', 'realEstate',
+    #                           "--table_name", "propertyImages",
+    #                           "--key", "mongodb_start"])
+    return parser.parse_args()
 
 
 def check_mongodb(db_name, table_name):

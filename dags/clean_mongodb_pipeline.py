@@ -57,7 +57,7 @@ def database_cleaning():
     cleaning = DockerOperator(
         task_id="data_cleaning",
         image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_major')}/clean_mongodb_data.py",
+        command=f"{get_filepath('jobs_major')}/clean_mongodb_data.py --local",
         api_version="auto",
         auto_remove=True,
         docker_url="unix://var/run/docker.sock",

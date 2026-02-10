@@ -11,7 +11,8 @@ def parse_args():
     parser.add_argument("--prop_type", required=True)
     parser.add_argument("--topic", required=True)
 
-    return parser.parse_args(['--prop_type', 'RES', '--topic', 'res_properties'])
+    # return parser.parse_args(['--prop_type', 'RES', '--topic', 'res_properties'])
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

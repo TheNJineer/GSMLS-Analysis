@@ -11,7 +11,8 @@ def parse_args():
     parser.add_argument("--topic", required=True)
     parser.add_argument("--kafka_conn", required=True)
 
-    return parser.parse_args(['--topic', 'res_properties', "--kafka_con", "True"])
+    # return parser.parse_args(['--topic', 'res_properties', "--kafka_con", "True"])
+    return parser.parse_args()
 
 
 def create_kafka_topics(topic: str = 'res_properties', status: bool = True):

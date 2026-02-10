@@ -10,7 +10,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Check the GSMLS data start point for target property type')
     parser.add_argument("--prop_type", required=True)
 
-    return parser.parse_args(['--prop_type', 'RES'])
+    # return parser.parse_args(['--prop_type', 'RES'])
+    return parser.parse_args()
 
 
 def starting_point(prop_type):
