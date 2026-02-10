@@ -7,7 +7,7 @@ import pandas as pd
 import psycopg2
 from tqdm import tqdm
 from dotenv import load_dotenv
-from gsmls_core.gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
+from gsmls.utility_func import create_sql_engine, create_postgres_connection, get_filepath
 
 
 class GSMLSCleaning:
@@ -114,15 +114,13 @@ class GSMLSCleaning:
 
         # Enrich the test data with local statistics
 
-        for _, year in zip(tqdm(range(len(test_data['YEAR'].unique())), desc='Years'), test_data['YEAR'].unique()):
-            for _, county in zip(tqdm(range(len(test_data['COUNTY'].unique())), desc='County'),
-                                 test_data['COUNTY'].unique()):
+        for year in test_data['YEAR'].unique():
+            for county in test_data['COUNTY'].unique():
 
                 # Isolate the data for that year and county
                 target_mask = test_data[(test_data['YEAR'] == year) & (test_data['COUNTY'] == county)]
 
-                for _, town in zip(tqdm(range(len(target_mask['TOWN'].unique())), desc='Town'),
-                                   target_mask['TOWN'].unique()):
+                for town in target_mask['TOWN'].unique():
                     town_mask = test_data[
                         (test_data['YEAR'] == year) & (test_data['COUNTY'] == county) & (test_data['TOWN'] == town)]
                     agg_mask = agg_data[
@@ -475,7 +473,10 @@ class GSMLSCleaning:
 
         elif phase == 'stage_three':
 
-            query = f"SELECT * FROM jobs_gsmls_imputed_data;"
+            query = f"""
+                SELECT * FROM gsmls_imputed_data
+                WHERE pyspark_processed = false       
+            ;"""
             print(f' ==== QUERYING IMPUTED GSMLS DATA==== ')
             df = pd.read_sql_query(query, con=self.tax_connection)
 
@@ -608,7 +609,7 @@ class GSMLSCleaning:
 
             return df
 
-        elif phase == 'stage_two':
+        elif phase == 'stage_three_a':
 
             df = df[[i for i in df.columns if i not in ['SQFTAPPROX', 'YEARBUILT', 'TAX_PATTERN']]]
             df.insert(23, 'AGE_OF_PROPERTY', df['YEAR'] - df['year_built'])
@@ -619,7 +620,7 @@ class GSMLSCleaning:
 
             return df
 
-        elif phase == 'stage_three':
+        elif phase == 'stage_three_b':
 
             skip_list2 = ['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY',
                           'ZIPCODE', 'NJ_TOWNCODE', 'TOWNCODE', 'COUNTYCODE', 'BLOCKID',
@@ -694,28 +695,49 @@ class GSMLSCleaning:
 
     def save_cleaned_data(self, df: pd.DataFrame):
 
-        # df.to_sql('cleaned_data_for_dnn', con=self.tax_connection, if_exists='append', index=False)
-        df.to_sql('temp_data_for_dnn', con=self.tax_connection, if_exists='replace', index=False)
+        df.to_sql('cleaned_data_for_dnn', con=self.tax_connection, if_exists='append', index=False)
+        print(f' ==== NEW DATA HAS BEEN APPENDED TO cleaned_data_for_dnn ==== ')
+        # df.to_sql('temp_data_for_dnn', con=self.tax_connection, if_exists='replace', index=False)
 
     @staticmethod
-    def update_pyspark_processed(mls_list: list, table_name: str):
+    def update_pyspark_processed(mls_list: list, property_type: str):
 
-        _, properties = create_postgres_connection('psycopg', 'nj_tax_assessor')
-        conn = psycopg2.connect(**properties)
-        print(' ==== POSTGRESQL + PSYCOPG2 CONNECTION SUCESSFUL ==== ')
+        data_dict = {
+            'RES': {
+                'raw_data': {'table_name': 'res_properties', 'database': 'gsmls',
+                             'col': 'PYSPARK_PROCESSED', 'mls_col': ""},
+                'clean_data': {'table_name': 'gsmls_imputed_data',
+                               'database': 'nj_tax_assessor', 'col': 'pyspark_processed'}
+            },
+            'MUL': {},
+            'LND': {}
+        }
 
-        query = f"""
-            UPDATE {table_name}
-            SET PYSPARK_TRANSFORMED = true
-            WHERE MLSNUM IN {mls_list}
-        """
+        for data in [data_dict[property_type]['raw_data'], data_dict[property_type]['clean_data']]:
 
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(query)
+            _, properties = create_postgres_connection('psycopg2', data['database'])
+            conn = psycopg2.connect(**properties)
+            print(f" ==== POSTGRESQL + PSYCOPG2 CONNECTION TO {data['database']} WAS SUCCESSFUL ==== ")
 
-        print(f' ==== SUCCESSFULLY LABELED THE FOLLOWING MLSNUM AS PYSPARK PROCESSED ====\n{mls_list}')
-        conn.close()
+            if data["table_name"] in ['res_properties']:
+                query = f'''
+                    UPDATE {data["table_name"]}
+                    SET "{data["col"]}" = true
+                    WHERE "MLSNUM" IN {tuple(mls_list)}
+                '''
+            else:
+                query = f'''
+                    UPDATE {data["table_name"]}
+                    SET {data["col"]} = true
+                    WHERE mlsnum IN {tuple(mls_list)}
+                '''
+
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(query)
+
+            print(f" ==== SUCCESSFULLY LABELED THE MLSNUM(s) AS PYSPARK PROCESSED IN {data['table_name']}==== ")
+            conn.close()
 
     def verify_dtypes(self, df: pd.DataFrame):
 

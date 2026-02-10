@@ -10,7 +10,7 @@ import pandas as pd
 import sys, traceback
 import logging
 from dotenv import load_dotenv
-from gsmls_core.gsmls.utility_func import (
+from gsmls.utility_func import (
     create_sql_engine,
     create_kafka_producer, logger_decorator,
     create_selenium_webdriver, get_filepath
@@ -22,7 +22,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import date
 from pendulum import timezone
-from gsmls_core.gsmls.utility_func import get_us_pw
+from gsmls.utility_func import get_us_pw
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.alert import Alert
@@ -34,7 +34,6 @@ from selenium.common.exceptions import UnexpectedAlertPresentException, WebDrive
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
-# from psycopg2.errors import SyntaxError
 from sqlalchemy.exc import DatabaseError
 from pandas.errors import ParserError
 
@@ -894,6 +893,8 @@ class GSMLS:
             self.finished = metadata.loc[last_row, "finished"]
             self.last_scraped_property_type = metadata.loc[last_row, "property_type"]
             self.alt_split_type = metadata.loc[last_row, "split_type"]
+            last_start_date = metadata.loc[last_row, "start_date"]
+            last_date_scraped = metadata.loc[last_row, "date_produced"]
             if self.alt_split_type is not None:
                 self.generate_level_sets()
             self.assign_timeframe()
@@ -905,6 +906,8 @@ class GSMLS:
             print(f" ==== SCRAPED PROPERTY TYPE: {self.last_scraped_property_type} ====")
             print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
             print(f" ==== LEVEL SET: {self.level_set} ====")
+            print(f" ==== LAST START DATE: {last_start_date} ====")
+            print(f" ==== LAST DATE PRODUCED: {last_date_scraped} ====")
 
             if first_run is not None:
                 # Block is initiated on program start
@@ -913,30 +916,38 @@ class GSMLS:
                 default_date = f'{self.last_scraped_year}-01-01 00:00:00'
                 if self.timeframe == 'historic':
                     self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                    print(f" ==== SCRAPPING HISTORICAL DATA FROM DEFAULT DATE ==== ")
                     print(f" ==== START DATE : {self.start_date} ==== ")
 
                 elif self.timeframe == 'mixed':
-                    last_start = str(metadata.loc[last_row, "start_date"])
-                    if last_start == default_date:
+                    if last_start_date == default_date:
                         self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                        print(f" ==== SCRAPPING MIXED DATA FROM DEFAULT DATE ==== ")
+                    elif self.last_scraped_county != 30 and self.last_scraped_muni != "White Twp.":
+                        self.start_date = last_start_date
+                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
                     else:
-                        self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1)
+                        self.start_date = last_date_scraped + timedelta(days=1)
+                        print(f" ==== SCRAPPING MIXED DATA FROM NEXT START DATE ==== ")
 
                     print(f" ==== START DATE : {self.start_date} ==== ")
 
                 else:
                     # Date produced is the date the program scraped that data
                     # For a current timeframe, date of last run + 1 day will be new start date
-                    try:
-                        self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1)
-                        print(f" ==== START DATE : {self.start_date} ==== ")
-                    except AssertionError:
-                        # In the event of a complete program shutdown, the class will initiate a new
-                        # run and create a start date greater than today. This will put the previous start
-                        # date if that occurs
-                        self.start_date = metadata.loc[last_row, "start_date"]
+                    if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
+                        self.start_date = last_date_scraped + timedelta(days=1)
+                        print(f" ==== SCRAPPING NEW DATA FROM NEXT START DATE ==== ")
+                    else:
+                        self.start_date = last_start_date
+                        print(f" ==== SCRAPPING NEW DATA FROM SAVED DATE ==== ")
+
+                    print(f" ==== START DATE : {self.start_date} ==== ")
 
             else:
+                # In the event of a complete program shutdown, the class will initiate a new
+                # run and create a start date greater than today. This will use the previous start
+                # date if that occurs
                 self.start_date = metadata.loc[last_row, "start_date"]
                 # self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1) Used for debugging
 
@@ -1259,7 +1270,7 @@ class GSMLS:
                 self.click_target_tab("County", driver_var)
                 GSMLS.set_county(2, county, driver_var)  # Set the county
                 counties_bar.update(1)
-                # self.save_metadata()
+                self.save_metadata()
                 kwargs["data-producer"].flush()
 
     @staticmethod
@@ -2187,8 +2198,8 @@ class GSMLS:
 
             for key, value_ in values.items():
                 metadata_value = instance_key_values[key_name]
-                print(f'Last scraped municipality: {metadata_value}')
-                print(f' ==== {key_name} CURRENT KEY AND VALUES: {key}, {value_}')
+                # print(f'Last scraped municipality: {metadata_value}')
+                # print(f' ==== {key_name} CURRENT KEY AND VALUES: {key}, {value_}')
                 if metadata_value is not None:
                     if key_name == 'municipality':
                         target = value_
@@ -2308,7 +2319,7 @@ class GSMLS:
         except AssertionError as AE:
             logger.warning(f"{AE}")
             GSMLS.kill_logger(logger, f_handler, c_handler)
-            # self.save_metadata()
+            self.save_metadata()
             raise AssertionError
 
         except (SyntaxError, DatabaseError) as e:
@@ -2319,7 +2330,7 @@ class GSMLS:
             # Press the stop button once in order for data to save
             logger.info("User has ended the program")
             GSMLS.kill_logger(logger, f_handler, c_handler)
-            # self.save_metadata()
+            self.save_metadata()
             raise KeyboardInterrupt
 
         except BaseException:
@@ -2330,7 +2341,7 @@ class GSMLS:
         finally:
             driver_var.quit()
             GSMLS.kill_logger(logger, f_handler, c_handler)
-            # self.save_metadata()
+            self.save_metadata()
 
     def airflow_gsmls_producer(self, **kwargs):
 

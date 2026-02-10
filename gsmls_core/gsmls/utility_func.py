@@ -83,7 +83,7 @@ def create_pipeline_metadata(pipeline):
         return {"downloads_completed": None, "last_mls": None}
 
 
-def create_postgres_connection(con_type: str, db_name=None):
+def create_postgres_connection(con_type: str, db_name: str):
 
     load_dotenv(get_filepath("env"))
     host = os.getenv("POSTGRES_AWS_HOST")
@@ -258,8 +258,8 @@ def create_volume_mounts(job: str):
                      'target': ['pipeline_metadata', 'consumer_backup_data']},
         'image_consumer': {'source': ['pipeline_metadata'],
                            'target': ['pipeline_metadata']},
-        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files'],
-                     'target': ['pipeline_metadata', 'parquet_files']},
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs'],
+                     'target': ['pipeline_metadata', 'parquet_files', 'logs']},
     }
 
     source_list = jobs_dict[job]['source']
@@ -309,6 +309,7 @@ def get_filepath(usecase: str):
         'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
         'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
         'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
+        'pyspark_logs': ['/workspace/logs/pyspark_logs', '/app/logs/pyspark_logs'],
         'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
                      '/workspace/pipeline_metadata', '/app/pipeline_metadata'],
         'refined_data': ['/workspace/data/stage_one/parquet_files', '/app/parquet_files'],

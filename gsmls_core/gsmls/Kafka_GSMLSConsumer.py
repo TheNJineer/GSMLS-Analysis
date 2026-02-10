@@ -8,12 +8,11 @@ import time
 from tqdm import tqdm
 from datetime import datetime
 from datetime import timedelta
-from gsmls_core.gsmls.utility_func import create_sql_engine, create_kafka_producer
-from gsmls_core.gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
+from gsmls.utility_func import create_sql_engine, create_kafka_producer
+from gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
 from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
-from gsmls_core.gsmls.RealEstateImages import RealEstateImages
+from gsmls.RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError, IntegrityError
-# from psycopg2.errors import SyntaxError
 from sqlalchemy.exc import DatabaseError
 
 
@@ -963,7 +962,7 @@ class KafkaGSMLSConsumer:
         try:
             if prop_type in ['RES', 'MUL', 'LND']:
                 # Used for RES, MUL, LND property types
-                # self.consumer.commit()
+                self.consumer.commit()
                 df = df[mask]
                 return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'LISTDATE'],
                                           keep='last').reset_index(drop=True)
@@ -1385,19 +1384,19 @@ class KafkaGSMLSConsumer:
                 if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
                     final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
                                              prop_type=prop_type, update_bar=cleaning_bar)
-                    print(f'{final_df.info()}')
-                    # final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                    # print(f'{final_df.info()}')
+                    final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
 
                 else:
-                    print(f'{slice_df.info()}')
+                    # print(f'{slice_df.info()}')
                     # Only use for prop_type == 'TAX'
-                    # slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                    slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
 
             # Catches data which is invalid for specific column or breaks the unique key constraints
             except (DataError, IntegrityError) as e:
                 print(f'{e}')
                 print(f' ==== ERROR HAS BEEN DETECTED IN BLOCK {idx}. NOW SUBMITTING DATA BY INDIVIDUAL ROW ==== ')
-                # self.submit2sql_dataerror(slice_df, topic)
+                self.submit2sql_dataerror(slice_df, topic)
 
         print(f" ==== {topic} HAS SUCCESSFULLY BEEN STORED IN POSTGRESQL ==== ")
 
@@ -1435,7 +1434,7 @@ class KafkaGSMLSConsumer:
 
         else:
             # Produce image data to MongoDB
-            RealEstateImages(df_var=df).main(**kwargs)
+            RealEstateImages(df_var=df, latest_order_num=64872924).main(**kwargs)
             print(f" ==== {table.upper()} IMAGES HAVE SUCCESSFULLY BEEN STORED IN MONGODB ====")
 
     @logger_decorator
@@ -1481,5 +1480,6 @@ class KafkaGSMLSConsumer:
 
         except (DatabaseError, SyntaxError) as e:
             print(f" ==== A SQL DATABASE ERROR HAS OCCURRED ==== \n{e}")
+            KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
             return e
 

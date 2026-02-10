@@ -1,6 +1,7 @@
 import shelve
 import os
 import re
+import sys
 import requests
 import random
 import time
@@ -14,7 +15,7 @@ from datetime import timedelta
 from pendulum import timezone
 from pprint import pformat
 from pprint import pprint
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from collections import defaultdict
 from requests_futures.sessions import FuturesSession
 from concurrent.futures import as_completed
@@ -22,8 +23,8 @@ from pymongo.errors import CursorNotFound
 from botocore.exceptions import ClientError
 from urllib3.exceptions import ProtocolError, IncompleteRead
 from requests.exceptions import ChunkedEncodingError, ConnectionError, SSLError, ProxyError, HTTPError
-from gsmls_core.gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
-from gsmls_core.gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
+from gsmls.utility_func import get_filepath, check_pipeline_metadata
 
 
 class RealEstateImages:
@@ -42,6 +43,8 @@ class RealEstateImages:
             self.database = self.check_for_database()
             self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
+        self.total_props = 0
+        self.total_images = 0
         self.isp_ips = None
         self.dead_ips = []
         self.ip_api = RealEstateImages.load_ip_api()
@@ -461,12 +464,14 @@ class RealEstateImages:
                 {"MLSNum": 1, "_id": 0}
             ).sort("MLSNum", 1).limit(batch_size)
 
+            # Turns the Mongo query cursor into a list
             mls_list = [doc["MLSNum"] for doc in cursor]
 
             if len(mls_list) >= 1:
                 for mls_num in mls_list:
                     yield mls_num
             else:
+                # No further MLSNum to provide. Breaks while query
                 break
 
     def fetch_mlsnums(self, batch_size=85):
@@ -507,13 +512,17 @@ class RealEstateImages:
         print(" ==== TESTING PROXIES ==== ")
         self.test_proxies()
 
-    def generate_duplicate_mlsnums(self, batch_size=500):
+    def generate_duplicate_mlsnums(self, cutoff_time, batch_size=500):
 
         for mls_num in self.fetch_duplicate_mlsnums(batch_size=batch_size):
+
+            assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
             count = self.collection.count_documents({"MLSNum": mls_num})
 
             if count <= 1:
-                # No duplicates, skip
+                # No duplicates for current MLSNum. Restart generator with MLSNums greater than this one
+                print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num}. RESTARTING QUERY ==== ')
+                check_pipeline_metadata("gsmls_cleaning_pipeline", "start_mls", mls_num)
                 continue
 
             # Fetch all documents for inspection / cleanup
@@ -763,8 +772,10 @@ class RealEstateImages:
                 future = session.get(url, stream=True, proxies=self.generate_proxy(logger=kwargs['logger']))
                 futures.append(future)
                 total_images += 1
+                self.total_images += 1
 
         print(f" ==== STORING {total_images} IMAGES FOR {kwargs['metadata']['mlsnum']} - {kwargs['metadata']['address']} ==== ")
+        kwargs['total_images'] = total_images
         RealEstateImages.store_in_aws(futures, files_data, **kwargs)
 
     @staticmethod
@@ -815,11 +826,13 @@ class RealEstateImages:
     def store_in_aws(futures_list, file_data, **kwargs):
 
         max_retries = 5
+        error_url_pattern = re.compile(r'url: (.*).jpg')
         retriable_errors = (ProtocolError, IncompleteRead,
                             ChunkedEncodingError, ConnectionError,
                             SSLError, ProxyError)
 
-        for future in as_completed(futures_list):
+        for _, future in zip(tqdm(range(kwargs['total_images']), desc='Images', file=sys.stderr,
+                                  dynamic_ncols=True), as_completed(futures_list)):
             for attempt in range(max_retries):
                 try:
                     response = future.result()
@@ -829,27 +842,28 @@ class RealEstateImages:
 
                     if response.status_code == 200:
                         response.raw.decode_content = True
-                        aws_response = kwargs['s3_client'].upload_fileobj(response.raw, "amzn-s3-gsmls-propertyimages",
-                                                                filepath, ExtraArgs={'Metadata': kwargs['metadata']})
+                        kwargs['s3_client'].upload_fileobj(response.raw, "amzn-s3-gsmls-propertyimages",
+                                                           filepath, ExtraArgs={'Metadata': kwargs['metadata']})
                 except ClientError as e:
+                    base_url = error_url_pattern.search(str(e)).group(1)
                     kwargs['logger'].warning(f'{e}')
+                    kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
+                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
                 except retriable_errors as e:
+                    base_url = error_url_pattern.search(str(e)).group(1)
                     if attempt < max_retries:
                         sleep_time = 2 ** attempt
-                        kwargs['logger'].warning(f' ==== {e}==== ')
+                        kwargs['logger'].warning(
+                            f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
                         kwargs['logger'].warning(f' ==== SLEEPING FOR {sleep_time} SECS THEN RETRYING ==== ')
                         time.sleep(sleep_time)
                         continue
                     kwargs['logger'].warning(f' ==== MAX TRIES REACHED. IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
-                    kwargs['logger'].warning(
-                        f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {url} ===== FILE: {filepath}")
+                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
                     break
                 else:
-                    if aws_response is False:
-                        kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
-                        kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {url} ===== FILE: {filepath}")
-                    break
 
+                    break
 
     @staticmethod
     def style_type_split(style_type, prop_data):
@@ -1043,7 +1057,7 @@ class RealEstateImages:
             # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
             # at 85 to account for time variances
             print(' ==== GATHERING DOCUMENTS FROM AGGREGATE PIPELINE ==== ')
-            for mlsnum, docs, count in self.generate_duplicate_mlsnums(batch_size=100):
+            for mlsnum, docs, count in self.generate_duplicate_mlsnums(cutoff_time, batch_size=100):
 
                 assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
                 update_operation = {
@@ -1129,7 +1143,8 @@ class RealEstateImages:
             kwargs['s3_client'] = boto3.client('s3')
 
             while True:
-                for _, record in zip(tqdm(range(85), desc='Records'), self.generate_image_docs()):
+                for _, record in zip(tqdm(range(85), desc='Records', file=sys.stderr,
+                                          dynamic_ncols=True), self.generate_image_docs()):
 
                     assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
                     # Access the Images key in the main dictionary
@@ -1146,7 +1161,7 @@ class RealEstateImages:
                     # Loop through all the image categories and access each image
                     image_list = RealEstateImages.create_image_list(image_dict)
                     self.request_image(session, image_list, **kwargs)
-
+                    self.total_props += 1
                     # Function which introduces variability between the image requests
                     RealEstateImages.sleep_variation(len(image_list))
 
@@ -1189,13 +1204,13 @@ class RealEstateImages:
 
             property_data, kwargs = RealEstateImages.create_base_document(target_row, **kwargs)
             self.collect_image_data(target_row, property_data, **kwargs)
-            # self.collection.insert_one(dict(property_data))
+            self.collection.insert_one(dict(property_data))
             print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
                   f"{property_data['MLSNum']} - {property_data['Address']}, {property_data['Town']} ==== ")
-            print(pformat(dict(property_data)))
+            # print(pformat(dict(property_data)))
 
 
-if __name__ == '__main__':
-
-    obj = RealEstateImages(latest_order_num=64872924)
-    # obj.generate_current_isps()
+# if __name__ == '__main__':
+#
+#     obj = RealEstateImages(latest_order_num=64872924)
+#     # obj.generate_current_isps()
