@@ -9,13 +9,13 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.exceptions import AirflowSkipException, AirflowFailException
+from docker.types import Mount
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
+from kafka import KafkaConsumer
 from kafka.structs import TopicPartition
 from pendulum import timezone
-from gsmls.utility_func import create_kafka_consumer, get_filepath
-from gsmls.utility_func import create_volume_mounts, cutoff_time
 
 # That guarantees the DAG loader process can find the plugins module even if
 # Airflow ignores the PYTHONPATH
@@ -47,6 +47,113 @@ prop_type_dict = {
         # 'RNT': 'rnt_properties',
         # 'TAX': 'tax_properties'
     }
+
+"""
+---------------------------------------------------------------------------------------------------------------
+                                    UTILITY FUNCTIONS COPIED FROM GSMLS.UTILITY_FUNC
+                                    NECESSARY TO BYPASS AIRFLOW DEPENDENCY ISSUES
+---------------------------------------------------------------------------------------------------------------
+"""
+
+
+def create_kafka_consumer(client_id, group_id):
+
+    return KafkaConsumer(
+        client_id=client_id,
+        group_id=group_id,
+        bootstrap_servers=["broker-1:9092", "broker-2:9092", "broker-3:9092"],
+        auto_offset_reset="earliest",
+        enable_auto_commit=False,
+        key_deserializer=lambda k: k.decode("utf-8"),
+        value_deserializer=lambda v: v.decode("utf-8"),
+        heartbeat_interval_ms=5000,  # Send heartbeats in 5s intervals
+        session_timeout_ms=45000,  # How long the consumer waits for heartbeats before considered dead: 45 secondds
+        max_poll_interval_ms=3000000,  # How long the consumer goes in between successful polls before considered "stuck": 50 minutes
+        max_poll_records=100,  # Max number of records pulled per poll request
+    )
+
+
+def create_volume_mounts(job: str):
+
+    mount_list = []
+    source_base = '/root/home/projects/GSMLS-Analysis'
+    container_base = '/app'
+    jobs_dict = {
+        'minor_job': {'source': ['pipeline_metadata'],
+                      'target': ['pipeline_metadata']},
+        'producer': {'source': ['pipeline_metadata', 'data/stage_one/downloads'],
+                     'target': ['pipeline_metadata', 'downloads']},
+        'consumer': {'source': ['pipeline_metadata', 'consumer_backup_data'],
+                     'target': ['pipeline_metadata', 'consumer_backup_data']},
+        'image_consumer': {'source': ['pipeline_metadata'],
+                           'target': ['pipeline_metadata']},
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs'],
+                     'target': ['pipeline_metadata', 'parquet_files', 'logs']},
+    }
+
+    source_list = jobs_dict[job]['source']
+    target_list = jobs_dict[job]['target']
+
+    for source, target in zip(source_list, target_list):
+        mount_obj = Mount(
+            source=os.path.join(source_base, source),
+            target=os.path.join(container_base, target),
+            type='bind'
+        )
+        mount_list.append(mount_obj)
+
+    return mount_list
+
+
+def cutoff_time(
+    days: int = 0,
+    hours: int = None,
+    minutes: int = None,
+    seconds: int = None,
+    tz: str = None,
+):
+
+    start = pendulum.now(tz=timezone(tz))
+    day = start.day
+    day_delta = day + days
+    finish = start.set(
+        day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0
+    )
+
+    assert finish > start, f" ==== CUTOFF TIME IS LESS THAN THE CURRENT DATETIME ==== "
+    print(f" ==== THE CUTOFF TIME IS : {finish} ==== ")
+
+    return finish
+
+
+def get_filepath(usecase: str):
+
+    filepaths = {
+        'backups': ['/root/home/projects/GSMLS-Analysis/consumer_backup_data',
+                    '/workspace/consumer_backup_data', '/app/consumer_backup_data'],
+        'base': ['/root/home/projects/GSMLS-Analysis', '/workspace', '/app'],
+        'downloads': ['/root/home/projects/GSMLS-Analysis/data/stage_one/downloads',
+                      '/workspace/data/stage_one/downloads', '/app/downloads'],
+        'env': ['/root/home/projects/GSMLS-Analysis/.env', '/workspace/.env', '/app/.env', '/opt/airflow/.env'],
+        'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
+        'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
+        'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
+        'pyspark_logs': ['/workspace/logs/pyspark_logs', '/app/logs/pyspark_logs'],
+        'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
+                     '/workspace/pipeline_metadata', '/app/pipeline_metadata'],
+        'refined_data': ['/workspace/data/stage_one/parquet_files', '/app/parquet_files'],
+    }
+
+    for path in filepaths[usecase]:
+        if os.path.exists(path):
+            return path
+
+    raise ValueError(f" ==== CURRENT FILEPATHS FOR {usecase} DO NOT EXIST IN THIS ENVIRONMENT ==== ")
+
+
+"""
+---------------------------------------------------------------------------------------------------------------
+"""
 
 
 def branching_decision(**kwargs):

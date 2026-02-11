@@ -1,11 +1,12 @@
 import pendulum
+import os
 from datetime import timedelta
 from datetime import datetime
+from docker.types import Mount
 from pendulum import timezone
 from airflow.sdk import task, dag
 from airflow.providers.standard.operators.python import ShortCircuitOperator
 from airflow.providers.docker.operators.docker import DockerOperator
-from gsmls_core.gsmls.utility_func import cutoff_time, get_filepath, create_volume_mounts
 
 
 # Use pendulum to restrict the cleaning to specific times of the day, when images aren't being downloaded
@@ -27,6 +28,77 @@ description = """
     will be initiated after the MongoDB_Database_Cleaning finishes and the
     GSMLS_Scrape_And_Preprocessing begins for the day. Image data will be used to train
     CNNs and object detection algorithms
+"""
+
+
+"""
+---------------------------------------------------------------------------------------------------------------
+                                    UTILITY FUNCTIONS COPIED FROM GSMLS.UTILITY_FUNC
+                                    NECESSARY TO BYPASS AIRFLOW DEPENDENCY ISSUES
+---------------------------------------------------------------------------------------------------------------
+"""
+
+
+def create_volume_mounts(job: str):
+
+    mount_list = []
+    source_base = '/root/home/projects/GSMLS-Analysis'
+    container_base = '/app'
+    jobs_dict = {
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs'],
+                     'target': ['pipeline_metadata', 'parquet_files', 'logs']},
+    }
+
+    source_list = jobs_dict[job]['source']
+    target_list = jobs_dict[job]['target']
+
+    for source, target in zip(source_list, target_list):
+        mount_obj = Mount(
+            source=os.path.join(source_base, source),
+            target=os.path.join(container_base, target),
+            type='bind'
+        )
+        mount_list.append(mount_obj)
+
+    return mount_list
+
+
+def cutoff_time(
+    days: int = 0,
+    hours: int = None,
+    minutes: int = None,
+    seconds: int = None,
+    tz: str = None,
+):
+
+    start = pendulum.now(tz=timezone(tz))
+    day = start.day
+    day_delta = day + days
+    finish = start.set(
+        day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0
+    )
+
+    assert finish > start, f" ==== CUTOFF TIME IS LESS THAN THE CURRENT DATETIME ==== "
+    print(f" ==== THE CUTOFF TIME IS : {finish} ==== ")
+
+    return finish
+
+
+def get_filepath(usecase: str):
+
+    filepaths = {
+        'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs']
+    }
+
+    for path in filepaths[usecase]:
+        if os.path.exists(path):
+            return path
+
+    raise ValueError(f" ==== CURRENT FILEPATHS FOR {usecase} DO NOT EXIST IN THIS ENVIRONMENT ==== ")
+
+
+"""
+---------------------------------------------------------------------------------------------------------------
 """
 
 

@@ -1,14 +1,14 @@
 import os
 import shelve
 import json
-from datetime import datetime
-from datetime import timedelta
-from pendulum import timezone
 from airflow.sdk import task, dag
 from airflow.utils.email import send_email
 from airflow.providers.standard.operators.python import ShortCircuitOperator, PythonOperator
 from airflow.providers.docker.operators.docker import DockerOperator
-from gsmls_core.gsmls.utility_func import get_filepath, create_volume_mounts
+from datetime import datetime
+from datetime import timedelta
+from docker.types import Mount
+from pendulum import timezone
 
 
 default_args = {
@@ -24,6 +24,57 @@ default_args = {
 description = """
     GSMLS_Emailing is a pipeline which reads metadata from the shelve file and reports on the
     status of different jobs in the GSMLS_Scrape_And_Preprocessing pipeline
+"""
+
+
+"""
+---------------------------------------------------------------------------------------------------------------
+                                    UTILITY FUNCTIONS COPIED FROM GSMLS.UTILITY_FUNC
+                                    NECESSARY TO BYPASS AIRFLOW DEPENDENCY ISSUES
+---------------------------------------------------------------------------------------------------------------
+"""
+
+
+def create_volume_mounts(job: str):
+
+    mount_list = []
+    source_base = '/root/home/projects/GSMLS-Analysis'
+    container_base = '/app'
+    jobs_dict = {
+        'minor_job': {'source': ['pipeline_metadata'],
+                      'target': ['pipeline_metadata']}
+    }
+
+    source_list = jobs_dict[job]['source']
+    target_list = jobs_dict[job]['target']
+
+    for source, target in zip(source_list, target_list):
+        mount_obj = Mount(
+            source=os.path.join(source_base, source),
+            target=os.path.join(container_base, target),
+            type='bind'
+        )
+        mount_list.append(mount_obj)
+
+    return mount_list
+
+
+def get_filepath(usecase: str):
+
+    filepaths = {
+        'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
+                     '/workspace/pipeline_metadata', '/app/pipeline_metadata']
+    }
+
+    for path in filepaths[usecase]:
+        if os.path.exists(path):
+            return path
+
+    raise ValueError(f" ==== CURRENT FILEPATHS FOR {usecase} DO NOT EXIST IN THIS ENVIRONMENT ==== ")
+
+
+"""
+---------------------------------------------------------------------------------------------------------------
 """
 
 
