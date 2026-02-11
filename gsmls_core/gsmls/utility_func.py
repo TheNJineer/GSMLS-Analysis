@@ -7,7 +7,6 @@ import pendulum
 import pandas as pd
 from pendulum import timezone
 from docker.types import Mount
-from pprint import pprint
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
