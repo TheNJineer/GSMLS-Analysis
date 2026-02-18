@@ -1436,7 +1436,7 @@ class KafkaGSMLSConsumer:
         else:
             # Produce image data to MongoDB
             if re_image_obj is not None:
-                re_image_obj.main(**kwargs)
+                re_image_obj.main(df, **kwargs)
                 print(f" ==== {table.upper()} IMAGES HAVE SUCCESSFULLY BEEN STORED IN MONGODB ====")
             else:
                 raise TypeError(" ==== REALESTATEIMAGES CLASS WAS NOT INITIATED. IMAGES NOT STORED IN MONGODB ==== ")
