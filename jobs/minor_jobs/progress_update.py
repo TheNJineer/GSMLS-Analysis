@@ -3,6 +3,7 @@ import argparse
 import os
 import shelve
 import sys
+from pprint import pprint
 from gsmls.utility_func import create_sql_engine, create_mongodb_conn
 from gsmls.utility_func import get_filepath, check_pipeline_metadata
 
@@ -52,6 +53,7 @@ def current_status():
         message = reader["gsmls_airflow_pipeline"]["progress_message"]
 
     print(f' ==== STATUS OF GSMLS PIPELINE ACQUIRED ==== ')
+    pprint(tracker)
     return tracker, message
 
 
@@ -82,6 +84,7 @@ def progress_update(prop_type, pipeline):
 
     # If the date of the data produced and today doesn't match, no data has been scraped today
     if tracker["municipality"] is not None and prev_tracker is None:
+        print(' ==== NEW STATUS TRACKER CREATED ==== ')
         check_pipeline_metadata(pipeline, key="progress_tracker", status=tracker)
         check_pipeline_metadata(pipeline, key="progress_message", status=message)
         print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
@@ -132,7 +135,7 @@ def update_tracker(data: pd.DataFrame, tracker: dict):
             pass
 
     print(f' ==== PROGRESS TRACKER UPDATED WITH MOST RECENT INFORAMTION ==== ')
-
+    pprint(tracker)
     return tracker
 
 
