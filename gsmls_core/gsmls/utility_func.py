@@ -84,11 +84,22 @@ def create_pipeline_metadata(pipeline):
 
 def create_postgres_connection(con_type: str, db_name: str):
 
-    load_dotenv(get_filepath("env"))
-    host = os.getenv("POSTGRES_AWS_HOST")
     port = 5432
-    username = os.getenv("POSTGRES_AWS_USER")
-    pw = os.getenv("POSTGRES_AWS_PASSWORD")
+
+    try:
+        host = os.getenv("POSTGRES_AWS_HOST")
+        username = os.getenv("POSTGRES_AWS_USER")
+        pw = os.getenv("POSTGRES_AWS_PASSWORD")
+
+        if host is None or username is None or pw is None:
+            raise ValueError
+    except ValueError:
+        print(" ==== ENV ERROR: POSTGRES USER INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+        print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+        load_dotenv(get_filepath("env"))
+        host = os.getenv("POSTGRES_AWS_HOST")
+        username = os.getenv("POSTGRES_AWS_USER")
+        pw = os.getenv("POSTGRES_AWS_PASSWORD")
 
     if con_type == 'jdbc':
         jdbc_url = f"jdbc:postgresql://{host}:{port}/{db_name}"
@@ -167,8 +178,17 @@ def create_mongodb_conn(remote=False):
         connection_str = "mongodb://localhost:27017/"
 
     else:
-        load_dotenv(get_filepath("env"))
-        connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
+
+        try:
+            connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
+
+            if connection_str is None:
+                raise ValueError
+        except ValueError:
+            print(" ==== ENV ERROR: MONGODB ATLAS INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+            load_dotenv(get_filepath("env"))
+            connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
 
     return MongoClient(
             host=connection_str,
@@ -188,8 +208,17 @@ def create_selenium_webdriver(remote=True):
 
     if remote is True:
         # Accessing Selenium container from Docker Compose in Digital Ocean Droplet
-        load_dotenv(get_filepath("env"))
-        ip_address = os.getenv("DIGITAL_OCEAN_IP")
+        try:
+            ip_address = os.getenv("DIGITAL_OCEAN_IP")
+
+            if ip_address is None:
+                raise ValueError
+        except ValueError:
+            print(" ==== ENV ERROR: DIGITAL OCEAN IP NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+            load_dotenv(get_filepath("env"))
+            ip_address = os.getenv("DIGITAL_OCEAN_IP")
+
 
         save_location = "/home/seluser/downloads"
         custom_user_agent = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -232,8 +261,18 @@ def create_selenium_webdriver(remote=True):
 def create_sql_engine(database: str, remote=True):
 
     if remote is True:
-        load_dotenv(get_filepath("env"))
-        connection_str = os.getenv("POSTGRES_AWS_CONN")
+
+        try:
+            connection_str = os.getenv("POSTGRES_AWS_CONN")
+
+            if connection_str is None:
+                raise ValueError
+        except ValueError:
+            print(" ==== ENV ERROR: POSTGRESS AWS INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+            load_dotenv(get_filepath("env"))
+            connection_str = os.getenv("POSTGRES_AWS_CONN")
+
         engine = create_engine(f"postgresql+psycopg2://{connection_str}:5432/{database}", echo=False)
 
     else:
