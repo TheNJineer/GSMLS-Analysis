@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
 
 # 2. Set working directory
 WORKDIR /app
-RUN mkdir logs downloads pipeline_metadata consumer_backup_data parquet_files
+RUN mkdir logs jobs downloads pipeline_metadata consumer_backup_data parquet_files
 
 # 3. Copys requirements.txt and jobs script. Install Python deps (cache-friendly)
 # Build context jobs/gsmls
