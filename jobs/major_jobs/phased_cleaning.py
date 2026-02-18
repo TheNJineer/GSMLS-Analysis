@@ -423,7 +423,7 @@ if __name__ == '__main__':
     clean_obj, target_mls_list = stage_one(filepath)
 
     if clean_obj is not None and target_mls_list is not None:
-        print(' ==== STAGE TWO CLEANING INITIATED ==== ')
+        print(' ==== STAGE TWO CLEANING INITIATED ====  ')
         stage_two(filepath, target_mls_list)
         print(' ==== STAGE THREE CLEANING INITIATED ==== ')
         stage_three(clean_obj, target_mls_list, path=filepath)

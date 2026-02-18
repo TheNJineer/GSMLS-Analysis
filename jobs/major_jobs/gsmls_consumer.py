@@ -21,7 +21,7 @@ if __name__ == "__main__":
     base_path = get_filepath('backups')
     filepath = os.path.join(base_path, f'{args.topic}.xlsx')
     retry = False
-    print(f' ==== CURRENT RETRY STATUS: {retry} ==== ')
+    print(f' ==== CURRENT RETRY STATUS: {retry} ====  ')
 
     if os.path.isfile(filepath):
         retry = True

@@ -29,7 +29,7 @@ if __name__ == "__main__":
     check_pipeline_metadata("gsmls_airflow_pipeline", key="producer")
 
     print(f'{obj.__dict__}')
-    print('==== ETL STARTED ====')
+    print(' ==== ETL STARTED ====')
     results = obj.airflow_gsmls_producer(**kwargs)
     print('==== ETL ENDED ====')
 

@@ -23,7 +23,7 @@ if __name__ == "__main__":
     else:
         # Initiates two separate objects both querying data from a MongoDB Atlas
         # and a Docker container local connection respectively
-        print(' ==== CLEANING THE MONGODB ATLAS & DOCKER DATABASE ==== ')
+        print(' ==== CLEANING THE MONGODB ATLAS & DOCKER DATABASE ====  ')
         RealEstateImages(latest_order_num=64872924).database_cleanup(cutoff_time=program_cutoff)
         RealEstateImages(latest_order_num=64872924, local=True).database_cleanup(cutoff_time=program_cutoff)
 

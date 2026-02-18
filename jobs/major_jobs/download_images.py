@@ -22,7 +22,7 @@ def ips_status():
 
     with shelve.open(metadata_path) as reader:
         result = reader["gsmls_download_images"]
-
+        print(results)
         return result["downloads_completed"]
 
 
