@@ -49,7 +49,7 @@ def starting_point(prop_type):
                 print(f' ==== BEGINNING {prop_type} SCRAPE FROM HISTORIC/MIXED TIMEFRAME ==== ')
                 return True
             elif delta.days <= 6:
-                print(f' ==== NO NEW DATA AVAILABLE FOR {prop_type} ==== ')
+                print(f' ==== NO NEW DATA AVAILABLE FOR {prop_type} ====  ')
                 return False
             else:
                 print(f' ==== NEW DATA AVAILABLE. BEGINNING {prop_type} SCRAPE ==== ')

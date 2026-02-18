@@ -47,7 +47,7 @@ def create_kafka_topics(topic: str = 'res_properties', status: bool = True):
                     print(f' ==== TOPIC {t} ALREADY EXISTS IN KAFKA ==== ')
 
             except kafka.errors.TopicAlreadyExistsError:
-                print(f' ==== TOPIC {t} ALREADY EXISTS IN KAFKA ==== ')
+                print(f' ==== TOPIC {t} ALREADY EXISTS IN KAFKA ====  ')
 
 
 if __name__ == '__main__':

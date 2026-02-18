@@ -25,7 +25,7 @@ def new_msgs_available(topic):
 
     try:
         if not partitions:
-            print(f"No partitions found for topic {topic}")
+            print(f" ==== NO PARTITIONS FOUND FOR TOPIC {topic} ==== ")
 
             raise AttributeError(f"No partitions created for {topic}")
 

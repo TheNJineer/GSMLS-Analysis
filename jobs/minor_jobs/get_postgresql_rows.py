@@ -24,7 +24,7 @@ def get_postgresql_rows(table_name_, remote=True):
     # the user to create a raw DBAPI connection which Pandas expects
     # Throws AttributeError "Engine/Connection object has no .cursor() method"
     df = pd.read_sql_query(query, con=engine)
-    print(f' ==== TOTAL ROW COUNT FROM POSTGRESQL ACQUIRED: {int(df.loc[0].values[0])} ==== ')
+    print(f' ==== TOTAL ROW COUNT FROM POSTGRESQL ACQUIRED: {int(df.loc[0].values[0])} ====  ')
 
     return {'table_name': table_name_, 'prop_count': int(df.loc[0].values[0])}
 

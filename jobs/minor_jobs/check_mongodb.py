@@ -38,7 +38,7 @@ def check_mongodb(db_name, table_name):
             break
 
     else:
-        raise ConnectionFailure(f" ==== MONGODB CONNECTION UNSUCCESSFUL ==== ")
+        raise ConnectionFailure(f" ==== MONGODB CONNECTION UNSUCCESSFUL ====  ")
 
     # Collect database information
     database = client[db_name]

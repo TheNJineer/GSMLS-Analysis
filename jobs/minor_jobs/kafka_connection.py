@@ -8,7 +8,7 @@ def check_kafka_connection():
     test_producer = create_kafka_producer(client_id='test-connection')
 
     if test_producer.bootstrap_connected() is True:
-        print(' ==== KAFKA TEST CONNECTION WAS SUCCESSFUL ==== ')
+        print(' ==== KAFKA TEST CONNECTION WAS SUCCESSFUL ====  ')
         test_producer.close()
         return True
 
