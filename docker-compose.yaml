@@ -61,7 +61,7 @@ x-airflow-common:
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8085/execution/'
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -72,7 +72,10 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     # yamllint enable rule:line-length
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
-    PYTHONPATH: /opt/airflow:/opt/airflow/dags:/opt/airflow/plugins
+    PYTHONPATH: /home/airflow/.local/lib/python3.12/site-packages:/opt/airflow:/opt/airflow/dags:/opt/airflow/plugins
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
   networks:
     - airflow_network
   volumes:
@@ -82,7 +85,14 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/.env:/opt/airflow/.env
     - ${AIRFLOW_PROJ_DIR:-.}/downloads:/opt/airflow/downloads
+    - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+    - ${AIRFLOW_PROJ_DIR:-.}/jobs:/opt/airflow/jobs
+    - ${AIRFLOW_PROJ_DIR:-.}/pipeline_metadata:/opt/airflow/pipeline_metadata
+    - ${AIRFLOW_PROJ_DIR:-.}/consumer_backup_data:/opt/airflow/consumer_backup_data
+    - /var/run/docker.sock:/var/run/docker.sock  # Mount host Docker daemon to Airflow Docker daemon to spinup isolated containers
   user: "${AIRFLOW_UID:-50000}:0"
+  env_file:
+    - .env
   depends_on:
     &airflow-common-depends-on
     redis:
