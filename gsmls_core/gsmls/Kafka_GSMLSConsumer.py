@@ -1419,7 +1419,7 @@ class KafkaGSMLSConsumer:
                 print(f'Faulty row has been found at Row {idx}.\nError has occurred: {e}')
                 continue
 
-    def submit_data(self, df, prop, table, cleaning_bar, keys_list, **kwargs):
+    def submit_data(self, df, prop, table, cleaning_bar, keys_list, re_image_obj, **kwargs):
 
         # filepath = f"/opt/airflow/downloads/test_data_{datetime.now().date()}.xlsx"
 
@@ -1430,12 +1430,16 @@ class KafkaGSMLSConsumer:
                 self.produce_images(df, prop)
 
             self.submit2sql(df, table, prop, cleaning_bar)
-            KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
+            if keys_list is not None:
+                KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
 
         else:
             # Produce image data to MongoDB
-            RealEstateImages(df_var=df, latest_order_num=64872924).main(**kwargs)
-            print(f" ==== {table.upper()} IMAGES HAVE SUCCESSFULLY BEEN STORED IN MONGODB ====")
+            if re_image_obj is not None:
+                re_image_obj.main(**kwargs)
+                print(f" ==== {table.upper()} IMAGES HAVE SUCCESSFULLY BEEN STORED IN MONGODB ====")
+            else:
+                raise TypeError(" ==== REALESTATEIMAGES CLASS WAS NOT INITIATED. IMAGES NOT STORED IN MONGODB ==== ")
 
     @logger_decorator
     def main(self, prop, retry=False, **kwargs):
@@ -1443,6 +1447,9 @@ class KafkaGSMLSConsumer:
         logger = kwargs['logger']
         topic_data = self.prop_dict[prop]
         cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
+        re_image_obj = None
+        if prop == 'IMAGES':
+            re_image_obj = RealEstateImages(latest_order_num=64872924)
         self.consumer.subscribe([topic_data['topic']])
         # Using the subscribe method instead of directly assigning a topic so Kafka can
         # handle the re-balancing of partitions for me
@@ -1456,13 +1463,14 @@ class KafkaGSMLSConsumer:
 
                 else:
                     temp_df = KafkaGSMLSConsumer.load_checkpoint(topic_data['topic'])
+                    associate_keys = None
                     retry = False
                     KafkaGSMLSConsumer.delete_checkpoint(topic_data['topic'])
 
                 if isinstance(temp_df, pd.DataFrame):
                     final_df = KafkaGSMLSConsumer.create_final_df(temp_df, prop,
                                                                   topic_data['clean_type'], cleaning_bar)
-                    self.submit_data(final_df, prop, topic_data['topic'], cleaning_bar, associate_keys)
+                    self.submit_data(final_df, prop, topic_data['topic'], cleaning_bar, associate_keys, re_image_obj)
                 else:
                     break
 
@@ -1473,6 +1481,7 @@ class KafkaGSMLSConsumer:
             logger.warning(f'{e}')
             logger.warning(f'{traceback.print_exception(e)}')
             KafkaGSMLSConsumer.checkpoint(temp_df, topic_data['topic'])
+            raise TypeError
 
         except AssertionError as e:
             print(" ==== BROKER REBALANCING OVER 50 MINUTES, ENDING PROGRAM ==== ")
