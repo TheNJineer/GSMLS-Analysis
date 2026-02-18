@@ -41,7 +41,6 @@ from pandas.errors import ParserError
 class GSMLS:
 
     def __init__(self, prop_type, remote=True, timeframe="historic"):
-        load_dotenv(get_filepath("env"))
         self.remote = remote
         self.prop_type = prop_type
         self.counties = {}
@@ -974,8 +973,18 @@ class GSMLS:
         if self.remote is False:
             username, _, pw = get_us_pw(website)
         else:
-            username = os.getenv("GSMLS_USER")
-            pw = os.getenv("GSMLS_PASSWORD")
+            try:
+                username = os.getenv("GSMLS_USER")
+                pw = os.getenv("GSMLS_PASSWORD")
+
+                if username is None or pw is None:
+                    raise ValueError
+            except ValueError:
+                print(" ==== LOGIN ERROR: GSMLS USER INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+                print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+                load_dotenv(get_filepath("env"))
+                username = os.getenv("GSMLS_USER")
+                pw = os.getenv("GSMLS_PASSWORD")
 
         GSMLS.explicit_page_load("Login", driver_var)
 

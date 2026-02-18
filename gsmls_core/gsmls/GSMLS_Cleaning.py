@@ -367,8 +367,18 @@ class GSMLSCleaning:
         """Use this function to get the mortgage rates from fred"""
 
         date = str(date_value).split(" ")[0]
-        load_dotenv(get_filepath("env"))
-        freds_api_key = os.getenv("FREDS_API")
+
+        try:
+            freds_api_key = os.getenv("FREDS_API")
+
+            if freds_api_key is None:
+                raise ValueError
+        except ValueError:
+            print(" ==== LOGIN ERROR: FREDS API KEY NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+            load_dotenv(get_filepath("env"))
+            freds_api_key = os.getenv("FREDS_API")
+
         freds_api = (f'https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key'
                      f'={freds_api_key}&file_type=json&observation_start={date}&observation_end=9999-12-31')
 
