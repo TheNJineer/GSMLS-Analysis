@@ -30,7 +30,7 @@ from gsmls.utility_func import get_filepath, check_pipeline_metadata
 class RealEstateImages:
 
     def __init__(self, db_name="realEstate", col_name="propertyImages",
-                 latest_order_num=None, local=False, remote=True, df_var=None):
+                 latest_order_num=None, local=False, remote=True):
         self.db_name = db_name
         self.col_name = col_name
         self.sql_conn = create_sql_engine("nj_tax_assessor", remote=remote)
@@ -51,7 +51,6 @@ class RealEstateImages:
         self.latest_isp_order_num = latest_order_num
         self.static_ip_status = "active"
         self.proxy_manager()
-        self.image_df = df_var
         self.image_dir = "/opt/airflow/MLS Photos"
         self.home_sections = {
             "Bathroom": re.compile(
@@ -1177,7 +1176,7 @@ class RealEstateImages:
             print(f" ==== PROGRAM COMPLETED ==== ")
             return False
 
-    def main(self, **kwargs):
+    def main(self, df_var, **kwargs):
         """
         Stores real estate property image data from a Pandas dataframe
         :return:
@@ -1186,7 +1185,7 @@ class RealEstateImages:
         image_pattern = re.compile(r"'([^']+?)'\s*:\s*'(https:\/\/img\.gsmls\.com\/imagedb\/highres\/[^']+?\.jpg)'")
         kwargs["image_pattern"] = image_pattern
 
-        for _, row_data in zip(tqdm(range(len(self.image_df)), "Row"), self.image_df.iterrows()):
+        for _, row_data in zip(tqdm(range(len(df_var)), "Row"), df_var.iterrows()):
 
             target_row = row_data[1]
             # target_date, condition = self.sql_query(target_row)
