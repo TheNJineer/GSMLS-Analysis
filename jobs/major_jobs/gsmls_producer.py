@@ -1,7 +1,9 @@
 import argparse
+import pendulum
 import sys
 from gsmls.GSMLS import GSMLS
 from gsmls.utility_func import check_pipeline_metadata, cutoff_time
+from pendulum import timezone
 
 
 def parse_args():
@@ -26,7 +28,10 @@ if __name__ == "__main__":
     print(f' ==== CURRENT PROP TYPE: {args.prop_type}')
 
     obj = GSMLS(args.prop_type)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key="producer")
+    timestamp = str(pendulum.now(tz=timezone("America/New_York")))
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="producer")
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                            key="timestamp", status=timestamp)
 
     print(f'{obj.__dict__}')
     print(' ==== ETL STARTED ====')
@@ -41,6 +46,7 @@ if __name__ == "__main__":
     else:
         # Save results in s shelf file to be shared across volumes
         print(f' === ETL FINISHED ==== ')
-        check_pipeline_metadata("gsmls_airflow_pipeline", key="producer", status=results)
+        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                                key="producer", status=results)
         sys.exit(0)
 
