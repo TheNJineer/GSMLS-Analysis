@@ -37,6 +37,7 @@ if __name__ == "__main__":
             retry = True
             continue
         else:
-            check_pipeline_metadata("gsmls_airflow_pipeline", key="data_consumer", status=results)
+            check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                                    key="data_consumer", status=results)
             sys.exit(0)
 
