@@ -42,15 +42,15 @@ def create_progress_tracker():
     return progress_tracker
 
 
-def current_status():
+def current_status(prop_type):
 
     data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
 
     print(f' ==== CHECKING CURRENT STATUS OF GSMLS PIPELINE ==== ')
     with shelve.open(metadata_path) as reader:
-        tracker = reader["gsmls_airflow_pipeline"]["progress_tracker"]
-        message = reader["gsmls_airflow_pipeline"]["progress_message"]
+        tracker = reader["gsmls_airflow_pipeline"][prop_type]["progress_tracker"]
+        message = reader["gsmls_airflow_pipeline"][prop_type]["progress_message"]
 
     print(f' ==== STATUS OF GSMLS PIPELINE ACQUIRED ==== ')
     pprint(tracker)
@@ -75,7 +75,7 @@ def progress_update(prop_type, pipeline):
     database = client['realEstate']
     num_of_docs_ = database['propertyImages'].count_documents({})
 
-    prev_tracker, prev_message = current_status()
+    prev_tracker, prev_message = current_status(prop_type)
     tracker = create_progress_tracker()
     tracker["documents"] = num_of_docs_
     df = query_property_data(prop_type, engine)
@@ -85,12 +85,12 @@ def progress_update(prop_type, pipeline):
     # If the date of the data produced and today doesn't match, no data has been scraped today
     if tracker["municipality"] is not None and prev_tracker is None:
         print(' ==== NEW STATUS TRACKER CREATED ==== ')
-        check_pipeline_metadata(pipeline, key="progress_tracker", status=tracker)
-        check_pipeline_metadata(pipeline, key="progress_message", status=message)
+        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_tracker", status=tracker)
+        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_message", status=message)
         print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
     elif (tracker["municipality"] != prev_tracker["municipality"]) and (tracker["county"] != prev_tracker["county"]):
-        check_pipeline_metadata(pipeline, key="progress_tracker", status=tracker)
-        check_pipeline_metadata(pipeline, key="progress_message", status=message)
+        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_tracker", status=tracker)
+        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_message", status=message)
         print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
 
 
