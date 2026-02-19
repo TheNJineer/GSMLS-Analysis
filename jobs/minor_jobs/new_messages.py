@@ -8,6 +8,7 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='Check for new messages in TopicPartitons')
     parser.add_argument("--topic", required=True)
+    parser.add_argument("--prop_type", required=True)
 
     # return parser.parse_args(['--topic', 'res_properties'])
     return parser.parse_args()
@@ -68,6 +69,6 @@ if __name__ == '__main__':
 
     args = parse_args()
     status = new_msgs_available(args.topic)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key="new_msgs", status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="new_msgs", status=status)
     sys.exit(0)
 
