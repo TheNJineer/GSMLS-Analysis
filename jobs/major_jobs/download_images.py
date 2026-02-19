@@ -31,23 +31,28 @@ if __name__ == "__main__":
     args = parse_args()
     program_cutoff = cutoff_time(hours=7, minutes=30, tz="America/New_York")
     status = ips_status()
+    obj = RealEstateImages(latest_order_num=64872924)
 
-    if bool(args.local) is False and status != "Expired":
+    if args.local == 'false' and status != "Expired":
         if status is not False:
-            check_pipeline_metadata("gsmls_airflow_pipeline", key="image_consumer")
+            check_pipeline_metadata("gsmls_download_images", prop_type=None, key="downloads_completed")
 
-        obj = RealEstateImages(latest_order_num=64872924)
+        # Reset the last_mls key to account for newly input data in MongoDB
+        check_pipeline_metadata("gsmls_download_images", prop_type=None, key="last_mls")
         results = obj.download_images_main(cutoff_time=program_cutoff)
-        check_pipeline_metadata("gsmls_airflow_pipeline", key="image_consumer", status=results)
+        check_pipeline_metadata("gsmls_download_images", prop_type=None, key="downloads_completed", status=results)
         print(f" ==== TOTAL PROPERTIES QUERIED: {obj.total_props} ==== ")
         print(f" ==== TOTAL IMAGES DOWNLOADED: {obj.total_images} ==== ")
         sys.exit(0)
 
-    elif bool(args.local) is True and status != "Expired":
+    elif args.local == 'true' and status != "Expired":
         # Initiates two separate objects both querying data from a MongoDB Atlas
-        # and a Docker container local connection respectively
-        RealEstateImages().download_images_main(cutoff_time=program_cutoff)
-        RealEstateImages(local=True).download_images_main(cutoff_time=program_cutoff)
+        # and a Docker container local connection respectively. Make async
+        results = obj.download_images_main(cutoff_time=program_cutoff)
+        results2 = (RealEstateImages(latest_order_num=64872924, local=True).
+                    download_images_main(cutoff_time=program_cutoff))
+        check_pipeline_metadata("gsmls_download_images", prop_type=None,
+                                key="downloads_completed", status=(results, results2))
         sys.exit(0)
 
     else:
