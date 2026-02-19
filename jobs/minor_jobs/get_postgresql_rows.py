@@ -8,6 +8,7 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='Query amount of data available in PostgresSQL table')
     parser.add_argument("--table_name", required=True)
+    parser.add_argument("--prop_type", required=True)
     parser.add_argument("--key", required=True)
 
     # return parser.parse_args(['--table_name', 'res_properties', "--key", "postgresql_start"])
@@ -33,6 +34,6 @@ if __name__ == '__main__':
 
     args = parse_args()
     status = get_postgresql_rows(args.table_name)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key=args.key, status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key=args.key, status=status)
     sys.exit(0)
 
