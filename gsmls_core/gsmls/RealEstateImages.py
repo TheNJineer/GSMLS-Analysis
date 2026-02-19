@@ -483,11 +483,11 @@ class RealEstateImages:
 
         if last_mls is not None:
             print(f' ==== STARTING IMAGE DOWNLOAD FROM MLSNUM {last_mls} ==== ')
-            match["MLSNum"] = {"$lt": last_mls}
+            match["MLSNum"] = {"$gt": last_mls}
 
         pipeline = [
             {"$match": match},
-            {"$sort": {"MLSNum": -1}},
+            {"$sort": {"MLSNum": 1}},
             {"$limit": batch_size},
         ]
 
@@ -529,7 +529,8 @@ class RealEstateImages:
 
             # Yield or process: MLSNum, docs, count
             yield mls_num, docs, count
-            check_pipeline_metadata("gsmls_cleaning_pipeline", "start_mls", mls_num)
+            check_pipeline_metadata("gsmls_cleaning_pipeline",
+                                    prop_type=None, key="start_mls", status=mls_num)
 
     def generate_image_docs(self):
 
@@ -543,8 +544,7 @@ class RealEstateImages:
             for doc in batch:
                 mls_num = doc["MLSNum"]
                 yield doc
-
-                check_pipeline_metadata("gsmls_download_images", "last_mls", mls_num)
+                check_pipeline_metadata("gsmls_download_images", prop_type=None, key="last_mls", status=mls_num)
 
     def generate_proxy(self, logger=None):
 
@@ -595,7 +595,7 @@ class RealEstateImages:
 
             return result[key]
         except KeyError:
-            check_pipeline_metadata(pipeline, key=key)
+            check_pipeline_metadata(pipeline, prop_type=None, key=key)
             with shelve.open(metadata_path) as reader:
                 result = reader[pipeline]
 
@@ -1040,7 +1040,8 @@ class RealEstateImages:
         Cleanup the database with the following actions:
             - Deleting duplicate documents
             - Update the date field to ISODate or Datetime formats
-            - Delete the "Image_Downloaded" field if it exists
+            - Delete the "Image_Downloaded" field if it exists. Will be replaced with "Images_Downloaded
+            in a different process
             - Use title case for the Address, Town and Condition fields
             - Make the _id field the MLSNum
 
@@ -1117,8 +1118,10 @@ class RealEstateImages:
         except AssertionError:
             logger.info(f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== ")
             logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
+            return False
         else:
             logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
+            return True
 
     @logger_decorator
     def download_images_main(self, cutoff_time, **kwargs):
@@ -1174,7 +1177,7 @@ class RealEstateImages:
             return False
         else:
             print(f" ==== PROGRAM COMPLETED ==== ")
-            return False
+            return True
 
     def main(self, df_var, **kwargs):
         """
