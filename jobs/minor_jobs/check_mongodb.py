@@ -11,6 +11,7 @@ def parse_args():
     parser.add_argument("--db_name", required=True)
     parser.add_argument("--table_name", required=True)
     parser.add_argument("--key", required=True)
+    parser.add_argument("--prop_type", required=True)
 
     # return parser.parse_args(['--db_name', 'realEstate',
     #                           "--table_name", "propertyImages",
@@ -53,6 +54,6 @@ if __name__ == '__main__':
 
     args = parse_args()
     status = check_mongodb(args.db_name, args.table_name)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key=args.key, status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key=args.key, status=status)
     sys.exit(0)
 
