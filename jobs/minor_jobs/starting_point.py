@@ -63,8 +63,9 @@ def starting_point(prop_type):
 if __name__ == '__main__':
 
     args = parse_args()
+    # Creates the meta-dictionary for this prop type if there isn't one already
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="start_point")
     status = starting_point(args.prop_type)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key="prop_type", status=args.prop_type)
-    check_pipeline_metadata("gsmls_airflow_pipeline", key="start_point", status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="start_point", status=status)
     sys.exit(0)
 
