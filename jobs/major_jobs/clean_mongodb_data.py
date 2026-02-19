@@ -1,6 +1,6 @@
 import argparse
 from gsmls.RealEstateImages import RealEstateImages
-from gsmls.utility_func import cutoff_time
+from gsmls.utility_func import cutoff_time, check_pipeline_metadata
 
 
 def parse_args():
@@ -16,14 +16,19 @@ if __name__ == "__main__":
 
     args = parse_args()
     program_cutoff = cutoff_time(hours=4, minutes=35, tz="America/New_York")
+    obj = RealEstateImages(latest_order_num=64872924)
 
-    if bool(args.local) is False:
+    if args.local == 'false':
         print(' ==== CLEANING THE MONGODB ATLAS DATABASE ==== ')
-        RealEstateImages(latest_order_num=64872924).database_cleanup(cutoff_time=program_cutoff)
+        results = obj.database_cleanup(cutoff_time=program_cutoff)
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None,
+                                key="duplicate_clean_complete", status=results)
     else:
         # Initiates two separate objects both querying data from a MongoDB Atlas
         # and a Docker container local connection respectively
         print(' ==== CLEANING THE MONGODB ATLAS & DOCKER DATABASE ====  ')
-        RealEstateImages(latest_order_num=64872924).database_cleanup(cutoff_time=program_cutoff)
-        RealEstateImages(latest_order_num=64872924, local=True).database_cleanup(cutoff_time=program_cutoff)
+        results = obj.database_cleanup(cutoff_time=program_cutoff)
+        results2 = RealEstateImages(latest_order_num=64872924, local=True).database_cleanup(cutoff_time=program_cutoff)
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None,
+                                key="duplicate_clean_complete", status=(results, results2))
 
