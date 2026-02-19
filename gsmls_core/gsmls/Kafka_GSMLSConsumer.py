@@ -985,7 +985,7 @@ class KafkaGSMLSConsumer:
 
             else:
                 # Used for property images
-                # self.consumer.commit()
+                self.consumer.commit()
                 return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', ],
                                           keep='last').reset_index(drop=True)
 
