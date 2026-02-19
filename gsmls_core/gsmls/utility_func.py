@@ -32,46 +32,60 @@ class TqdmLoggingHandler(logging.Handler):
         tqdm.write(msg)
 
 
-def check_pipeline_metadata(pipeline, key=None, status=None):
+def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=None):
     data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
 
+    # Metadata file exists
     if os.path.exists(metadata_path):
         with shelve.open(metadata_path, writeback=True) as data_file:
             pipelines = list(data_file.keys())
 
             if pipeline in pipelines:
+                if pipeline == 'gsmls_airflow_pipeline':
+                    if data_file.get(prop_type, None):
+                        data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
+                        print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
+
                 if status is not None:
-                    data_file[pipeline][key] = status
+                    if pipeline == 'gsmls_airflow_pipeline':
+                        data_file[pipeline][prop_type][key] = status
+                    else:
+                        data_file[pipeline][key] = status
                     data_file.sync()
-                    # print(f" ==== SAVING {key} STATUS OF {pipeline} TO {status} ==== ")
-                    # print(f' ==== CURRENT STATUS OF {pipeline} ==== \n')
-                    # pprint(data_file[pipeline])
+
                 else:
-                    data_file[pipeline][key] = False
+                    if pipeline == 'gsmls_airflow_pipeline':
+                        data_file[pipeline][prop_type][key] = False
+                    else:
+                        data_file[pipeline][key] = status
                     data_file.sync()
-                    # print(f" ==== RE-WRITING {key} STATUS OF {pipeline} TO {status} ==== ")
-                    # print(f' ==== CURRENT STATUS OF {pipeline} ==== \n')
-                    # pprint(data_file[pipeline])
+
             else:
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
+    # No metadata file exists
     else:
         with shelve.open(metadata_path, writeback=True) as data_file:
-            data_file[pipeline] = create_pipeline_metadata(pipeline)
-            data_file[pipeline][key] = status
-            print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
+            if pipeline == 'gsmls_airflow_pipeline':
+                data_file[pipeline][prop_type][key] = create_pipeline_metadata(pipeline)
+                data_file[pipeline][prop_type][key] = status
+                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
+            else:
+                data_file[pipeline] = create_pipeline_metadata(pipeline)
+                data_file[pipeline][key] = status
+                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
 
 def create_pipeline_metadata(pipeline):
 
     if pipeline == "gsmls_airflow_pipeline":
-        return {"prop_type": "RES", "start_point": False, "new_msgs": False,
+        return {"start_point": False, "new_msgs": False,
                 "kafka_connection": False, "producer": False, "data_consumer": False,
                 "image_consumer": False, "mongodb_start": None, "mongodb_final": None,
                 "postgresql_start": None, "postgresql_final": None, "progress_message": None,
-                "progress_tracker": None}
+                "progress_tracker": None, "timestamp": None}
 
     elif pipeline == "gsmls_cleaning_pipeline":
 
