@@ -222,6 +222,12 @@ class GSMLS:
 
                     # Start scraping date from the day after the last scraped day
                     return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
+                elif idx == 1 and self.timeframe == 'current':
+                    # Correctly catches edge case scenerio where idx == 0 is 'mixed' and the data scraped
+                    # straddles the previous and current year. idx == 1 will then try to rescrape data
+                    # for the current year
+                    raise AssertionError(' ==== POTENTIAL FOR DUPLICATE DATA. ENDING PROGRAM ==== ')
+
                 else:
                     return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
