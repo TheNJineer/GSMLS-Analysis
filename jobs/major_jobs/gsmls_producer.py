@@ -26,27 +26,31 @@ if __name__ == "__main__":
     }
 
     print(f' ==== CURRENT PROP TYPE: {args.prop_type}')
-
-    obj = GSMLS(args.prop_type)
     timestamp = str(pendulum.now(tz=timezone("America/New_York")))
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="producer")
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
                             key="timestamp", status=timestamp)
 
-    print(f'{obj.__dict__}')
-    print(' ==== ETL STARTED ====')
-    results = obj.airflow_gsmls_producer(**kwargs)
-    print('==== ETL ENDED ====')
+    try:
+        obj = GSMLS(args.prop_type)
 
-    if not isinstance(results, int):
-        # Need to be able to log something here
-        print(f' === ETL FINISHED INCORRECTLY. ERROR OCCURRED SAVING INTO SQL DATABASE ==== ')
-        print(results)
-        sys.exit(1)
-    else:
-        # Save results in s shelf file to be shared across volumes
-        print(f' === ETL FINISHED ==== ')
+        print(f'{obj.__dict__}')
+        print(' ==== ETL STARTED ====')
+        results = obj.airflow_gsmls_producer(**kwargs)
+
+        if not isinstance(results, int):
+            # Need to be able to log something here
+            print(f' === ETL FINISHED INCORRECTLY. ERROR OCCURRED SAVING INTO SQL DATABASE ==== ')
+            print(results)
+            sys.exit(1)
+        else:
+            # Save results in s shelf file to be shared across volumes
+            print(f' === ETL FINISHED ==== ')
+            check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                                    key="producer", status=results)
+            sys.exit(0)
+    except AssertionError as e:
+        print(f'{e}')
         check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                key="producer", status=results)
-        sys.exit(0)
+                                key="producer", status=0)
 

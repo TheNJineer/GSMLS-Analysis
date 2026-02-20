@@ -974,7 +974,8 @@ class GSMLS:
                 self.start_date = metadata.loc[last_row, "start_date"]
                 # self.start_date = metadata.loc[last_row, "date_produced"] + timedelta(days=1) Used for debugging
 
-            assert datetime.now(tz=timezone("America/New_York")) > self.true_date()
+            assert datetime.now(tz=timezone("America/New_York")) > self.true_date(), \
+                " ==== START DATE IS GREATER THAN TODAYS DATE. NO NEW DATA TO SCRAPE ==== "
 
             # All data from last run was scraped. Reset the value to scrape all new data
             if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
