@@ -67,14 +67,19 @@ class GSMLS:
     ______________________________________________________________________________________________________________
     """
 
-    def assign_timeframe(self):
+    def assign_timeframe(self, idx=None, year=None):
 
-        if self.last_scraped_year == datetime.now().year - 1:
-            self.timeframe = "mixed"
-        elif self.last_scraped_year == datetime.now().year:
-            self.timeframe = "current"
+        if idx is None:
+            target_year = self.last_scraped_year
         else:
-            pass
+            target_year = year
+
+        if target_year == datetime.now().year - 1:
+            self.timeframe = "mixed"
+        elif target_year == datetime.now().year:
+            self.timeframe = "current"
+        elif target_year > datetime.now().year:
+            raise AssertionError(' ==== TARGET YEAR IS GREATER THAN THE CURRENT YEAR ==== ')
 
     def change_instance_var(self, key_name):
 
@@ -197,21 +202,28 @@ class GSMLS:
 
         print(" ==== STATE DICTIONARY COMPLETED. DATA WILL BE SCRAPED SHORTLY ==== ")
 
-    def create_timeframe_dict(self, year, split_type=None, start_month=None):
+    def create_timeframe_dict(self, year, split_type=None, start_month=None, idx=None):
 
         if split_type is None:
+
+            if idx > 0:
+                self.assign_timeframe(idx, year)
+
             if self.timeframe == "historic":
                 return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
             else:
-                # Get latest scraped date
-                start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
-                stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
-                start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
-                stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
+                if idx == 0:
+                    # Get latest scraped date
+                    start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
+                    stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+                    start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
+                    stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
 
-                # Start scraping date from the day after the last scraped day
-                return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
+                    # Start scraping date from the day after the last scraped day
+                    return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
+                else:
+                    return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
         # The yearly results returned too much data. Split the data up into quarters
         elif split_type == 'quarterly':
@@ -928,8 +940,11 @@ class GSMLS:
                     elif self.last_scraped_county == 30 and self.last_scraped_muni != "White Twp.":
                         self.start_date = last_start_date
                         print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
+                    elif self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == 'No':
+                        self.start_date = last_start_date
+                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
                     else:
-                        self.start_date = last_start_date + timedelta(days=1)
+                        self.start_date = last_date_scraped + timedelta(days=1)
                         print(f" ==== SCRAPPING MIXED DATA FROM NEXT START DATE ==== ")
 
                     print(f" ==== START DATE : {self.start_date} ==== ")
@@ -2295,15 +2310,15 @@ class GSMLS:
             # Step 3: Create the time periods for which to search for data
             years = range(1995, datetime.now().year + 1)
             with tqdm(total=len(years), desc="Years", colour="red") as year_bar:
-                for year in self.value_generator('year', year_bar, years):
+                for idx, year in enumerate(self.value_generator('year', year_bar, years)):
 
                     time_periods = self.create_timeframe_dict(year)
                     logger.info(f'Timeframe: {time_periods}')
 
-                    if year != self.start_date.year:
-                        default_date = f'{year}-01-01 00:00:00'
-                        self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
-                        print(' ==== CORRECT YEAR WAS NOT SET. RESETTING IN MAIN FUNCTION ==== ')
+                    # if year != self.start_date.year:
+                    #     default_date = f'{year}-01-01 00:00:00'
+                    #     self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                    #     print(' ==== CORRECT YEAR WAS NOT SET. RESETTING IN MAIN FUNCTION ==== ')
 
                     with tqdm(total=len(time_periods), desc="Qtr", colour="blue", position=1) as quarters_bar:
                         for qtr, date_range in time_periods.items():
@@ -2332,6 +2347,7 @@ class GSMLS:
             logger.warning(f"{AE}")
             GSMLS.kill_logger(logger, f_handler, c_handler)
             self.save_metadata()
+            GSMLS.sign_out(driver_var)
             raise AssertionError
 
         except (SyntaxError, DatabaseError) as e:
