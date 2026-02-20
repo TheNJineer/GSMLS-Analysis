@@ -63,13 +63,21 @@ def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=No
                     data_file.sync()
 
             else:
-                data_file[pipeline] = create_pipeline_metadata(pipeline)
-                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
+                if pipeline == 'gsmls_airflow_pipeline':
+                    data_file.setdefault(pipeline, {})
+                    data_file[pipeline].setdefault(prop_type, {})
+                    data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
+                    print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
+                else:
+                    data_file[pipeline] = create_pipeline_metadata(pipeline)
+                    print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
     # No metadata file exists
     else:
         with shelve.open(metadata_path, writeback=True) as data_file:
             if pipeline == 'gsmls_airflow_pipeline':
+                data_file.setdefault(pipeline, {})
+                data_file[pipeline].setdefault(prop_type, {})
                 data_file[pipeline][prop_type][key] = create_pipeline_metadata(pipeline)
                 data_file[pipeline][prop_type][key] = status
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
