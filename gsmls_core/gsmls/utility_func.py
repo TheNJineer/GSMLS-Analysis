@@ -44,6 +44,7 @@ def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=No
             if pipeline in pipelines:
                 if pipeline == 'gsmls_airflow_pipeline':
                     if data_file.get(prop_type, None):
+                        data_file[pipeline].setdefault(prop_type, {})
                         data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
                         print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
 
