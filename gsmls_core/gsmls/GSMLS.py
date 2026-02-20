@@ -2312,7 +2312,7 @@ class GSMLS:
             with tqdm(total=len(years), desc="Years", colour="red") as year_bar:
                 for idx, year in enumerate(self.value_generator('year', year_bar, years)):
 
-                    time_periods = self.create_timeframe_dict(year)
+                    time_periods = self.create_timeframe_dict(year, idx=idx)
                     logger.info(f'Timeframe: {time_periods}')
 
                     # if year != self.start_date.year:
