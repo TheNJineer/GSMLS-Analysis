@@ -922,11 +922,14 @@ class GSMLS:
                     if last_start_date == default_date:
                         self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
                         print(f" ==== SCRAPPING MIXED DATA FROM DEFAULT DATE ==== ")
-                    elif self.last_scraped_county != 30 and self.last_scraped_muni != "White Twp.":
+                    elif self.last_scraped_county != 30:
+                        self.start_date = last_start_date
+                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
+                    elif self.last_scraped_county == 30 and self.last_scraped_muni != "White Twp.":
                         self.start_date = last_start_date
                         print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
                     else:
-                        self.start_date = last_date_scraped + timedelta(days=1)
+                        self.start_date = last_start_date + timedelta(days=1)
                         print(f" ==== SCRAPPING MIXED DATA FROM NEXT START DATE ==== ")
 
                     print(f" ==== START DATE : {self.start_date} ==== ")
