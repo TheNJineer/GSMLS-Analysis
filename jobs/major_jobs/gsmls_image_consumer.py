@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_status
 
 
 def parse_args():
@@ -26,17 +26,23 @@ if __name__ == "__main__":
         retry = True
         print(f' ==== BACKUP DATA EXISTS: {retry} ==== ')
 
-    # Add logger back into the class script
-    img_consumer = KafkaGSMLSConsumer()
+    producer_status = current_status('gsmls_airflow_pipeline', args.prop_type, 'producer')
+    img_consumer = KafkaGSMLSConsumer()  # Add logger back into the class script
 
-    while True:
-        results = img_consumer.main(prop="IMAGES", logger=None, retry=retry)
+    if producer_status is False:
+        while True:
+            results = img_consumer.main(prop="IMAGES", logger=None, retry=retry)
 
-        if not isinstance(results, bool):
-            # Need to be able to log something here
-            sys.exit(1)
-        else:
-            check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                    key="image_consumer", status=results)
-            sys.exit(0)
+            if not isinstance(results, bool):
+                # Need to be able to log something here
+                sys.exit(1)
+            else:
+                check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                                        key="image_consumer", status=results)
+                sys.exit(0)
+    else:
+        print(' ==== GSMLS PRODUCER ENDED PRE-MATURELY. NO NEW DATA TO BE CONSUMED ==== ')
+        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
+                                key="image_consumer", status=True)
+
 
