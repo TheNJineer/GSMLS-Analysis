@@ -467,8 +467,10 @@ class RealEstateImages:
             mls_list = [doc["MLSNum"] for doc in cursor]
 
             if len(mls_list) >= 1:
-                for mls_num in mls_list:
-                    yield mls_num
+                print(' ==== GENERATING LIST OF NEW DUPLICATE DOCUMENTS ==== ')
+                yield mls_list
+                # for mls_num in mls_list:
+                #     yield mls_num
             else:
                 # No further MLSNum to provide. Breaks while query
                 break
@@ -513,24 +515,27 @@ class RealEstateImages:
 
     def generate_duplicate_mlsnums(self, cutoff_time, batch_size=500):
 
-        for mls_num in self.fetch_duplicate_mlsnums(batch_size=batch_size):
+        for mls_list in self.fetch_duplicate_mlsnums(batch_size=batch_size):
 
-            assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
-            count = self.collection.count_documents({"MLSNum": mls_num})
+            for mls_num in mls_list:
 
-            if count <= 1:
-                # No duplicates for current MLSNum. Restart generator with MLSNums greater than this one
-                print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num}. RESTARTING QUERY ==== ')
-                check_pipeline_metadata("gsmls_cleaning_pipeline", "start_mls", mls_num)
-                continue
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
+                count = self.collection.count_documents({"MLSNum": mls_num})
 
-            # Fetch all documents for inspection / cleanup
-            docs = list(self.collection.find({"MLSNum": mls_num}))
+                if count <= 1:
+                    # No duplicates for current MLSNum. Restart generator with MLSNums greater than this one
+                    print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num} ==== ')
+                    check_pipeline_metadata("gsmls_cleaning_pipeline",
+                                            prop_type=None, key="start_mls", status=mls_num)
+                    continue
 
-            # Yield or process: MLSNum, docs, count
-            yield mls_num, docs, count
-            check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                    prop_type=None, key="start_mls", status=mls_num)
+                # Fetch all documents for inspection / cleanup
+                docs = list(self.collection.find({"MLSNum": mls_num}))
+
+                # Yield or process: MLSNum, docs, count
+                yield mls_num, docs, count
+                check_pipeline_metadata("gsmls_cleaning_pipeline",
+                                        prop_type=None, key="start_mls", status=mls_num)
 
     def generate_image_docs(self):
 
