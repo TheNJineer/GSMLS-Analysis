@@ -53,14 +53,15 @@ def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=No
                         data_file[pipeline][prop_type][key] = status
                     else:
                         data_file[pipeline][key] = status
-                    data_file.sync()
 
                 else:
                     if pipeline == 'gsmls_airflow_pipeline':
                         data_file[pipeline][prop_type][key] = False
                     else:
                         data_file[pipeline][key] = status
-                    data_file.sync()
+
+                data_file.sync()
+                time.sleep(0.3)
 
             else:
                 if pipeline == 'gsmls_airflow_pipeline':
@@ -71,6 +72,9 @@ def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=No
                 else:
                     data_file[pipeline] = create_pipeline_metadata(pipeline)
                     print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
+
+                data_file.sync()
+                time.sleep(0.3)
 
     # No metadata file exists
     else:
@@ -85,6 +89,9 @@ def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=No
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
                 data_file[pipeline][key] = status
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
+
+            data_file.sync()
+            time.sleep(0.3)
 
 
 def create_pipeline_metadata(pipeline):
