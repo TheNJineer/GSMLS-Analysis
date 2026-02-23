@@ -526,7 +526,7 @@ class RealEstateImages:
                     # No duplicates for current MLSNum. Restart generator with MLSNums greater than this one
                     print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num} ==== ')
                     check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                            prop_type=None, key="start_mls", status=mls_num)
+                                            prop_type_=None, key_="start_mls", status_=mls_num)
                     continue
 
                 # Fetch all documents for inspection / cleanup
@@ -535,7 +535,7 @@ class RealEstateImages:
                 # Yield or process: MLSNum, docs, count
                 yield mls_num, docs, count
                 check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                        prop_type=None, key="start_mls", status=mls_num)
+                                        prop_type_=None, key_="start_mls", status_=mls_num)
 
     def generate_image_docs(self):
 
@@ -549,7 +549,8 @@ class RealEstateImages:
             for doc in batch:
                 mls_num = doc["MLSNum"]
                 yield doc
-                check_pipeline_metadata("gsmls_download_images", prop_type=None, key="last_mls", status=mls_num)
+                check_pipeline_metadata("gsmls_download_images", prop_type_=None,
+                                        key_="last_mls", status_=mls_num)
 
     def generate_proxy(self, logger=None):
 
@@ -600,7 +601,7 @@ class RealEstateImages:
 
             return result[key]
         except KeyError:
-            check_pipeline_metadata(pipeline, prop_type=None, key=key)
+            check_pipeline_metadata(pipeline, prop_type_=None, key_=key)
             with shelve.open(metadata_path) as reader:
                 result = reader[pipeline]
 
