@@ -5,7 +5,7 @@ import time
 import shelve
 import pendulum
 import pandas as pd
-from filelock import Filelock, Timeout
+from filelock import FileLock, Timeout
 from pendulum import timezone
 from docker.types import Mount
 from selenium import webdriver
@@ -72,7 +72,7 @@ def check_pipeline_metadata(pipeline_, prop_type_: str | None, key_=None, status
     data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
     filelock_path = f'{metadata_path}.lock'
-    lock = Filelock(filelock_path, timeout=120)
+    lock = FileLock(filelock_path, timeout=120)
     vars_ = {
         'data_file': None,
         'key': key_,
