@@ -5,13 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 requires-python = ">=3.10"
 name = "gsmls"
-version = "0.10.9"
+version = "0.11.0"
 description = "Core GSMLS packages to be used in the Airflow pipeline"
 
 dependencies = [
     "beautifulsoup4==4.14.3",
+    "boto3==1.42.29",
+    "docker==7.1.0",
+    "filelock==3.24.3",
     "kafka-python==2.2.15",
     "numpy>=1.26.4,<2.0.0",
+    "openpyxl==3.1.5",
     "pandas==2.3.3",
     "pendulum==3.2.0",
     "psycopg2-binary",
@@ -19,13 +23,10 @@ dependencies = [
     "pymongo==4.15.1",
     "pyspark==3.5.0",
     "requests==2.32.5",
+    "requests-futures==1.0.2",
     "selenium==4.13.0",
     "SQLAlchemy==2.0.43",
     "tqdm==4.67.1",
     "xlrd==2.0.2",
-    "openpyxl==3.1.5",
-    "boto3==1.42.29",
-    "docker==7.1.0",
-    "requests-futures==1.0.2"
 ]
 
