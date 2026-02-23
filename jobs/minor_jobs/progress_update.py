@@ -85,12 +85,12 @@ def progress_update(prop_type, pipeline):
     # If the date of the data produced and today doesn't match, no data has been scraped today
     if tracker["municipality"] is not None and prev_tracker is None:
         print(' ==== NEW STATUS TRACKER CREATED ==== ')
-        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_tracker", status=tracker)
-        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_message", status=message)
+        check_pipeline_metadata(pipeline, prop_type_=prop_type, key_="progress_tracker", status_=tracker)
+        check_pipeline_metadata(pipeline, prop_type_=prop_type, key_="progress_message", status_=message)
         print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
     elif (tracker["municipality"] != prev_tracker["municipality"]) and (tracker["county"] != prev_tracker["county"]):
-        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_tracker", status=tracker)
-        check_pipeline_metadata(pipeline, prop_type=prop_type, key="progress_message", status=message)
+        check_pipeline_metadata(pipeline, prop_type_=prop_type, key_="progress_tracker", status_=tracker)
+        check_pipeline_metadata(pipeline, prop_type_=prop_type, key_="progress_message", status_=message)
         print(f' ==== GSMLS PIPELINE STATUS HAS BEEN UPDATED ==== ')
 
 

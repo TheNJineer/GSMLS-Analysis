@@ -54,6 +54,6 @@ if __name__ == '__main__':
 
     args = parse_args()
     status = check_mongodb(args.db_name, args.table_name)
-    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key=args.key, status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_=args.key, status_=status)
     sys.exit(0)
 

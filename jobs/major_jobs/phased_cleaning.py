@@ -419,7 +419,7 @@ if __name__ == '__main__':
 
     print(' ==== STAGE ONE CLEANING INITIATED ==== ')
     filepath = get_filepath('refined_data')
-    check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None, key="cleaning_completed", status=False)
+    check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None, key_="cleaning_completed", status_=False)
     clean_obj, target_mls_list = stage_one(filepath)
 
     if clean_obj is not None and target_mls_list is not None:
@@ -428,9 +428,11 @@ if __name__ == '__main__':
         print(' ==== STAGE THREE CLEANING INITIATED ==== ')
         stage_three(clean_obj, target_mls_list, path=filepath)
         print(' ==== ALL STAGES OF DATA TRANSFORMATION HAS BEEN COMPLETED ==== ')
-        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None, key="cleaning_completed", status=True)
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None,
+                                key_="cleaning_completed", status_=True)
     else:
         print(' ==== NO NEW DATA TO TRANSFORM. JOB HAS BEEN COMPLETED ==== ')
-        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None, key="cleaning_completed", status=True)
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None,
+                                key_="cleaning_completed", status_=True)
 
 

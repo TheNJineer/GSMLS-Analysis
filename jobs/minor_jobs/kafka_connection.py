@@ -28,6 +28,7 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     status = check_kafka_connection()
-    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="kafka_connection", status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                            key_="kafka_connection", status_=status)
     sys.exit(0)
 

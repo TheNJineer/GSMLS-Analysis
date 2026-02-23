@@ -37,12 +37,12 @@ if __name__ == "__main__":
                 # Need to be able to log something here
                 sys.exit(1)
             else:
-                check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                        key="image_consumer", status=results)
+                check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                        key_="image_consumer", status_=results)
                 sys.exit(0)
     else:
         print(' ==== GSMLS PRODUCER ENDED PRE-MATURELY. NO NEW DATA TO BE CONSUMED ==== ')
-        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                key="image_consumer", status=True)
+        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                key_="image_consumer", status_=True)
 
 

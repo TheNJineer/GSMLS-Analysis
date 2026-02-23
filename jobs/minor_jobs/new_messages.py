@@ -69,6 +69,6 @@ if __name__ == '__main__':
 
     args = parse_args()
     status = new_msgs_available(args.topic)
-    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="new_msgs", status=status)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_="new_msgs", status_=status)
     sys.exit(0)
 

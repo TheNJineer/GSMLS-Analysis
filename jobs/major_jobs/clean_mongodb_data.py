@@ -22,14 +22,14 @@ if __name__ == "__main__":
     if args.local == 'false':
         print(' ==== CLEANING THE MONGODB ATLAS DATABASE ==== ')
         results = obj.database_cleanup(cutoff_time=program_cutoff)
-        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None,
-                                key="duplicate_clean_complete", status=results)
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None,
+                                key_="duplicate_clean_complete", status_=results)
     else:
         # Initiates two separate objects both querying data from a MongoDB Atlas
         # and a Docker container local connection respectively
         print(' ==== CLEANING THE MONGODB ATLAS & DOCKER DATABASE ====  ')
         results = obj.database_cleanup(cutoff_time=program_cutoff)
         results2 = RealEstateImages(latest_order_num=64872924, local=True).database_cleanup(cutoff_time=program_cutoff)
-        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type=None,
-                                key="duplicate_clean_complete", status=(results, results2))
+        check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None,
+                                key_="duplicate_clean_complete", status_=(results, results2))
 

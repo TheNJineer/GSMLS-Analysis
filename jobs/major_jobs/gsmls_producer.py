@@ -27,9 +27,9 @@ if __name__ == "__main__":
 
     print(f' ==== CURRENT PROP TYPE: {args.prop_type}')
     timestamp = str(pendulum.now(tz=timezone("America/New_York")))
-    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type, key="producer")
-    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                            key="timestamp", status=timestamp)
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_="producer")
+    check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                            key_="timestamp", status_=timestamp)
 
     try:
         obj = GSMLS(args.prop_type)
@@ -46,11 +46,11 @@ if __name__ == "__main__":
         else:
             # Save results in s shelf file to be shared across volumes
             print(f' === ETL FINISHED ==== ')
-            check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                    key="producer", status=results)
+            check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                    key_="producer", status_=results)
             sys.exit(0)
     except AssertionError as e:
         print(f'{e}')
-        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                key="producer", status=0)
+        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                key_="producer", status_=0)
 

@@ -35,13 +35,13 @@ if __name__ == "__main__":
     obj = RealEstateImages(latest_order_num=64872924)
 
     if args.local == 'false' and status != "Expired":
-        if status is not False:
-            check_pipeline_metadata("gsmls_download_images", prop_type=None, key="downloads_completed")
 
         # Reset the last_mls key to account for newly input data in MongoDB
-        check_pipeline_metadata("gsmls_download_images", prop_type=None, key="last_mls")
+        check_pipeline_metadata("gsmls_download_images", prop_type_=None, key_="last_mls")
+        check_pipeline_metadata("gsmls_download_images", prop_type_=None, key_="downloads_completed")
         results = obj.download_images_main(cutoff_time=program_cutoff)
-        check_pipeline_metadata("gsmls_download_images", prop_type=None, key="downloads_completed", status=results)
+        check_pipeline_metadata("gsmls_download_images", prop_type_=None,
+                                key_="downloads_completed", status_=results)
         print(f" ==== TOTAL PROPERTIES QUERIED: {obj.total_props} ==== ")
         print(f" ==== TOTAL IMAGES DOWNLOADED: {obj.total_images} ==== ")
         sys.exit(0)
@@ -52,8 +52,8 @@ if __name__ == "__main__":
         results = obj.download_images_main(cutoff_time=program_cutoff)
         results2 = (RealEstateImages(latest_order_num=64872924, local=True).
                     download_images_main(cutoff_time=program_cutoff))
-        check_pipeline_metadata("gsmls_download_images", prop_type=None,
-                                key="downloads_completed", status=(results, results2))
+        check_pipeline_metadata("gsmls_download_images", prop_type_=None,
+                                key_="downloads_completed", status_=(results, results2))
         sys.exit(0)
 
     else:
