@@ -47,8 +47,8 @@ def check_pipeline_metadata(pipeline_, prop_type_: str | None, key_=None, status
                 data_file.setdefault(pipeline, {})
             if data_file[pipeline].get(prop_type, None) is None:
                 data_file[pipeline].setdefault(prop_type, {})
-            data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
-            print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
+                data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
+                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
         else:
             if data_file.get(pipeline, None) is None:
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
