@@ -5,6 +5,7 @@ import time
 import shelve
 import pendulum
 import pandas as pd
+from filelock import Filelock, Timeout
 from pendulum import timezone
 from docker.types import Mount
 from selenium import webdriver
@@ -32,66 +33,69 @@ class TqdmLoggingHandler(logging.Handler):
         tqdm.write(msg)
 
 
-def check_pipeline_metadata(pipeline, prop_type: str | None, key=None, status=None):
-    data_path = get_filepath("metadata")
-    metadata_path = os.path.join(data_path, "metadata")
+def check_pipeline_metadata(pipeline_, prop_type_: str | None, key_=None, status_=None):
 
-    # Metadata file exists
-    if os.path.exists(metadata_path):
-        with shelve.open(metadata_path, writeback=True) as data_file:
-            pipelines = list(data_file.keys())
+    def create_pipeline_key(**kwargs):
+        data_file = kwargs['data_file']
+        key = kwargs['key']
+        pipeline = kwargs['pipeline']
+        prop_type = kwargs['prop_type']
+        status = kwargs['status']
 
-            if pipeline in pipelines:
-                if pipeline == 'gsmls_airflow_pipeline':
-                    if data_file[pipeline].get(prop_type, None) is None:
-                        data_file[pipeline].setdefault(prop_type, {})
-                        data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
-                        print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
-
-                if status is not None:
-                    if pipeline == 'gsmls_airflow_pipeline':
-                        data_file[pipeline][prop_type][key] = status
-                    else:
-                        data_file[pipeline][key] = status
-
-                else:
-                    if pipeline == 'gsmls_airflow_pipeline':
-                        data_file[pipeline][prop_type][key] = False
-                    else:
-                        data_file[pipeline][key] = status
-
-                data_file.sync()
-                time.sleep(0.3)
-
-            else:
-                if pipeline == 'gsmls_airflow_pipeline':
-                    data_file.setdefault(pipeline, {})
-                    data_file[pipeline].setdefault(prop_type, {})
-                    data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
-                    print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
-                else:
-                    data_file[pipeline] = create_pipeline_metadata(pipeline)
-                    print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
-
-                data_file.sync()
-                time.sleep(0.3)
-
-    # No metadata file exists
-    else:
-        with shelve.open(metadata_path, writeback=True) as data_file:
-            if pipeline == 'gsmls_airflow_pipeline':
+        if pipeline == 'gsmls_airflow_pipeline':
+            if data_file.get(pipeline, None) is None:
                 data_file.setdefault(pipeline, {})
+            if data_file[pipeline].get(prop_type, None) is None:
                 data_file[pipeline].setdefault(prop_type, {})
-                data_file[pipeline][prop_type][key] = create_pipeline_metadata(pipeline)
-                data_file[pipeline][prop_type][key] = status
-                print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
-            else:
+            data_file[pipeline][prop_type] = create_pipeline_metadata(pipeline)
+            print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} FOR {prop_type} ==== ")
+        else:
+            if data_file.get(pipeline, None) is None:
                 data_file[pipeline] = create_pipeline_metadata(pipeline)
-                data_file[pipeline][key] = status
                 print(f" ==== INITIALIZING {key} STATUS OF {pipeline} TO {status} ==== ")
 
-            data_file.sync()
-            time.sleep(0.3)
+    def update_pipeline_status(**kwargs):
+        data_file = kwargs['data_file']
+        key = kwargs['key']
+        pipeline = kwargs['pipeline']
+        prop_type = kwargs['prop_type']
+        status = kwargs['status']
+
+        if pipeline == 'gsmls_airflow_pipeline':
+            if status is not None:
+                data_file[pipeline][prop_type][key] = status
+            else:
+                data_file[pipeline][prop_type][key] = False
+        else:
+            data_file[pipeline][key] = status
+
+    data_path = get_filepath("metadata")
+    metadata_path = os.path.join(data_path, "metadata")
+    filelock_path = f'{metadata_path}.lock'
+    lock = Filelock(filelock_path, timeout=120)
+    vars_ = {
+        'data_file': None,
+        'key': key_,
+        'pipeline': pipeline_,
+        'prop_type': prop_type_,
+        'status': status_
+    }
+
+    try:
+        # Lock the object and create/revise data
+        with lock:
+            with shelve.open(metadata_path, writeback=True) as data_file_:
+                pipelines = list(data_file_.keys())
+                vars_['data_file'] = data_file_
+
+                if pipeline_ in pipelines:
+                    create_pipeline_key(**vars_)
+                    update_pipeline_status(**vars_)
+                else:
+                    create_pipeline_key(**vars_)
+                data_file_.sync()
+    except Timeout:
+        print(f" ==== FILELOCK TIMEOUT. STATUS OF {pipeline_} WAS NOT UPDATED ==== ")
 
 
 def create_pipeline_metadata(pipeline):
