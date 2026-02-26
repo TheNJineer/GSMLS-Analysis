@@ -72,7 +72,10 @@ def check_pipeline_metadata(pipeline_, prop_type_: str | None, key_=None, status
     data_path = get_filepath("metadata")
     metadata_path = os.path.join(data_path, "metadata")
     filelock_path = f'{metadata_path}.lock'
-    lock = FileLock(filelock_path, timeout=120)
+    # Create FileLock object to control shelve file access and apply read/write permissions for user/group/others
+    # at file creation. Usual permissions is 644
+    lock = FileLock(filelock_path, mode=0o666, timeout=120)
+
     vars_ = {
         'data_file': None,
         'key': key_,
