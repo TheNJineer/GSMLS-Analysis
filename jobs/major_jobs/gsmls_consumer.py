@@ -39,11 +39,11 @@ if __name__ == "__main__":
                 retry = True
                 continue
             else:
-                check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                        key="data_consumer", status=results)
+                check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                        key_="data_consumer", status_=results)
                 sys.exit(0)
     else:
         print(' ==== GSMLS PRODUCER ENDED PRE-MATURELY. NO NEW DATA TO BE CONSUMED ==== ')
-        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type=args.prop_type,
-                                key="data_consumer", status=True)
+        check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
+                                key_="data_consumer", status_=True)
 
