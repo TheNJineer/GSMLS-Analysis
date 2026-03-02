@@ -100,6 +100,9 @@ class RealEstateImages:
     """
 
     def alternates_image_capture(self, image_num, imagedict, **kwargs):
+        """
+        REFACTOR
+        """
 
         if ((kwargs["Section_Type"] is not None)
                 and ("Image of listing" == kwargs["Section"])
@@ -677,6 +680,9 @@ class RealEstateImages:
 
     @staticmethod
     def property_style(series, prop_data):
+        """
+        REFACTOR
+        """
 
         try:
             if series["STYLEPRIMARY_SHORT"]:
@@ -803,6 +809,7 @@ class RealEstateImages:
             "RES": "res_properties",
             "MUL": "mul_properties",
             "RNT": "rnt_properties",
+            "LND": "lnd_properties"
         }
 
         try:
@@ -872,6 +879,9 @@ class RealEstateImages:
 
     @staticmethod
     def style_type_split(style_type, prop_data):
+        """
+        REFACTOR
+        """
 
         if (style_type is not None) and ("," in style_type):
             style_type_list = style_type.split(",")

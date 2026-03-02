@@ -87,6 +87,9 @@ class KafkaGSMLSConsumer:
 
     @staticmethod
     def change_datatypes(df_var, prop_type, update_bar):
+        """
+        REFACTOR
+        """
 
         if prop_type == 'RES':
             # fill_na() function turns this col to string. TypeError thrown if string value is explictly tried to
@@ -229,9 +232,11 @@ class KafkaGSMLSConsumer:
             print(f' ==== DELETING CHECKPOINT: {filepath} ==== ')
             os.remove(filepath)
 
-
     @staticmethod
     def drop_columns(df_var, prop_type, update_bar):
+        """
+        REFACTOR
+        """
 
         if prop_type == 'RES':
             update_bar.update(1)
@@ -265,6 +270,9 @@ class KafkaGSMLSConsumer:
 
     @staticmethod
     def escape_illegal_char(df_var, prop_type, update_bar):
+        """
+        REFACTOR
+        """
 
         illegal_pattern = ('\x00|\x01|\x02|\x03|\x04|\x05|\x06|\x07|\x08|\x0b|\x0c|\x0e|\x0f|\x10|\x11|\x12|\x13|\x14'
                            '|\x15|\x16|\x17|\x18|\x19|\x1a|\x1b|\x1c|\x1d|\x1e|\x1f')
@@ -565,6 +573,9 @@ class KafkaGSMLSConsumer:
 
     @staticmethod
     def fixer_upper(df_var, prop_type, update_bar):
+        """
+        REFACTOR
+        """
 
         condition_dict = {
             'RES': ['STYLEPRIMARY_SHORT', 'STYLE_SHORT'],
@@ -920,13 +931,11 @@ class KafkaGSMLSConsumer:
                 # 'TAX':
             }
 
-
             for target_col, values in target_attr[prop_type]:
 
                 for new_col, pattern in values.items():
 
                     df_var[new_col] = df_var[target_col].str.contains(pattern, case=True, na=False, regex=True)
-
 
         except KeyError:
             pass
@@ -945,6 +954,9 @@ class KafkaGSMLSConsumer:
         return int(str(value).split('/')[2][:4])
 
     def prepare_data(self, df_list, prop_type, wait_time=0, retries=0):
+        """
+        REFACTOR
+        """
 
         df = pd.concat(df_list)
 
@@ -1031,6 +1043,9 @@ class KafkaGSMLSConsumer:
                   f" ==== {value}")
 
     def produce_images(self, df_var, prop_type):
+        """
+        REFACTOR
+        """
 
         if prop_type in ['RES', 'MUL', 'RNT']:
             if prop_type == 'RES':
@@ -1050,6 +1065,12 @@ class KafkaGSMLSConsumer:
                                     'RENTEDDATE', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
                                    'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
                                    'LISTING_REMARKS', 'SCRAPED_DATE', 'RENTMONTHPERLSE']]
+            # elif prop_type == 'LND':
+            #     image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
+            #                         'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
+            #                         'LISTDATE', 'CURRENTUSE_SHORT', 'DEVSTATUS_SHORT', 'LOTDESC_SHORT',
+            #                        'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
+            #                        'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
 
             prepared_image_df = image_df.to_json(orient='split', date_format='iso')
             try:
@@ -1337,6 +1358,9 @@ class KafkaGSMLSConsumer:
 
     @staticmethod
     def sub_property_type(df_var, update_bar):
+        """
+        REFACTOR
+        """
 
         temp_df_ = df_var.copy()
         target_styles = ['TwnIntUn', 'OneFloor', 'MultiFlr', 'TwnEndUn', 'FirstFlr', 'HighRise']
