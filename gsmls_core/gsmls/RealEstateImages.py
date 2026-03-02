@@ -24,7 +24,7 @@ from botocore.exceptions import ClientError
 from urllib3.exceptions import ProtocolError, IncompleteRead
 from requests.exceptions import ChunkedEncodingError, ConnectionError, SSLError, ProxyError, HTTPError
 from gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
-from gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_status
 
 
 class RealEstateImages:
@@ -469,39 +469,39 @@ class RealEstateImages:
             # Turns the Mongo query cursor into a list
             mls_list = [doc["MLSNum"] for doc in cursor]
 
-            if len(mls_list) >= 1:
+            if len(mls_list) > 1:
                 print(' ==== GENERATING LIST OF NEW DUPLICATE DOCUMENTS ==== ')
                 yield mls_list
                 # for mls_num in mls_list:
                 #     yield mls_num
             else:
                 # No further MLSNum to provide. Breaks while query
+                RealEstateImages.no_more_results(mls_list[0])
                 break
 
-    def fetch_mlsnums(self, batch_size=85):
+    def fetch_mlsnums(self, batch_size):
         """
         Returns a list of MLSNum values
         """
+        while True:
+            last_mls = RealEstateImages.get_latest_mlsnum("gsmls_download_images", "last_mls")
+            match = {"Images_Downloaded": {"$exists": False}}
 
-        last_mls = RealEstateImages.get_latest_mlsnum("gsmls_download_images", "last_mls")
-        match = {"Images_Downloaded": {"$exists": False}}
+            if last_mls is not None:
+                print(f' ==== STARTING IMAGE DOWNLOAD FROM MLSNUM {last_mls} ==== ')
+                match["MLSNum"] = {"$gt": last_mls}
 
-        if last_mls is not None:
-            print(f' ==== STARTING IMAGE DOWNLOAD FROM MLSNUM {last_mls} ==== ')
-            match["MLSNum"] = {"$gt": last_mls}
+            pipeline = [
+                {"$match": match},
+                {"$sort": {"MLSNum": 1}},
+                {"$limit": batch_size},
+            ]
 
-        pipeline = [
-            {"$match": match},
-            {"$sort": {"MLSNum": 1}},
-            {"$limit": batch_size},
-        ]
-
-        print(f' ==== GENERATING DOCUMENT BATCH OF SIZE {batch_size} FOR IMAGE DOWNLOADS ==== ')
-        return self.collection.aggregate(
-            pipeline,
-            batchSize=batch_size,
-            allowDiskUse=True
-        )
+            print(f' ==== GENERATING DOCUMENT BATCH OF SIZE {batch_size} FOR IMAGE DOWNLOADS ==== ')
+            yield list(self.collection.aggregate(
+                pipeline,
+                batchSize=batch_size,
+                allowDiskUse=True))
 
     def generate_current_isps(self, current_proxies):
 
@@ -518,18 +518,28 @@ class RealEstateImages:
 
     def generate_duplicate_mlsnums(self, cutoff_time, batch_size=500):
 
+        idx_checkpoint = 0
+
         for mls_list in self.fetch_duplicate_mlsnums(batch_size=batch_size):
 
             for mls_num in mls_list:
 
-                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
+                    f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== "
                 count = self.collection.count_documents({"MLSNum": mls_num})
 
                 if count <= 1:
-                    # No duplicates for current MLSNum. Restart generator with MLSNums greater than this one
                     print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num} ==== ')
-                    check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                            prop_type_=None, key_="start_mls", status_=mls_num)
+
+                    if idx_checkpoint >= batch_size:
+                        # In order to reduce the amount of writes, save points occur when the checkpoint
+                        # equals the batch size. Reset idx_checkpoint
+                        idx_checkpoint = 0
+                        print(f' ==== INDEX CHECKPOINT REACHED ==== ')
+                        check_pipeline_metadata("gsmls_cleaning_pipeline",
+                                                prop_type_=None, key_="start_mls", status_=mls_num)
+
+                    idx_checkpoint += 1
                     continue
 
                 # Fetch all documents for inspection / cleanup
@@ -537,21 +547,17 @@ class RealEstateImages:
 
                 # Yield or process: MLSNum, docs, count
                 yield mls_num, docs, count
+                idx_checkpoint += 1
                 check_pipeline_metadata("gsmls_cleaning_pipeline",
                                         prop_type_=None, key_="start_mls", status_=mls_num)
 
-    def generate_image_docs(self):
+    def generate_image_docs(self, batch_size=60):
 
-        while True:
+        for image_batch in self.fetch_mlsnums(batch_size):
 
-            batch = list(self.fetch_mlsnums())
-
-            if len(batch) < 1:
-                break
-
-            for doc in batch:
-                mls_num = doc["MLSNum"]
-                yield doc
+            for image_doc in image_batch:
+                mls_num = image_doc["MLSNum"]
+                yield image_doc
                 check_pipeline_metadata("gsmls_download_images", prop_type_=None,
                                         key_="last_mls", status_=mls_num)
 
@@ -672,6 +678,15 @@ class RealEstateImages:
         return os.getenv('IPROYAL_API')
 
     @staticmethod
+    def no_more_results(mls_num):
+
+        if mls_num == current_status("gsmls_cleaning_pipeline", "start_mls"):
+            # Reset the metadata key and end the program
+            check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None, key_="start_mls")
+            print(' ==== NO MORE DUPLICATION RESULTS AVAILABLE ==== ')
+            print(' ==== RESETTING START_MLS KEY IN METADATA ==== ')
+
+    @staticmethod
     def prepare_data(image_list):
 
         batch_size = 10
@@ -742,12 +757,13 @@ class RealEstateImages:
         user_data = self.get_residential_hash()
         isp_orders = self.get_static_proxy_order()
         isp_expiration = pendulum.parse(isp_orders['expire_date'])
+        print(f' ==== CURRENT PROXY EXPIRATION DATE: {isp_expiration} ==== ')
         available_traffic = float(user_data['available_traffic'])
-        print(f' ==== CURRENT AVAILABLE PROXY TRAFFIC: {available_traffic} ==== ')
+        print(f' ==== CURRENT  RESIDENTIAL PROXY AVAILABLE TRAFFIC: {available_traffic} ==== ')
 
         # Only purchase data if the latest proxy purchase is 30 days old and there's less than 1.5GB
         # of available traffic left
-        if available_traffic < 6.5:
+        if available_traffic < 2:
             print(f' ==== RESIDENTIAL PROXY DATA HAS REACHED ITS LOWER LIMIT. DETERMINING DATA INCREASE ==== ')
 
         if isp_expiration < pendulum.now(tz=timezone("America/New_York")):
@@ -759,7 +775,7 @@ class RealEstateImages:
             #     self.static_ip_status = "Expired"
 
         elif isp_expiration > pendulum.now(tz=timezone("America/New_York")):
-            print(f' ==== ISP PROXIES ARE STILL ACTIVE ==== ')
+            print(f' ==== STATIC PROXIES ARE STILL ACTIVE ==== ')
 
         self.generate_current_isps(isp_orders['proxy_data'])
         # self.generate_current_res_ip()
@@ -1073,9 +1089,10 @@ class RealEstateImages:
             # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
             # at 85 to account for time variances
             print(' ==== GATHERING DOCUMENTS FROM AGGREGATE PIPELINE ==== ')
-            for mlsnum, docs, count in self.generate_duplicate_mlsnums(cutoff_time, batch_size=100):
+            for mlsnum, docs, count in self.generate_duplicate_mlsnums(cutoff_time, batch_size=10000):
 
-                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
+                    f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== "
                 update_operation = {
                     "$set": {},  # Dictionary to hold all update operations
                     "$unset": {
@@ -1124,15 +1141,15 @@ class RealEstateImages:
 
                 # Update the document
                 if set_operations != 0 and unset_operations != 0:
-                    # self.collection.update_one(query_filter, update_operation)
-                    pprint(update_operation)
-                    pprint(res)
+                    self.collection.update_one(query_filter, update_operation)
+                    # pprint(update_operation)
+                    # pprint(res)
 
         except CursorNotFound as cnf:
             logger.warning(f"{cnf}")
             logger.info("Starting new aggregate cursor")
-        except AssertionError:
-            logger.info(f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== ")
+        except AssertionError as e:
+            logger.info(f"{e}")
             logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
             return False
         else:
@@ -1160,35 +1177,35 @@ class RealEstateImages:
             session = FuturesSession(max_workers=5)
             kwargs['s3_client'] = boto3.client('s3')
 
-            while True:
-                for _, record in zip(tqdm(range(85), desc='Records', file=sys.stderr,
-                                          dynamic_ncols=True), self.generate_image_docs()):
+            for _, record in zip(tqdm(range(60), desc='Records', file=sys.stderr,
+                                      dynamic_ncols=True), self.generate_image_docs()):
 
-                    assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time
-                    # Access the Images key in the main dictionary
-                    image_dict = record["Images"]
-                    query_filter = {"MLSNum": record["MLSNum"]}
-                    kwargs['metadata'] = {
-                        'address': str(record["Address"]),
-                        'mlsnum': str(record["MLSNum"]),
-                        'town': str(record["Town"]),
-                        'prop_style': str(record["Prop_Style"]),
-                        'condition': str(record['Condition'])
-                        }
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
+                    f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== "
+                # Access the Images key in the main dictionary
+                image_dict = record["Images"]
+                query_filter = {"MLSNum": record["MLSNum"]}
+                kwargs['metadata'] = {
+                    'address': str(record["Address"]),
+                    'mlsnum': str(record["MLSNum"]),
+                    'town': str(record["Town"]),
+                    'prop_style': str(record["Prop_Style"]),
+                    'condition': str(record['Condition'])
+                    }
 
-                    # Loop through all the image categories and access each image
-                    image_list = RealEstateImages.create_image_list(image_dict)
-                    self.request_image(session, image_list, **kwargs)
-                    self.total_props += 1
-                    # Function which introduces variability between the image requests
-                    RealEstateImages.sleep_variation(len(image_list))
+                # Loop through all the image categories and access each image
+                image_list = RealEstateImages.create_image_list(image_dict)
+                self.request_image(session, image_list, **kwargs)
+                self.total_props += 1
+                # Function which introduces variability between the image requests
+                RealEstateImages.sleep_variation(len(image_list))
 
-                    # If the key doesn't exist in the dictionary, create the field
-                    if record.get("Images_Downloaded", None) is None:
-                        self.collection.update_one(query_filter, outer_update_operation)
-                break
-        except AssertionError:
-            print(f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== ")
+                # If the key doesn't exist in the dictionary, create the field
+                if record.get("Images_Downloaded", None) is None:
+                    self.collection.update_one(query_filter, outer_update_operation)
+
+        except AssertionError as e:
+            print(f"{e}")
             print(f" ==== PROGRAM COMPLETED ==== ")
             return False
         else:

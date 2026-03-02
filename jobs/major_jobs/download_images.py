@@ -11,7 +11,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='GSMLS Image Downloading')
     parser.add_argument("--local", required=True)
 
-    # return parser.parse_args(['--local', ''])
+    # return parser.parse_args(['--local', 'false'])
     return parser.parse_args()
 
 
