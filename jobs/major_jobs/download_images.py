@@ -29,8 +29,8 @@ def ips_status():
 if __name__ == "__main__":
 
     args = parse_args()
-    # program_cutoff = cutoff_time(hours=7, minutes=30, tz="America/New_York")
-    program_cutoff = cutoff_time(days=1, hours=7, minutes=30, tz="America/New_York")
+    program_cutoff = cutoff_time(hours=7, minutes=30, tz="America/New_York")
+    # program_cutoff = cutoff_time(days=1, hours=7, minutes=30, tz="America/New_York")  use while debugging
     status = ips_status()
     obj = RealEstateImages(latest_order_num=64872924)
 

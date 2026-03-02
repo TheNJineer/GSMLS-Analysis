@@ -15,8 +15,8 @@ def parse_args():
 if __name__ == "__main__":
 
     args = parse_args()
-    # program_cutoff = cutoff_time(hours=4, minutes=35, tz="America/New_York")
-    program_cutoff = cutoff_time(days=1, hours=4, minutes=35, tz="America/New_York")
+    program_cutoff = cutoff_time(hours=4, minutes=35, tz="America/New_York")
+    # program_cutoff = cutoff_time(days=1, hours=4, minutes=35, tz="America/New_York") use while debugging
     obj = RealEstateImages(latest_order_num=64872924)
 
     if args.local == 'false':

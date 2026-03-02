@@ -380,7 +380,7 @@ def stage_two(path: str, mlsnum_list: list, **kwargs):
             print(" ==== DATA DID NOT SAVE. UNVERIFIED COLUMNS EXISTING IN DATA ==== ")
         else:
             pyspark_save_data(final_df, **kwargs)
-            print(f" ==== NEW DATA APPENDED TO gsmls_imputed_data ====/n==== TOTAL NEW ROWS APPENDED: {len(final_df.count())}  ====")
+            print(f" ==== NEW DATA APPENDED TO gsmls_imputed_data ====/n==== TOTAL NEW ROWS APPENDED: {final_df.count()}  ====")
     else:
         print(" ==== THERE IS NO NEW DATA TO ADD TO gsmls_imputed_data ==== ")
 
