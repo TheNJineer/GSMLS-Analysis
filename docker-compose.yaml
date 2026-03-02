@@ -149,7 +149,8 @@ services:
       - SPARK_USER=spark
     user: root  # Use the same root and group IDs as the host
     volumes:
-      - ./data:/workspace/data
+      - ./data:/workspace/data  # Data volume mount to debug container
+      - ./data/stage_one/parquet_files:/app/parquet_files  # Data volume mount to DockerOperator container
       - ./logs/pyspark_logs:/opt/bitnami/spark/work
     networks:
       - airflow_network
@@ -178,6 +179,7 @@ services:
     user: root
     volumes:
       - ./data:/workspace/data
+      - ./data/stage_one/parquet_files:/app/parquet_files
       - ./logs/pyspark_logs:/opt/bitnami/spark/work
     networks:
       - airflow_network
