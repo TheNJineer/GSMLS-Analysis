@@ -365,20 +365,25 @@ def current_status(pipeline: str, prop_type: str, key=None):
     print(f'Pipeline: {pipeline} Key: {key}, Result: {result}')
     return result
 
+
 def cutoff_time(
     days: int = 0,
-    hours: int = None,
-    minutes: int = None,
-    seconds: int = None,
+    hours: int = 0,
+    minutes: int = 0,
+    seconds: int = 0,
     tz: str = None,
 ):
 
     start = pendulum.now(tz=timezone(tz))
     day = start.day
     day_delta = day + days
-    finish = start.set(
-        day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0
-    )
+    try:
+        finish = start.set(day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0)
+    except ValueError:
+        # Accepts ValueError occurring where target date falls out of range. May need to create a
+        # calendar function that can create cutoff based on the date and day delta
+        finish = start.set(month=start.month + 1, day=1, hour=hours,
+                           minute=minutes, second=seconds, microsecond=0)
 
     assert finish > start, f" ==== CUTOFF TIME IS LESS THAN THE CURRENT DATETIME ==== "
     print(f" ==== THE CUTOFF TIME IS : {finish} ==== ")
