@@ -216,19 +216,24 @@ class GSMLS:
                 if idx == 0:
                     # Get latest scraped date
                     start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
-                    stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+                    if self.timeframe == 'mixed':
+                        stop_date_list = [year, 12, 31]
+                    else:
+                        stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
                     start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
                     stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
 
                     # Start scraping date from the day after the last scraped day
                     return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
-                elif idx == 1 and self.timeframe == 'current':
-                    # Correctly catches edge case scenerio where idx == 0 is 'mixed' and the data scraped
-                    # straddles the previous and current year. idx == 1 will then try to rescrape data
-                    # for the current year
-                    raise AssertionError(' ==== POTENTIAL FOR DUPLICATE DATA. ENDING PROGRAM ==== ')
+                # elif idx == 1 and self.timeframe == 'current':
+                #     # Correctly catches edge case scenerio where idx == 0 is 'mixed' and the data scraped
+                #     # straddles the previous and current year. idx == 1 will then try to rescrape data
+                #     # for the current year
+                #     raise AssertionError(' ==== POTENTIAL FOR DUPLICATE DATA. ENDING PROGRAM ==== ')
 
                 else:
+                    default_date = f'{year}-01-01 00:00:00'
+                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
                     return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
         # The yearly results returned too much data. Split the data up into quarters
@@ -887,6 +892,9 @@ class GSMLS:
         return target.split("\n")[-2].split(" ")[-1]
 
     def load_metadata(self, first_run=None):
+        """
+        REFACTOR
+        """
 
         query = f"""
                 SELECT * FROM gsmls_event_log_new
@@ -915,16 +923,17 @@ class GSMLS:
             if self.alt_split_type is not None:
                 self.generate_level_sets()
             self.assign_timeframe()
-            print(f" ==== SCRAPED QUARTER: {self.last_scraped_qtr} ====")
-            print(f" ==== SCRAPED YEAR: {self.last_scraped_year} ====")
+            print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
+            print(f" ==== LAST START DATE: {last_start_date} ====")
+            print(f" ==== LAST DATE PRODUCED: {last_date_scraped} ====")
+            print(f" ==== LEVEL SET: {self.level_set} ====")
             print(f" ==== SCRAPED COUNTY: {self.last_scraped_county} ====")
             print(f" ==== SCRAPED MUNICIPALITY: {self.last_scraped_muni} ====")
             print(f" ==== SCRAPED FINISHED: {self.finished} ====")
             print(f" ==== SCRAPED PROPERTY TYPE: {self.last_scraped_property_type} ====")
-            print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
-            print(f" ==== LEVEL SET: {self.level_set} ====")
-            print(f" ==== LAST START DATE: {last_start_date} ====")
-            print(f" ==== LAST DATE PRODUCED: {last_date_scraped} ====")
+            print(f" ==== SCRAPED QUARTER: {self.last_scraped_qtr} ====")
+            print(f" ==== SCRAPED YEAR: {self.last_scraped_year} ====")
+            print(f" ==== TIMEFRAME: {self.timeframe} ==== ")
 
             if first_run is not None:
                 # Block is initiated on program start
@@ -950,10 +959,7 @@ class GSMLS:
                         self.start_date = last_start_date
                         print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
                     else:
-                        self.start_date = last_date_scraped + timedelta(days=1)
-                        print(f" ==== SCRAPPING MIXED DATA FROM NEXT START DATE ==== ")
-
-                    print(f" ==== START DATE : {self.start_date} ==== ")
+                        print(f" ==== ALL DATA FROM MIXED TIMEFRAME HAS BEEN ACQUIRED. GENERATING NEW START DATE ==== ")
 
                 else:
                     # Date produced is the date the program scraped that data
@@ -981,8 +987,9 @@ class GSMLS:
             if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
                 self.last_scraped_muni = None
                 self.last_scraped_county = None
-                if self.timeframe == "historic":
+                if self.timeframe in ["historic", "mixed"]:
                     self.last_scraped_year += 1
+                    self.assign_timeframe()
                     default_date = f'{self.last_scraped_year}-01-01 00:00:00'
                     self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
                     print(f" ==== NEW START DATE : {self.start_date} ==== ")
