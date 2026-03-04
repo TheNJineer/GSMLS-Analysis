@@ -75,8 +75,10 @@ class GSMLS:
             target_year = year
 
         if target_year == datetime.now().year - 1:
+            print(f' ==== UPDATING DATA TIMEFRAME FROM {self.timeframe} TO mixed ==== ')
             self.timeframe = "mixed"
         elif target_year == datetime.now().year:
+            print(f' ==== UPDATING DATA TIMEFRAME FROM {self.timeframe} TO current ==== ')
             self.timeframe = "current"
         elif target_year > datetime.now().year:
             raise AssertionError(' ==== TARGET YEAR IS GREATER THAN THE CURRENT YEAR ==== ')
