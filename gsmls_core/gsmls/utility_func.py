@@ -351,16 +351,20 @@ def create_volume_mounts(job: str):
     return mount_list
 
 
-def current_status(pipeline: str, prop_type: str, key=None):
+def current_status(pipeline: str, key=None):
+
+    """
+    PRIMARYILY USED IN THE MONGODB CLEANUP
+    """
 
     data_path = get_filepath('metadata')
     metadata_path = os.path.join(data_path, "metadata")
 
     with shelve.open(metadata_path) as reader:
         if key is None:
-            result = reader[pipeline][prop_type]
+            result = reader[pipeline]
         else:
-            result = reader[pipeline][prop_type][key]
+            result = reader[pipeline][key]
 
     print(f'Pipeline: {pipeline} Key: {key}, Result: {result}')
     return result
@@ -436,6 +440,18 @@ def get_us_pw(website):
     return username, base_url, pw
 
 
+def initialize_log_file(filepath):
+    # If the file doesn't exist, create it.
+    # Current script is running in DockerOperator owned by 1201. The file will be owned by 1201.
+    if not os.path.exists(filepath):
+        try:
+            # Create an empty file
+            open(filepath, 'a').close()
+            print(f" ==== SUCCESSFULLY CREATED {filepath} AS USER {os.getuid()} ==== ")
+        except PermissionError as e:
+            print(f" ==== CANNOT CREATE FILE IN DIRECOTRY: {e}")
+
+
 def logger_decorator(original_function):
     def wrapper(*args, **kwargs):
         logger = logging.getLogger(original_function.__name__)
@@ -452,6 +468,7 @@ def logger_decorator(original_function):
                 + str(datetime.today().date())
                 + ".log",
             )
+            initialize_log_file(log_filepath)
             f_handler = logging.FileHandler(log_filepath)
             f_handler.setLevel(logging.DEBUG)
             c_handler = TqdmLoggingHandler()
