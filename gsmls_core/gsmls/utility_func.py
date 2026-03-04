@@ -351,7 +351,7 @@ def create_volume_mounts(job: str):
     return mount_list
 
 
-def current_status(pipeline: str, key=None):
+def current_status(pipeline: str, prop_type: str | None, key=None):
 
     """
     PRIMARYILY USED IN THE MONGODB CLEANUP
@@ -361,11 +361,17 @@ def current_status(pipeline: str, key=None):
     metadata_path = os.path.join(data_path, "metadata")
 
     with shelve.open(metadata_path) as reader:
-        if key is None:
-            result = reader[pipeline]
+        if prop_type is None:
+            if key is None:
+                result = reader[pipeline]
+            else:
+                result = reader[pipeline][key]
         else:
-            result = reader[pipeline][key]
-
+            if key is None:
+                result = reader[pipeline][prop_type]
+            else:
+                result = reader[pipeline][prop_type][key]
+            
     print(f'Pipeline: {pipeline} Key: {key}, Result: {result}')
     return result
 
