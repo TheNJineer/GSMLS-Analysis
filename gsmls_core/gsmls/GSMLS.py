@@ -206,12 +206,23 @@ class GSMLS:
 
     def create_timeframe_dict(self, year, split_type=None, start_month=None, idx=None):
 
+        """"
+        REFACTOR
+        """
+
         if split_type is None:
+
+            default_date = f'{year}-01-01 00:00:00'
+            new_start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
 
             if idx > 0:
                 self.assign_timeframe(idx, year)
 
             if self.timeframe == "historic":
+
+                if self.start_date != new_start_date:
+                    self.start_date = new_start_date
+
                 return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
             else:
@@ -222,20 +233,16 @@ class GSMLS:
                         stop_date_list = [year, 12, 31]
                     else:
                         stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+
                     start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
                     stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
 
                     # Start scraping date from the day after the last scraped day
                     return {1234: [f"{start_month}/{start_day}/{year}", f"{stop_month}/{stop_day}/{stop_year}"]}
-                # elif idx == 1 and self.timeframe == 'current':
-                #     # Correctly catches edge case scenerio where idx == 0 is 'mixed' and the data scraped
-                #     # straddles the previous and current year. idx == 1 will then try to rescrape data
-                #     # for the current year
-                #     raise AssertionError(' ==== POTENTIAL FOR DUPLICATE DATA. ENDING PROGRAM ==== ')
 
                 else:
-                    default_date = f'{year}-01-01 00:00:00'
-                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+
+                    self.start_date = new_start_date
                     return {1234: [f"01/01/{year}", f"12/31/{year}"]}
 
         # The yearly results returned too much data. Split the data up into quarters
@@ -2330,11 +2337,6 @@ class GSMLS:
 
                     time_periods = self.create_timeframe_dict(year, idx=idx)
                     logger.info(f'Timeframe: {time_periods}')
-
-                    # if year != self.start_date.year:
-                    #     default_date = f'{year}-01-01 00:00:00'
-                    #     self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
-                    #     print(' ==== CORRECT YEAR WAS NOT SET. RESETTING IN MAIN FUNCTION ==== ')
 
                     with tqdm(total=len(time_periods), desc="Qtr", colour="blue", position=1) as quarters_bar:
                         for qtr, date_range in time_periods.items():
