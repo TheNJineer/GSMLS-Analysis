@@ -677,6 +677,13 @@ class RealEstateImages:
 
         return os.getenv('IPROYAL_API')
 
+    def max_mlsnum(self):
+
+        results = self.collection.find({}, {"MLSNum": 1}).sort("MLSNum", -1).limit(1)
+
+        for result in results:
+            return result['MLSNum']
+
     @staticmethod
     def no_more_results(mls_num):
 
@@ -878,16 +885,20 @@ class RealEstateImages:
                     kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
                     kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
                 except retriable_errors as e:
-                    base_url = error_url_pattern.search(str(e)).group(1)
+                    base_url = error_url_pattern.search(str(e))
                     if attempt < max_retries:
                         sleep_time = 2 ** attempt
-                        kwargs['logger'].warning(
-                            f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
+                        if base_url is not None:
+                            kwargs['logger'].warning(f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} "
+                                                     f"===== URL: {base_url.group(1)} ===== ")
+                        else:
+                            kwargs['logger'].warning(f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} "
+                                                     f"===== URL: UNKNOWN ===== ")
                         kwargs['logger'].warning(f' ==== SLEEPING FOR {sleep_time} SECS THEN RETRYING ==== ')
                         time.sleep(sleep_time)
                         continue
                     kwargs['logger'].warning(f' ==== MAX TRIES REACHED. IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
-                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
+                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: UNKNOWN ===== ")
                     break
                 else:
 
@@ -1165,44 +1176,54 @@ class RealEstateImages:
         :param kwargs:
         :return:
         """
+
+        outer_update_operation = {"$set": {"Images_Downloaded": "Yes"}}
+        session = FuturesSession(max_workers=5)
+        kwargs['s3_client'] = boto3.client('s3')
+        max_mls = self.max_mlsnum()
+
         try:
-            try:
-                assert self.static_ip_status == "active", (" ==== STATIC IPS HAVE EXPIRED. "
-                                                       "PURCHASE MORE DATA TO DOWNLOAD IMAGES ==== ")
-            except AssertionError as e:
-                print(f'{e}')
-                return "Expired"
+            assert self.static_ip_status == "active", (" ==== STATIC IPS HAVE EXPIRED. "
+                                                   "PURCHASE MORE DATA TO DOWNLOAD IMAGES ==== ")
+        except AssertionError as e:
+            print(f'{e}')
+            return "Expired"
 
-            outer_update_operation = {"$set": {"Images_Downloaded": "Yes"}}
-            session = FuturesSession(max_workers=5)
-            kwargs['s3_client'] = boto3.client('s3')
+        try:
+            while True:
+                for _, record in zip(tqdm(range(60), desc='Records', file=sys.stderr,
+                                          dynamic_ncols=True), self.generate_image_docs()):
 
-            for _, record in zip(tqdm(range(60), desc='Records', file=sys.stderr,
-                                      dynamic_ncols=True), self.generate_image_docs()):
+                    assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
+                        f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== "
 
-                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
-                    f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== "
-                # Access the Images key in the main dictionary
-                image_dict = record["Images"]
-                query_filter = {"MLSNum": record["MLSNum"]}
-                kwargs['metadata'] = {
-                    'address': str(record["Address"]),
-                    'mlsnum': str(record["MLSNum"]),
-                    'town': str(record["Town"]),
-                    'prop_style': str(record["Prop_Style"]),
-                    'condition': str(record['Condition'])
-                    }
+                    if record:
+                        # Access the Images key in the main dictionary
+                        image_dict = record["Images"]
+                        query_filter = {"MLSNum": record["MLSNum"]}
+                        kwargs['metadata'] = {
+                            'address': str(record["Address"]),
+                            'mlsnum': str(record["MLSNum"]),
+                            'town': str(record["Town"]),
+                            'prop_style': str(record["Prop_Style"]),
+                            'condition': str(record['Condition'])
+                            }
 
-                # Loop through all the image categories and access each image
-                image_list = RealEstateImages.create_image_list(image_dict)
-                self.request_image(session, image_list, **kwargs)
-                self.total_props += 1
-                # Function which introduces variability between the image requests
-                RealEstateImages.sleep_variation(len(image_list))
+                        # Loop through all the image categories and access each image
+                        image_list = RealEstateImages.create_image_list(image_dict)
+                        self.request_image(session, image_list, **kwargs)
+                        self.total_props += 1
+                        # Function which introduces variability between the image requests
+                        RealEstateImages.sleep_variation(len(image_list))
 
-                # If the key doesn't exist in the dictionary, create the field
-                if record.get("Images_Downloaded", None) is None:
-                    self.collection.update_one(query_filter, outer_update_operation)
+                        # If the key doesn't exist in the dictionary, create the field
+                        if record.get("Images_Downloaded", None) is None:
+                            self.collection.update_one(query_filter, outer_update_operation)
+
+                latest_imgs_downloaded = current_status("gsmls_download_images", None, "last_mls")
+                if latest_imgs_downloaded == max_mls:
+                    print(f' ==== NO FURTHER IMAGES TO BE DOWNLOADED ==== ')
+                    break
 
         except AssertionError as e:
             print(f"{e}")
