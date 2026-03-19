@@ -311,8 +311,13 @@ class GSMLS:
                 tsv_df = pd.read_table(path_to_file + ".tsv",
                                        on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
                                        engine="python")
-            xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
-            tsv_data_captured = round((len(tsv_df) / kwargs["Expected_Data"]) * 100, 2)
+
+            try:
+                xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
+                tsv_data_captured = round((len(tsv_df) / kwargs["Expected_Data"]) * 100, 2)
+            except ZeroDivisionError:
+                xls_data_captured = len(xls_df) / len(xls_df)
+                tsv_data_captured = len(tsv_df) / len(tsv_df)
 
             if xls_data_captured > tsv_data_captured:
                 print(f' ==== XLS FILETYPE CAPTURED {xls_data_captured}% OF DATA FOR {kwargs["Filename"]}==== ')
