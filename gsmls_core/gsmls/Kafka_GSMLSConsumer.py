@@ -248,10 +248,28 @@ class KafkaGSMLSConsumer:
             os.remove(filepath)
 
     @staticmethod
+    def detect_unnamed_col(cols: list):
+
+        col_pattern = re.compile(r'UNNAMED: \d{2,4}')
+        del_cols = []
+
+        for i in cols:
+            if col_pattern.search(i) is not None:
+                del_cols.append(i)
+
+        if len(del_cols) > 0:
+            return del_cols
+        else:
+            return None
+
+    @staticmethod
     def drop_columns(df_var, prop_type, update_bar):
         """
         REFACTOR
         """
+
+        cols_list = df_var.columns
+        cols_index = df_var.columns.get_indexer(cols_list)
 
         if prop_type == 'RES':
             update_bar.update(1)
@@ -284,9 +302,12 @@ class KafkaGSMLSConsumer:
                                         'BASEMENT_SHORT', 'TENANTPAYS_SHORT', 'RENTINCLUDES_SHORT', 'IMAGES', 'PROP_CLASS'])
 
         if prop_type == 'TAX':
-            update_bar.update(1)
-            return df_var.drop(columns=['UNNAMED: 111'])
 
+            target_cols = KafkaGSMLSConsumer.detect_unnamed_col(list(cols_list))
+            if target_cols is not None:
+                return df_var.drop(columns=target_cols)
+            else:
+                return df_var
 
     @staticmethod
     def escape_illegal_char(df_var, prop_type, update_bar):
