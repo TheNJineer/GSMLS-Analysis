@@ -1,11 +1,12 @@
+import bs4.element
+import calendar
+import chardet
+import datetime
+import os
+import random
 import re
 import selenium.common.exceptions
 import time
-import random
-import os
-import calendar
-import bs4.element
-import datetime
 import pandas as pd
 import sys, traceback
 import logging
@@ -304,7 +305,8 @@ class GSMLS:
 
             xls_df = pd.read_excel(path_to_file + ".xls", engine="xlrd")
             try:
-                tsv_df = pd.read_table(path_to_file + ".tsv")
+                encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
+                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
             except ParserError:
                 tsv_df = pd.read_table(path_to_file + ".tsv",
                                        on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
@@ -332,7 +334,8 @@ class GSMLS:
             return df
         elif file_ending == 'tsv':
             try:
-                df = pd.read_table(path_to_file + ".tsv")
+                encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
+                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
             except ParserError:
                 df = pd.read_table(path_to_file + ".tsv",
                                    on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
@@ -340,6 +343,15 @@ class GSMLS:
             print(f' ==== ONLY TSV FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
             self.download_log["File_Type"][-1] = 'tsv'
             return df
+
+    @staticmethod
+    def detect_encoding(path):
+
+        with open(path, 'rb') as f:
+            results = chardet.detect_all(f.read())
+            print(f' ==== File: {path}, Encoding Result: {results[0]} ==== ')
+
+        return results[0]['encoding']
 
     def download_complete(self, **kwargs):
 
@@ -1173,7 +1185,7 @@ class GSMLS:
             "MUL": "mul_properties",
             "LND": "lnd_properties",
             "RNT": "rnt_properties",
-            "TAX": "tax_properties",
+            "TAX": "tax_properties_new",
         }
 
         if kwargs.get("Topic", None) is None:
@@ -1191,10 +1203,10 @@ class GSMLS:
 
         print(f' ==== SIZE OF DF AFTER LOADING: {len(sold_df)}')
         sold_df.columns = sold_df.columns.str.upper()
-        sold_df = self.return_target_columns(sold_df)
 
         # Merge the Latitude and Longitude data from the image df to the sold listings df
         if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
+            sold_df = self.return_target_columns(sold_df)
             raw_data = self.enrich_raw_data(sold_df, soldlistings, **kwargs)
             print(f' ==== SIZE OF DF AFTER DATA ENRICHMENT: {len(sold_df)}')
 
@@ -1742,65 +1754,6 @@ class GSMLS:
 
             return df[columns]
 
-        elif self.prop_type == "TAX":
-
-            columns = [
-                "AUTOROW",
-                "CITYCODE",
-                "BLOCKID",
-                "BLOCKSUFFIX",
-                "LOT",
-                "LOTSUFFIX",
-                "PARCEL_NO",
-                "MCR",
-                "MAP",
-                "LOCNUM",
-                "LOCDIR",
-                "LOCSTREET",
-                "LOCMODE",
-                "LOCCITY",
-                "LOCSTATE",
-                "LOCZIP",
-                "PROPERTYDESC",
-                "PROPERTYUSECODE",
-                "EQVALUE",
-                "BANKCODE",
-                "SALEDATE",
-                "SALEPRICE",
-                "TAXES",
-                "TAXYR",
-                "RATE",
-                "RATIO",
-                "RATIOYR",
-                "TOTALASSESSMENT",
-                "ASSESSMENT2",
-                "ASSESSMENT1",
-                "YEARBUILT",
-                "BUILDINGDESC",
-                "BUILDINGCLASSCODE",
-                "ACRES",
-                "ADDITIONALLOTS",
-                "DEEDBOOK",
-                "DEEDPAGE",
-                "OWNER",
-                "OWNERS",
-                "MAILNUM",
-                "MAILDIR",
-                "MAILSTREET",
-                "MAILMODE",
-                "MAILCITY",
-                "MAILSTATE",
-                "MAILZIP",
-                "PRIOROWNER",
-                "PRIORSALEAMT",
-                "PRIORSALEDATE",
-                "PRIORDEEDBOOK",
-                "PRIORDEEDPAGE",
-                "DATEMODIFIED",
-                "LCR",
-            ]
-
-            return df[columns]
 
     def save_metadata(self):
 
