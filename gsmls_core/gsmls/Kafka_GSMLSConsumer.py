@@ -27,7 +27,7 @@ class KafkaGSMLSConsumer:
             'MUL': {'topic': 'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
             'LND': {'topic': 'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
             'RNT': {'topic': 'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
-            'TAX': {'topic': 'tax_properties', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
+            'TAX': {'topic': 'tax_properties_new', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
             'IMAGES': {'topic': 'prop_images', 'functions': 0, 'clean_type': None},
         }
 
@@ -78,9 +78,14 @@ class KafkaGSMLSConsumer:
             df_var['RP/LP%'] = df_var['RP/LP%'] - 100.0
 
         elif prop_type == 'TAX':
+            df_var['MTGDATE'] = pd.to_datetime(df_var['MTGDATE'], errors='coerce')
+            df_var['RECDATE'] = pd.to_datetime(df_var['RECDATE'], errors='coerce')
+            df_var['DATEMODIFIED'] = pd.to_datetime(df_var['DATEMODIFIED'], errors='coerce')
             df_var['PRIORSALEDATE'] = pd.to_datetime(df_var['PRIORSALEDATE'], errors='coerce')
             df_var['SALEDATE'] = pd.to_datetime(df_var['SALEDATE'], errors='coerce')
-            df_var['PREVOWN_POSS_TIME (YRS)'] = (df_var['SALEDATE'] - df_var['PRIORSALEDATE']) / 365
+            df_var['DEDATE'] = pd.to_datetime(df_var['DEDATE'], errors='coerce')
+            df_var['LASTMODDATE'] = pd.to_datetime(df_var['LASTMODDATE'], errors='coerce')
+            df_var['PREVOWN_POSS_TIME'] = df_var['SALEDATE'] - df_var['PRIORSALEDATE']
 
         update_bar.update(1)
         return df_var
@@ -130,7 +135,7 @@ class KafkaGSMLSConsumer:
 
         elif prop_type == 'TAX':
             update_bar.update(1)
-            return df_var
+            return df_var.astype({'ACRES': 'float64', 'PREVOWN_POSS_TIME': 'string'})
 
     @staticmethod
     def checkpoint(df_var, topic):
@@ -140,6 +145,16 @@ class KafkaGSMLSConsumer:
 
         print(f' ==== PROCESSING ERROR OCCURRED. CREATING DATA CHECKPOINT FOR {topic} ==== ')
         df_var.to_excel(filepath, index=False)
+
+    @staticmethod
+    def column_indexer(targ_col: str, cols: pd.Index, indexes: numpy.array):
+
+        col_index = {}
+
+        for col, idx in zip(cols, indexes):
+            col_index[col] = idx
+
+        return int(col_index[targ_col])
 
     @staticmethod
     def combine_listing_remarks(df_var, update_bar):
@@ -268,6 +283,11 @@ class KafkaGSMLSConsumer:
                                          'SEWER_SHORT', 'BASEDESC_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT',
                                         'BASEMENT_SHORT', 'TENANTPAYS_SHORT', 'RENTINCLUDES_SHORT', 'IMAGES', 'PROP_CLASS'])
 
+        if prop_type == 'TAX':
+            update_bar.update(1)
+            return df_var.drop(columns=['UNNAMED: 111'])
+
+
     @staticmethod
     def escape_illegal_char(df_var, prop_type, update_bar):
         """
@@ -335,6 +355,8 @@ class KafkaGSMLSConsumer:
 
         datatype_dict = {'ACRES': ['0.0', 'string'],
                         'ADDITIONALLOTS': ['N', 'string'],
+                        'ADDJUDGEMENTS': ['N', 'string'],
+                        'ADDLMTGHOLDER': ['N', 'string'],
                         'AGENTLIST': ['000000', 'string'],
                         'AGENTSELL': ['000000', 'string'],
                         'AGENTSELLNAME': ['NOT AVAILABLE', 'string'],
@@ -346,8 +368,10 @@ class KafkaGSMLSConsumer:
                         'ASSESSAMOUNTLAND': ['0.0', 'string'],
                         'ASSESSMENT1': ['0', 'int64'],
                         'ASSESSMENT2': ['0', 'int64'],
+                        'ASSESSMENT3': ['0', 'int64'],
                         'ASSESSTOTAL': ['0.0', 'string'],
                         'ASSOCFEE': ['0.0', 'float64'],
+                        'ATTONEY': ['N', 'string'],
                         'AUTOROW': ['0', 'int64'],
                         'AVAILABLE_SHORT': ['Unknown', 'string'],
                         'BANKCODE': ['0', 'string'],
@@ -363,6 +387,8 @@ class KafkaGSMLSConsumer:
                         'BUILDINGDESC': ['Unknown', 'string'],
                         'BUILDINGSINCLUDED_SHORT': ['Unknown', 'string'],
                         'BUSRELATION_SHORT': ['Unknown', 'string'],
+                        'CALCTAXAMT':['0.0', 'float64'],
+                        'CBLOCK': ['00', 'string'],
                         'CITYCODE': ['0', 'int64'],
                         'CLOSEDDATE': ['00/00/0000 00:00:00', 'string'],
                         'COMPBUY': ['None', 'string'],
@@ -371,30 +397,52 @@ class KafkaGSMLSConsumer:
                         'COOLSYSTEM_SHORT': ['Unknown', 'string'],
                         'COUNTY': ['Unknown', 'string'],
                         'COUNTYCODE': ['00', 'string'],
+                        'CTRACT': ['00', 'string'],
                         'CURRENTUSE_SHORT': ['Unknown', 'string'],
                         'DATEMODIFIED': ['00/00/0000 00:00:00', 'string'],
                         'DAYSONMARKET': ['0.0', 'float64'],
+                        'DEDATE': ['00/00/0000 00:00:00', 'string'],
+                        'DEDUCTIONAMOUNT': ['0.0', 'string'],
+                        'DEDUCTIONS': ['0.0', 'string'],
                         'DEEDBOOK': ['Unknown', 'string'],
                         'DEEDPAGE': ['Unknown', 'string'],
                         'DEVRESTRICT_SHORT': ['Unknown', 'string'],
                         'DEVSTATUS_SHORT': ['Unknown', 'string'],
+                        'DOCKET': ['N', 'string'],
+                        'DOI': ['N', 'string'],
                         'DRIVEWAYDESC_SHORT': ['Unknown', 'string'],
                         'EASEMENT_SHORT': ['N', 'string'],
                         'EQVALUE': ['0.0', 'float64'],
                         'EXPENSEOPERATING': ['0.0', 'string'],
                         'EXPENSESINCLUDE_SHORT': ['None', 'string'],
                         'EXPIREDATE': ['00/00/0000 00:00:00', 'string'],
+                        'FBANK': ['N', 'string'],
+                        'FIPS': ['00000', 'string'],
                         'FIREPLACES': ['0', 'int64'],
+                        'FIRSTNAME1': ['Unknown', 'string'],
+                        'FIRSTNAME2': ['Unknown', 'string'],
                         'FLOORS_SHORT': ['Unknown', 'string'],
+                        'FORCLOSEAMT': ['0.0', 'string'],
+                        'FULLLOC': ['Unknown', 'string'],
+                        'FULLMAIL': ['Unknown', 'string'],
+                        'FULLRATIOYEAR': ['0', 'string'],
+                        'FULLTAXYEAR': ['0', 'string'],
                         'FURNISHINFO_SHORT': ['Unknown', 'string'],
                         'GARAGECAP': ['0.0', 'float64'],
+                        'GSCOUNTYCODE': ['0', 'string'],
                         'HEATSRC_SHORT': ['Unknown', 'string'],
                         'HEATSYSTEM_SHORT': ['Unknown', 'string'],
                         'IMPROVEMENTS_SHORT': ['None', 'string'],
                         'INCOMEGROSSOPERATING': ['0.0', 'string'],
                         'INCOMENETOPERATING': ['0.0', 'string'],
+                        'LASTMODDATE': ['00/00/0000 00:00:00', 'string'],
+                        'LASTNAME1': ['Unknown', 'string'],
+                        'LASTNAME2': ['Unknown', 'string'],
                         'LATITUDE': ['0E-20', 'string'],
                         'LAUNDRYFAC': ['Unknown', 'string'],
+                        'LCR': ['0', 'string'],
+                        'LDPC': ['0', 'string'],
+                        'LDPCDIGIT': ['0', 'string'],
                         'LEASETERMS_SHORT': ['Unknown', 'string'],
                         'LENGTHOFLEASE': ['0.0', 'float64'],
                         'LISTDATE': ['00/00/0000 00:00:00', 'string'],
@@ -407,8 +455,11 @@ class KafkaGSMLSConsumer:
                         'LOCDIR': ['Unknown', 'string'],
                         'LOCMODE': ['Unknown', 'string'],
                         'LOCNUM': ['00', 'string'],
+                        'LOCNUM_NUM': ['00', 'string'],
+                        'LOCPOST': ['00', 'string'],
                         'LOCSTATE': ['Unknown', 'string'],
                         'LOCSTREET': ['Unknown', 'string'],
+                        'LOCUNIT': ['Unknown', 'string'],
                         'LOCZIP': ['00000', 'string'],
                         'LONGITUDE': ['0E-20', 'string'],
                         'LOT': ['0', 'int64'],
@@ -418,44 +469,62 @@ class KafkaGSMLSConsumer:
                         'LOTSUFFIX': ['00', 'string'],
                         'LP': ['0.0', 'float64'],
                         'MAILCITY': ['Unknown', 'string'],
+                        'MAILCITYSTATE': ['Unknown', 'string'],
+                        'MAILCITYSTATEZIP': ['Unknown', 'string'],
+                        'MAILCITYSTATEZIP4': ['Unknown', 'string'],
                         'MAILDIR': ['Unknown', 'string'],
                         'MAILMODE': ['Unknown', 'string'],
                         'MAILNUM': ['Unknown', 'string'],
+                        'MAILPHONE': ['Unknown', 'string'],
+                        'MAILPOST': ['Unknown', 'string'],
                         'MAILSTATE': ['Unknown', 'string'],
                         'MAILSTREET': ['Unknown', 'string'],
+                        'MAILUNIT': ['Unknown', 'string'],
                         'MAILZIP': ['00000', 'string'],
                         'MAP': ['00', 'string'],
                         'MCR': ['Unknown', 'string'],
+                        'MDPC': ['Unknown', 'string'],
+                        'MDPCDIGIT': ['Unknown', 'string'],
+                        'MLSCITYCODE': ['0000', 'string'],
+                        'MTGAMT': ['Unknown', 'string'],
+                        'MTGDATE': ['00/00/0000 00:00:00', 'string'],
+                        'MTGHOLDER': ['Unknown', 'string'],
                         'MLSNUM': ['000000', 'string'],
                         'NUMLOTS': ['0', 'int64'],
                         'NUMUNITS': ['0', 'int64'],
                         'OFFICELIST': ['000000', 'string'],
                         'OFFICESELL': ['000000', 'string'],
                         'OFFICESELLNAME': ['NEW JERSEY', 'string'],
+                        'OLDPIN': ['000000', 'string'],
                         'ORIGLISTPRICE': ['0.0', 'float64'],
                         'OWNER': ['Unknown', 'string'],
                         'OWNERNAME': ['Not Available', 'string'],
                         'OWNERPAYS_SHORT': ['Unknown', 'string'],
-                        'OWNERS': ['1', 'int64'],
+                        'OWNERS': ['1.0', 'float64'],
                         'PARCEL_NO': ['0000-00000-0000-00000-0000', 'string'],
                         'PARKNBRAVAIL': ['0.0', 'float64'],
                         'PENDINGDATE': ['00/00/0000 00:00:00', 'string'],
                         'PERCTEST_SHORT': ['Unknown', 'string'],
                         'PETS_SHORT': ['Unknown', 'string'],
+                        'PHONE': ['000-000-0000', 'string'],
                         'POOL_SHORT': ['N', 'string'],
                         'PRERENTREQUIRE_SHORT': ['Unknown', 'string'],
                         'PRIORDEEDBOOK': ['Unknown', 'string'],
                         'PRIORDEEDPAGE': ['Unknown', 'string'],
                         'PRIOROWNER': ['Unknown', 'string'],
-                        'PRIORSALEAMT': ['0', 'int64'],
+                        'PRIORSALEAMT': ['0.0', 'float64'],
                         'PRIORSALEDATE': ['00/00/0000 00:00:00', 'string'],
-                        'PROPERTYDESC': ['Unknown', 'string'],
+                        'PROPERTYDESC': ['0x0', 'string'],
                         'PROPERTYTYPEPRIMARY_SHORT': ['Unknown', 'string'],
                         'PROPERTYUSECODE': ['Unknown', 'string'],
                         'PROPSUBTYPERN': ['Unknown', 'string'],
+                        'QUALIFIER': ['Unknown', 'string'],
+                        'QUARTER': ['Unknown', 'string'],
+                        'RANGE_': ['Unknown', 'string'],
                         'RATE': ['0.0', 'float64'],
                         'RATIO': ['0.0', 'float64'],
                         'RATIOYR': ['0', 'int64'],
+                        'RECDATE': ['00/00/0000 00:00:00', 'string'],
                         'REMARKSAGENT': ['None', 'string'],
                         'REMARKSPUBLIC': ['None', 'string'],
                         'RENTEDDATE': ['00/00/0000 00:00:00', 'string'],
@@ -466,10 +535,15 @@ class KafkaGSMLSConsumer:
                         'ROADFRONTDESC_SHORT': ['Unknown', 'string'],
                         'ROADSURFACEDESC_SHORT': ['Unknown', 'string'],
                         'ROOMS': ['0.0', 'float64'],
+                        'ROWID': ['0', 'string'],
+                        'ROWIDNUM': ['0', 'string'],
                         'RP/LP%': ['0', 'int64'],
                         'SALEDATE': ['00/00/0000 00:00:00', 'string'],
-                        'SALEPRICE': ['0', 'int64'],
-                        'SALESPRICE': ['0.0', 'float64'], # Converting to float type shouldn't throw error later
+                        'SALEPRICE': ['0.0', 'float64'],
+                        'SALESPRICE': ['0.0', 'float64'],  # Converting to float type shouldn't throw error later
+                        'SECNAME': ['Unknown', 'string'],
+                        'SECNUM': ['Unknown', 'string'],
+                        'SECTION': ['Unknown', 'string'],
                         'SERVICES_SHORT': ['Unknown', 'string'],
                         'SEWERINFO_SHORT': ['Unknown', 'string'],
                         'SEWER_SHORT': ['Unknown', 'string'],
@@ -477,6 +551,7 @@ class KafkaGSMLSConsumer:
                         'SITEPARTICULARS_SHORT': ['Unknown', 'string'],
                         'SOILTYPE_SHORT': ['Unknown', 'string'],
                         'SP/LP%': ['0%', 'string'],
+                        'SPECIALTAXCODE': ['Unknown', 'string'],
                         'SQFTAPPROX': ['0', 'string'],
                         'SQFTBLDG': ['0', 'string'],
                         'STREETNAME': ['Unknown', 'string'],
@@ -487,6 +562,7 @@ class KafkaGSMLSConsumer:
                         'SUBPROPTYPE': ['U', 'string'],
                         'TAXES': ['0.0', 'float64'],
                         'TAXID': ['0000-00000-0000-00000-0000', 'string'],
+                        'TAXSYSID': ['000000000', 'string'],
                         'TAXYR': ['0', 'int64'],
                         'TENANTPAYS_SHORT': ['Unknown', 'string'],
                         'TENANTUSEOF_SHORT': ['Unknown', 'string'],
@@ -495,6 +571,7 @@ class KafkaGSMLSConsumer:
                         'TOTALASSESSMENT': ['0', 'int64'],
                         'TOWN': ['Unknown', 'string'],
                         'TOWNCODE': ['0', 'string'],
+                        'TOWNSHIP': ['0', 'string'],
                         'UNIT1BATHS': ['0.0', 'string'],
                         'UNIT1BEDS': ['0', 'string'],
                         'UNIT1OWNERTENANTPAYS_SHORT': ['None', 'string'],
@@ -512,6 +589,7 @@ class KafkaGSMLSConsumer:
                         'UNIT4OWNERTENANTPAYS_SHORT': ['None', 'string'],
                         'UNIT4ROOMS': ['0', 'string'],
                         'UNITSTYLE_SHORT': ['Unknown', 'string'],
+                        'USABLE': ['0', 'string'],
                         'UTILITIES_SHORT': ['Unknown', 'string'],
                         'WATERINFO_SHORT': ['Unknown', 'string'],
                         'WATER_SHORT': ['Unknown', 'string'],
@@ -928,7 +1006,6 @@ class KafkaGSMLSConsumer:
                 'LND': zip(list(attributes_dict.keys())[17:27], list(attributes_dict.values())[17:27]),
                 'RNT': zip(list(attributes_dict.keys())[2:8] + list(attributes_dict.keys())[11:14] + (list(attributes_dict.keys())[27:]),
                            list(attributes_dict.values())[2:14] + list(attributes_dict.values())[11:14] + list(attributes_dict.values())[27:]),
-                # 'TAX':
             }
 
             for target_col, values in target_attr[prop_type]:
@@ -1089,6 +1166,8 @@ class KafkaGSMLSConsumer:
     def reorder_columns(df_var, prop_type, update_bar):
 
         # Create a way to dynamically change the columns to reorder based on property type
+        cols_list = df_var.columns
+        cols_index = df_var.columns.get_indexer(cols_list)
 
         location_dict = {'RES': {'MLS': 1,
                             'LATITUDE': 13,
@@ -1171,7 +1250,17 @@ class KafkaGSMLSConsumer:
                             'LISTING_REMARKS': df_var.shape[1] - 1,
                             'PYSPARK_PROCESSED': df_var.shape[1] - 1,
                             'SCRAPED_DATE': df_var.shape[1] - 1},
-                         'TAX': {'LCR': df_var.shape[1] - 1}
+                         'TAX': {
+                             'DEDATE': KafkaGSMLSConsumer.column_indexer('DATEMODIFIED',
+                                                                                    cols_list, cols_index) + 1,
+                             'LASTMODDATE': KafkaGSMLSConsumer.column_indexer('GSCOUNTYCODE',
+                                                                         cols_list, cols_index) + 2,
+                             'LOCNUM_NUM': KafkaGSMLSConsumer.column_indexer('LOCNUM',
+                                                                              cols_list, cols_index) + 3,
+                             'PREVOWN_POSS_TIME': KafkaGSMLSConsumer.column_indexer('PRIORSALEDATE',
+                                                                                    cols_list, cols_index) + 4,
+                             'ROWID': KafkaGSMLSConsumer.column_indexer('RECDATE',
+                                                                             cols_list, cols_index) + 5}
                          }
         if location_dict[prop_type] != {}:
             for col, value in location_dict[prop_type].items():
@@ -1265,7 +1354,7 @@ class KafkaGSMLSConsumer:
         return (df_var.pipe(KafkaGSMLSConsumer.fill_na_values, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.standard_cleaning, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.calculate_dates, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.parse_property_attr, prop_type=prop_type, update_bar=update_bar)
+                .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
@@ -1402,25 +1491,19 @@ class KafkaGSMLSConsumer:
         for idx, row in enumerate(range(0, len(df_var), step)):
 
             slice_df = df_var[row:row + step]
+            final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
+                                     prop_type=prop_type, update_bar=cleaning_bar)
 
             try:
                 # Employs drop column for the following property data types
-                if prop_type in ['RES', 'MUL', 'RNT', 'LND']:
-                    final_df = slice_df.pipe(KafkaGSMLSConsumer.drop_columns,
-                                             prop_type=prop_type, update_bar=cleaning_bar)
-                    # print(f'{final_df.info()}')
-                    final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
-
-                else:
-                    # print(f'{slice_df.info()}')
-                    # Only use for prop_type == 'TAX'
-                    slice_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                # print(f'{final_df.info()}')
+                final_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
 
             # Catches data which is invalid for specific column or breaks the unique key constraints
             except (DataError, IntegrityError) as e:
                 print(f'{e}')
                 print(f' ==== ERROR HAS BEEN DETECTED IN BLOCK {idx}. NOW SUBMITTING DATA BY INDIVIDUAL ROW ==== ')
-                self.submit2sql_dataerror(slice_df, topic)
+                self.submit2sql_dataerror(final_df, topic)
 
         print(f" ==== {topic} HAS SUCCESSFULLY BEEN STORED IN POSTGRESQL ==== ")
 
