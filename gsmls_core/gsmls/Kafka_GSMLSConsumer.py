@@ -134,8 +134,9 @@ class KafkaGSMLSConsumer:
                                   'LENGTHOFLEASE': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'TAX':
+            df_var['YEARBUILT'] = df_var['YEARBUILT'].str.replace('.0', '', regex=False)
             update_bar.update(1)
-            return df_var.astype({'ACRES': 'float64', 'PREVOWN_POSS_TIME': 'string'})
+            return df_var.astype({'ACRES': 'float64', 'PREVOWN_POSS_TIME': 'string', 'YEARBUILT': 'int64'})
 
     @staticmethod
     def checkpoint(df_var, topic):
@@ -269,7 +270,6 @@ class KafkaGSMLSConsumer:
         """
 
         cols_list = df_var.columns
-        cols_index = df_var.columns.get_indexer(cols_list)
 
         if prop_type == 'RES':
             update_bar.update(1)
