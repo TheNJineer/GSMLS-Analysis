@@ -316,8 +316,8 @@ class GSMLS:
                 xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
                 tsv_data_captured = round((len(tsv_df) / kwargs["Expected_Data"]) * 100, 2)
             except ZeroDivisionError:
-                xls_data_captured = len(xls_df) / len(xls_df)
-                tsv_data_captured = len(tsv_df) / len(tsv_df)
+                xls_data_captured = (len(xls_df) / len(xls_df)) * 100
+                tsv_data_captured = (len(tsv_df) / len(tsv_df)) * 100
 
             if xls_data_captured > tsv_data_captured:
                 print(f' ==== XLS FILETYPE CAPTURED {xls_data_captured}% OF DATA FOR {kwargs["Filename"]}==== ')

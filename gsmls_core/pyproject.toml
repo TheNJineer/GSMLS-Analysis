@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 requires-python = ">=3.10"
 name = "gsmls"
-version = "0.13.3"
+version = "0.13.4"
 description = "Core GSMLS packages to be used in the Airflow pipeline"
 
 dependencies = [
