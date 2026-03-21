@@ -34,6 +34,10 @@ class KafkaGSMLSConsumer:
     @staticmethod
     def baths_empty(df_var, prop_type):
 
+        """
+        REFACTOR
+        """
+
         if prop_type in ['RES', 'MUL', 'RNT']:
 
             baths_empty = df_var[df_var['BATHSTOTAL'] == 0.0]
@@ -128,15 +132,16 @@ class KafkaGSMLSConsumer:
         elif prop_type == 'RNT':
             df_var["PYSPARK_PROCESSED"] = False
             update_bar.update(1)
-            return df_var.astype({'TOWNCODE': 'int64', 'YEAR': 'int64','QTR': 'int64', 'BEDS':'int64',
+            return df_var.astype({'TOWNCODE': 'int64', 'YEAR': 'int64', 'QTR': 'int64', 'BEDS': 'int64',
                                   'YEARBUILT': 'float64', 'SQFTAPPROX': 'float64', 'RENTMONTHPERLSE': 'int64',
                                   'GARAGECAP': 'int64', 'LP': 'int64', 'RENTPRICEORIG': 'int64',
                                   'LENGTHOFLEASE': 'int64', 'PYSPARK_PROCESSED': 'boolean'})
 
         elif prop_type == 'TAX':
-            df_var['YEARBUILT'] = df_var['YEARBUILT'].str.replace('.0', '', regex=False)
             update_bar.update(1)
-            return df_var.astype({'ACRES': 'float64', 'PREVOWN_POSS_TIME': 'string', 'YEARBUILT': 'int64'})
+            return df_var.astype({'ACRES': 'float64', 'PREVOWN_POSS_TIME': 'string', 'YEARBUILT': 'int64',
+                                  'ASSESSMENT1': 'int64', 'ASSESSMENT2': 'int64', 'ASSESSMENT3': 'int64',
+                                  'TOTALASSESSMENT': 'int64'})
 
     @staticmethod
     def checkpoint(df_var, topic):
@@ -387,9 +392,9 @@ class KafkaGSMLSConsumer:
                         'APPLIANCES_SHORT': ['Unknown', 'string'],
                         'ASSESSAMOUNTBLDG': ['0.0', 'string'],
                         'ASSESSAMOUNTLAND': ['0.0', 'string'],
-                        'ASSESSMENT1': ['0', 'int64'],
-                        'ASSESSMENT2': ['0', 'int64'],
-                        'ASSESSMENT3': ['0', 'int64'],
+                        'ASSESSMENT1': ['0', 'string'],
+                        'ASSESSMENT2': ['0', 'string'],
+                        'ASSESSMENT3': ['0', 'string'],
                         'ASSESSTOTAL': ['0.0', 'string'],
                         'ASSOCFEE': ['0.0', 'float64'],
                         'ATTONEY': ['N', 'string'],
@@ -589,7 +594,7 @@ class KafkaGSMLSConsumer:
                         'TENANTUSEOF_SHORT': ['Unknown', 'string'],
                         'TENLANDCOMM_SHORT': ['Unknown', 'string'],
                         'TOPOGRAPHY_SHORT': ['Unknown', 'string'],
-                        'TOTALASSESSMENT': ['0', 'int64'],
+                        'TOTALASSESSMENT': ['0', 'string'],
                         'TOWN': ['Unknown', 'string'],
                         'TOWNCODE': ['0', 'string'],
                         'TOWNSHIP': ['0', 'string'],
@@ -1437,7 +1442,8 @@ class KafkaGSMLSConsumer:
                     '\.?\*?\(\d{4}\*?\)': {'columns': ['TOWN'],
                                            'default_value': '',
                                            'regex': True}},
-            'TAX': {None: {}}
+            'TAX': {'.0': {'columns': ['ASSESSMENT1', 'ASSESSMENT2', 'ASSESSMENT3', 'TOTALASSESSMENT', 'YEARBUILT'],
+                           'default_value': '', 'regex': False}}
         }
 
         if prop_type in ['RES', 'MUL', 'LND']:
