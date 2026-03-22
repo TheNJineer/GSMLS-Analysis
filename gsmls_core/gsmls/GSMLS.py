@@ -298,19 +298,28 @@ class GSMLS:
             return new_timeframe
 
     def data_quality_check(self, base_path, file_ending=None, **kwargs):
+        """
+        REFACTOR
+        """
 
         path_to_file = self.create_filename(base_path=base_path, **kwargs)
 
         if file_ending is None:
 
             xls_df = pd.read_excel(path_to_file + ".xls", engine="xlrd")
+            encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
             try:
-                encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
-                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
+                if encoding_type == 'utf-7':
+                    tsv_df = pd.read_table(path_to_file + ".tsv")
+                else:
+                    tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
             except ParserError:
                 tsv_df = pd.read_table(path_to_file + ".tsv",
                                        on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
                                        engine="python")
+            except UnicodeDecodeError as e:
+                print(f'{e}')
+                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
 
             try:
                 xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
@@ -338,13 +347,19 @@ class GSMLS:
             self.download_log["File_Type"][-1] = 'xls'
             return df
         elif file_ending == 'tsv':
+            encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
             try:
-                encoding_type = GSMLS.detect_encoding(path_to_file + ".tsv")
-                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
+                if encoding_type == 'utf-7':
+                    df = pd.read_table(path_to_file + ".tsv")
+                else:
+                    df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
             except ParserError:
                 df = pd.read_table(path_to_file + ".tsv",
                                    on_bad_lines=lambda line: print(f" ==== BAD LINE LOCATED IN {path_to_file} ====", line, sep='\n'),
                                    engine="python")
+            except UnicodeDecodeError as e:
+                print(f'{e}')
+                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
             print(f' ==== ONLY TSV FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
             self.download_log["File_Type"][-1] = 'tsv'
             return df
@@ -2059,6 +2074,10 @@ class GSMLS:
 
         for qtr, daterange in time_periods.items():
 
+            # Check program cutoff time
+            assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
+                "Program cutoff time reached. Saving progress and ending"
+
             if self.split_type_check(split_type, qtr) is False:
                 continue
             self.set_dates([daterange[0], daterange[1]], driver_var)
@@ -2081,6 +2100,9 @@ class GSMLS:
 
                 for month, daterange1 in monthly_periods.items():
 
+                    assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
+                        "Program cutoff time reached. Saving progress and ending"
+
                     if self.split_type_check(split_type, month) is False:
                         continue
                     self.set_dates([daterange1[0], daterange1[1]], driver_var)
@@ -2101,6 +2123,10 @@ class GSMLS:
                                                                     split_type=split_type, start_month=start_month)
 
                         for week, daterange2 in weekly_periods.items():
+
+                            assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
+                                "Program cutoff time reached. Saving progress and ending"
+
                             if self.split_type_check(split_type, week) is False:
                                 continue
                             self.set_dates([daterange1[0], daterange1[1]], driver_var)
@@ -2272,13 +2298,11 @@ class GSMLS:
         f_handler = kwargs["f_handler"]
         c_handler = kwargs["c_handler"]
         kwargs["data-producer"] = create_kafka_producer("data_producer", logger=logger, remote=True)
-        tz = timezone("America/New_York")
-        kwargs["time_zone"] = tz
 
         try:
 
             # Check program cutoff time
-            assert datetime.now(tz=tz) < kwargs["cutoff_time"], \
+            assert datetime.now(tz=kwargs["time_zone"]) < kwargs["cutoff_time"], \
                 "Program cutoff time reached. Saving progress and ending"
 
             # Step 1: Login to the GSMLS
@@ -2350,12 +2374,16 @@ class GSMLS:
     def airflow_gsmls_producer(self, **kwargs):
 
         website = "https://mls.gsmls.com/member/"
+        tz = timezone("America/New_York")
+        kwargs["time_zone"] = tz
 
         while True:
 
             driver = create_selenium_webdriver()
 
             try:
+                assert datetime.now(tz=tz) < kwargs["cutoff_time"], \
+                    "Program cutoff time reached. Saving progress and ending"
                 driver.maximize_window()
                 driver.get(website)
                 quit_program = self.main(driver, **kwargs)
