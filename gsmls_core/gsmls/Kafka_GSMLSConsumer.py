@@ -1195,6 +1195,15 @@ class KafkaGSMLSConsumer:
         cols_list = df_var.columns
         cols_index = df_var.columns.get_indexer(cols_list)
 
+        if prop_type == 'TAX':
+            tax_dict = {'DEDATE': KafkaGSMLSConsumer.column_indexer('DATEMODIFIED', cols_list, cols_index) + 1,
+                        'LASTMODDATE': KafkaGSMLSConsumer.column_indexer('GSCOUNTYCODE', cols_list, cols_index) + 2,
+                        'LOCNUM_NUM': KafkaGSMLSConsumer.column_indexer('LOCNUM', cols_list, cols_index) + 3,
+                        'PREVOWN_POSS_TIME': KafkaGSMLSConsumer.column_indexer('PRIORSALEDATE', cols_list, cols_index) + 4,
+                        'ROWID': KafkaGSMLSConsumer.column_indexer('RECDATE', cols_list, cols_index) + 5}
+        else:
+            tax_dict = None
+
         location_dict = {'RES': {'MLS': 1,
                             'LATITUDE': 13,
                             'LONGITUDE': 14,
@@ -1276,17 +1285,7 @@ class KafkaGSMLSConsumer:
                             'LISTING_REMARKS': df_var.shape[1] - 1,
                             'PYSPARK_PROCESSED': df_var.shape[1] - 1,
                             'SCRAPED_DATE': df_var.shape[1] - 1},
-                         'TAX': {
-                             'DEDATE': KafkaGSMLSConsumer.column_indexer('DATEMODIFIED',
-                                                                                    cols_list, cols_index) + 1,
-                             'LASTMODDATE': KafkaGSMLSConsumer.column_indexer('GSCOUNTYCODE',
-                                                                         cols_list, cols_index) + 2,
-                             'LOCNUM_NUM': KafkaGSMLSConsumer.column_indexer('LOCNUM',
-                                                                              cols_list, cols_index) + 3,
-                             'PREVOWN_POSS_TIME': KafkaGSMLSConsumer.column_indexer('PRIORSALEDATE',
-                                                                                    cols_list, cols_index) + 4,
-                             'ROWID': KafkaGSMLSConsumer.column_indexer('RECDATE',
-                                                                             cols_list, cols_index) + 5}
+                         'TAX': tax_dict
                          }
         if location_dict[prop_type] != {}:
             for col, value in location_dict[prop_type].items():
