@@ -1564,7 +1564,10 @@ class KafkaGSMLSConsumer:
 
             self.submit2sql(df, table, prop, cleaning_bar)
             if keys_list is not None:
-                KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
+                try:
+                    KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
+                except IndexError:
+                    print(' ==== ERROR PROCESSING FILES KEYS ==== ')
 
         else:
             # Produce image data to MongoDB
