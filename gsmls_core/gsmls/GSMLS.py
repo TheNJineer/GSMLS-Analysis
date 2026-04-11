@@ -179,9 +179,18 @@ class GSMLS:
 
             if kwargs['split_data'] is False:
 
-                return " ".join([kwargs["Municipality"].rstrip("."),
-                                kwargs["County_Name"], "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
-                                f"{self.prop_type} Sales GSMLS"])
+                filename = " ".join([kwargs["Municipality"].rstrip("."),
+                                     kwargs["County_Name"], "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
+                                     f"{self.prop_type} Sales GSMLS"])
+
+                if len(filename) >= 50:
+
+                    filename = " ".join([kwargs["Municipality"].rstrip("."),
+                                         "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
+                                         f"{self.prop_type} Sales"])
+
+                return filename
+
             else:
                 # New names need to be made so the same filename isnt being rewritten over, possibly corrupting data
                 return " ".join([kwargs["Municipality"].rstrip("."),
