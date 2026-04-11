@@ -186,8 +186,8 @@ class GSMLS:
                 if len(filename) >= 50:
 
                     filename = " ".join([kwargs["Municipality"].rstrip("."),
-                                         "Q" + str(kwargs["Qtr"]) + str(kwargs["Year"]),
-                                         f"{self.prop_type} Sales"])
+                                         kwargs["County_Name"], "Q" + str(kwargs["Year"]),
+                                         f"{self.prop_type} Sales GSMLS"])
 
             else:
                 # New names need to be made so the same filename isnt being rewritten over, possibly corrupting data
@@ -198,8 +198,8 @@ class GSMLS:
                 if len(filename) >= 50:
 
                     filename = " ".join([kwargs["Municipality"].rstrip("."),
-                                         str(kwargs["New_Qtr"]) + str(kwargs["Year"]),
-                                         f"{self.prop_type}"])
+                                         kwargs["County_Name"], str(kwargs["New_Qtr"]) + str(kwargs["Year"]),
+                                         f"{self.prop_type} 0 0"])
             return filename
 
         else:
@@ -293,18 +293,14 @@ class GSMLS:
             month_str = GSMLS.string_month(start_month)
 
             # Create a timeframe dict using the week as a key and the values are the days in that week
-            for week, last_day_of_week in enumerate(range(1, int(last_day) + 1, 7)):
+            for week, last_day_of_week in enumerate(range(7, int(last_day) + 1, 7)):
 
                 if week == 4:
                     new_timeframe.setdefault(5, [])
 
                 # Despite the function name, this just right pads single digits with '0'
-                if week == 0:
-                    start_of_the_week_str = GSMLS.string_month(last_day_of_week - 7)
-                else:
-                    # Subtracting 6 days to exclude the last day of the previous week
-                    start_of_the_week_str = GSMLS.string_month(last_day_of_week - 6)
-
+                # Subtracting 6 days to exclude the last day of the previous week
+                start_of_the_week_str = GSMLS.string_month(last_day_of_week - 6)
                 last_day_of_week_str = GSMLS.string_month(last_day_of_week)
                 new_timeframe[week + 1].extend([f"{month_str}/{start_of_the_week_str}/{year}",
                                                 f"{month_str}/{last_day_of_week_str}/{year}"])
@@ -2132,6 +2128,7 @@ class GSMLS:
                         GSMLS.too_many_results(driver_var)
                         self.input_download_log_data(split_type='monthly', split_index=month,
                                                      results_found='Yes', **kwargs)
+                        start_month = int(daterange1[0][:2])
                         split_type = 'weekly'
                         weekly_periods = self.create_timeframe_dict(kwargs["Year"],
                                                                     split_type=split_type, start_month=start_month)
@@ -2143,7 +2140,7 @@ class GSMLS:
 
                             if self.split_type_check(split_type, week) is False:
                                 continue
-                            self.set_dates([daterange1[0], daterange1[1]], driver_var)
+                            self.set_dates([daterange2[0], daterange2[1]], driver_var)
                             zero_results, too_many_results = GSMLS.show_results(driver_var)
 
                             if zero_results is False and too_many_results is False:
