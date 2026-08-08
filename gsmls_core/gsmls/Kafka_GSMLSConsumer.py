@@ -1356,22 +1356,34 @@ class KafkaGSMLSConsumer:
 
     def reduce_df_size(self, df_var, step: int, block_num=None):
 
+        blocks = 0
+        sub_blocks = 0
+
         for idx, i in enumerate(range(0, len(df_var), step)):
             slice_df = df_var[i:i + step]
-
             prepared_image_df = slice_df.to_json(orient='split', date_format='iso')
+
             try:
                 results = self.producer.send('prop_images', value=prepared_image_df)
                 result_metadata = results.get(timeout=10)
                 if block_num is None:
+                    blocks += 1
                     print(f'Image data produced to Kafka: Block {idx}')
                 else:
+                    sub_blocks += 1
                     print(f'Image data produced to Kafka: Sub-Block {idx} of Block {block_num}')
             except MessageSizeTooLargeError:
                 self.reduce_df_size(slice_df, step // 50, idx)
 
             except KafkaTimeoutError:
                 print(f'Images have not been produced to {result_metadata.topic} in Kafka')
+
+        if blocks > 0:
+            print(f" ==== TOTAL DATA SUBMITTED TO KAFKA FROM BLOCK {block_num}")
+            print(f" ==== TOTAL DATA SUBMITTED: {blocks * step} ROWS")
+        if sub_blocks > 0:
+            print(f" ==== TOTAL SUB-BLOCK(S) OF DATA SUBMITTED TO KAFKA: {sub_blocks} FROM BLOCK {block_num}")
+            print(f" ==== TOTAL DATA SUBMITTED: {sub_blocks * step} ROWS")
 
     @staticmethod
     def tax_property_cleaning(df_var, prop_type, update_bar):
@@ -1542,15 +1554,23 @@ class KafkaGSMLSConsumer:
         :param topic:
         """
 
+        completed = 0
+        failed = 0
+
+        print(f' ==== NOW SUBMITTING DATA BY INDIVIDUAL ROW. PLEASE WAIT... ==== ')
+
         for idx, row in df_var.iterrows():
 
             temp_df = pd.DataFrame(data=row.values.reshape(1, -1), index=[idx], columns=row.index)
-
             try:
                 temp_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
+                completed += 1
             except (DataError, IntegrityError) as e:
-                print(f'Faulty row has been found at Row {idx}.\nError has occurred: {e}')
+                failed += 1
                 continue
+
+        print(f" ==== DUPLICATE ROWS REMOVED FROM DATA: {failed} ==== ")
+        print(f" ==== NEW ROWS SAVED TO POSTGRESQL: {completed} ==== ")
 
     def submit_data(self, df, prop, table, cleaning_bar, keys_list, re_image_obj, **kwargs):
 
