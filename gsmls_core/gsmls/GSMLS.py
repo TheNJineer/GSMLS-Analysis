@@ -1,29 +1,27 @@
+import boto3
 import bs4.element
 import calendar
 import chardet
 import datetime
+import logging
 import os
+import pandas as pd
 import random
 import re
 import selenium.common.exceptions
 import time
-import pandas as pd
 import sys, traceback
-import logging
-from dotenv import load_dotenv
-from gsmls.utility_func import (
-    create_sql_engine,
-    create_kafka_producer, logger_decorator,
-    create_selenium_webdriver, get_filepath
-)
+from botocore.exceptions import ClientError
 from bs4 import BeautifulSoup
-from tqdm import tqdm
-from tqdm.auto import trange
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
-from datetime import date
+from dotenv import load_dotenv
+from kafka.errors import NoBrokersAvailable
+from kafka.errors import KafkaTimeoutError
+from kafka.errors import MessageSizeTooLargeError
+from pandas.errors import ParserError
 from pendulum import timezone
-from gsmls.utility_func import get_us_pw
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.alert import Alert
@@ -32,16 +30,20 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import UnexpectedAlertPresentException, WebDriverException
-from kafka.errors import NoBrokersAvailable
-from kafka.errors import KafkaTimeoutError
-from kafka.errors import MessageSizeTooLargeError
 from sqlalchemy.exc import DatabaseError
-from pandas.errors import ParserError
+from tqdm import tqdm
+from tqdm.auto import trange
+from gsmls.utility_func import (
+    create_sql_engine,
+    create_kafka_producer, logger_decorator,
+    create_selenium_webdriver, get_filepath
+)
+from gsmls.utility_func import get_us_pw
 
 
 class GSMLS:
 
-    def __init__(self, prop_type, remote=True, timeframe="historic"):
+    def __init__(self, prop_type, remote=True, timeframe="current"):
         self.remote = remote
         self.prop_type = prop_type
         self.counties = {}
@@ -56,6 +58,7 @@ class GSMLS:
         self.last_scraped_county = None
         self.last_scraped_muni = None
         self.last_scraped_property_type = None
+        self.last_timeframe = None
         self.start_date = None
         self.finished = None
         self.timeframe = timeframe
@@ -68,6 +71,23 @@ class GSMLS:
     ______________________________________________________________________________________________________________
     """
 
+    def all_historical_data_scraped(self):
+
+        query = f"""
+            SELECT * FROM backfill_event_log
+            WHERE year_ = 1995 AND county = 30
+            AND municipality = 'White Twp.'
+            AND finished = 'Yes' AND property_type = '{self.prop_type}'
+            ORDER BY id DESC;
+        """
+
+        df = pd.read_sql_query(query, con=self.engine)
+
+        if df.empty:
+            return False
+        else:
+            return True
+
     def assign_timeframe(self, idx=None, year=None):
 
         if idx is None:
@@ -75,12 +95,20 @@ class GSMLS:
         else:
             target_year = year
 
-        if target_year == datetime.now().year - 1:
-            print(f' ==== UPDATING DATA TIMEFRAME FROM {self.timeframe} TO mixed ==== ')
-            self.timeframe = "mixed"
-        elif target_year == datetime.now().year:
+        if target_year == datetime.now().year:
             print(f' ==== UPDATING DATA TIMEFRAME FROM {self.timeframe} TO current ==== ')
             self.timeframe = "current"
+            if self.all_historical_data_scraped() is True or self.last_timeframe == 'current_max':
+                self.timeframe = "current_max"
+        elif target_year == datetime.now().year - 1:
+            print(f' ==== UPDATING DATA TIMEFRAME FROM {self.timeframe} TO mixed ==== ')
+            self.timeframe = "mixed"
+        elif target_year <= datetime.now().year - 2:
+            self.timeframe = "historic"
+            if year == 1994:
+                self.timeframe = "current_max"
+                self.last_scraped_year = None
+                self.set_start_date()
         elif target_year > datetime.now().year:
             raise AssertionError(' ==== TARGET YEAR IS GREATER THAN THE CURRENT YEAR ==== ')
 
@@ -168,7 +196,8 @@ class GSMLS:
             "Split_Type": [],
             "Split_Index": [],
             "Expected_Data": [],
-            "File_Type": []
+            "File_Type": [],
+            "Data_Lake_Storage": []
         }
 
         return clean_log
@@ -234,7 +263,7 @@ class GSMLS:
                 self.assign_timeframe(idx, year)
 
             if self.timeframe == "historic":
-
+                # Ensure the start date year changes each year loop iteration
                 if self.start_date != new_start_date:
                     self.start_date = new_start_date
 
@@ -242,12 +271,8 @@ class GSMLS:
 
             else:
                 if idx == 0:
-                    # Get latest scraped date
-                    start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
-                    if self.timeframe == 'mixed':
-                        stop_date_list = [year, 12, 31]
-                    else:
-                        stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+
+                    start_date_list, stop_date_list = self.set_dates_lists(year, new_start_date)
 
                     start_month, start_day = start_date_list[1], start_date_list[2].split(" ")[0]
                     stop_month, stop_day, stop_year = (stop_date_list[1], stop_date_list[2], stop_date_list[0])
@@ -414,12 +439,12 @@ class GSMLS:
             )
             # WebDriverWait(driver_var, 5).until(
             #     EC.presence_of_element_located((By.XPATH, "//div[@id='message-box-container']")))
-            WebDriverWait(driver_var, 30).until(
+            WebDriverWait(driver_var, 4).until(
                 EC.presence_of_element_located(
                     (By.XPATH, "//div[@class='popup_inner']")
                 )
             )
-            WebDriverWait(driver_var, 30).until(
+            WebDriverWait(driver_var, 4).until(
                 EC.visibility_of_element_located(
                     (By.XPATH, "//h2[normalize-space()='Error']")
                 )
@@ -852,17 +877,20 @@ class GSMLS:
 
     def generate_level_sets(self):
 
+        # db = 'gsmls_event_log_new'
+        db = 'backfill_event_log'
+
         query = f"""
-            SELECT * FROM gsmls_event_log_new
+            SELECT * FROM {db}
             WHERE id IN (
-            SELECT id FROM gsmls_event_log_new
+            SELECT id FROM {db}
             WHERE id BETWEEN (
-                SELECT MAX(id) FROM gsmls_event_log_new
+                SELECT MAX(id) FROM {db}
                 WHERE municipality = '{self.last_scraped_muni}'
                 AND county = {self.last_scraped_county}
                 AND split_type = 'quarterly')
                 AND
-                (SELECT MAX(id) FROM gsmls_event_log_new
+                (SELECT MAX(id) FROM {db}
                 WHERE municipality = '{self.last_scraped_muni}')
         )
         """
@@ -874,6 +902,23 @@ class GSMLS:
             sub_table = table[table['split_type'] == level_type]
             if not sub_table.empty:
                 self.level_set[level_type] += sub_table['split_index'].max()
+
+    def generate_years(self):
+
+        if self.timeframe != "current_max":
+            return range(datetime.now().year, 1994, -1)
+        else:
+            return [datetime.now().year]
+
+    def get_latest_production_date(self):
+
+        query = f"""SELECT MAX(date_produced) FROM backfill_event_log
+                    WHERE timeframe = 'current'
+                    AND property_type = '{self.prop_type}';"""
+
+        db = pd.read_sql_query(query, self.engine)
+
+        return db['max'].values[0]
 
     def get_xls_tsv_files(self, driver_var, **kwargs):
 
@@ -892,6 +937,7 @@ class GSMLS:
                 AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
                     Keys.CONTROL
                 ).send_keys(filename + ".xls").perform()
+                input_type.click()  # Clicking the radio button again corrects the .xls file ending
             time.sleep(0.5)
 
             # Request the download and close the page
@@ -925,6 +971,7 @@ class GSMLS:
         self.download_log["Split_Index"].append(split_index)
         self.download_log["Expected_Data"].append(0)
         self.download_log["File_Type"].append(None)
+        self.download_log["Data_Lake_Storage"].append("No")
         if results_found is not None:
             self.download_log["Results_Found"].append("Yes")
 
@@ -947,8 +994,11 @@ class GSMLS:
         REFACTOR
         """
 
+        # db = 'gsmls_event_log_new'
+        db = 'backfill_event_log'
+
         query = f"""
-                SELECT * FROM gsmls_event_log_new
+                SELECT * FROM {db}
                 WHERE property_type = '{self.prop_type}'
                 ORDER BY id DESC
                 LIMIT 1;
@@ -957,72 +1007,13 @@ class GSMLS:
         metadata = pd.read_sql_query(query, self.engine)
         last_row = metadata.shape[0] - 1
 
-        if metadata.empty:
-            pass
+        # If metadata.empty is True, start_date should be set in self.create_timeframe_dict() of the main function
+        if not metadata.empty:
 
-        else:
-
-            self.last_scraped_qtr = metadata.loc[last_row, "quarter"]
-            self.last_scraped_year = metadata.loc[last_row, "year_"]
-            self.last_scraped_county = metadata.loc[last_row, "county"]
-            self.last_scraped_muni = metadata.loc[last_row, "municipality"]
-            self.finished = metadata.loc[last_row, "finished"]
-            self.last_scraped_property_type = metadata.loc[last_row, "property_type"]
-            self.alt_split_type = metadata.loc[last_row, "split_type"]
-            last_start_date = metadata.loc[last_row, "start_date"]
-            last_date_scraped = metadata.loc[last_row, "date_produced"]
-            if self.alt_split_type is not None:
-                self.generate_level_sets()
-            self.assign_timeframe()
-            print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
-            print(f" ==== LAST START DATE: {last_start_date} ====")
-            print(f" ==== LAST DATE PRODUCED: {last_date_scraped} ====")
-            print(f" ==== LEVEL SET: {self.level_set} ====")
-            print(f" ==== SCRAPED COUNTY: {self.last_scraped_county} ====")
-            print(f" ==== SCRAPED MUNICIPALITY: {self.last_scraped_muni} ====")
-            print(f" ==== SCRAPED FINISHED: {self.finished} ====")
-            print(f" ==== SCRAPED PROPERTY TYPE: {self.last_scraped_property_type} ====")
-            print(f" ==== SCRAPED QUARTER: {self.last_scraped_qtr} ====")
-            print(f" ==== SCRAPED YEAR: {self.last_scraped_year} ====")
-            print(f" ==== TIMEFRAME: {self.timeframe} ==== ")
+            last_start_date, last_date_scraped = self.set_metadata(metadata, last_row)
 
             if first_run is not None:
-                # Block is initiated on program start
-                # self.start_date is used to understand what date the program should start scraping from
-                # A historic or mixed timeframe will always start on Jan. 1st of the last scraped year
-                default_date = f'{self.last_scraped_year}-01-01 00:00:00'
-                if self.timeframe == 'historic':
-                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
-                    print(f" ==== SCRAPPING HISTORICAL DATA FROM DEFAULT DATE ==== ")
-                    print(f" ==== START DATE : {self.start_date} ==== ")
-
-                elif self.timeframe == 'mixed':
-                    if last_start_date == default_date:
-                        self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
-                        print(f" ==== SCRAPPING MIXED DATA FROM DEFAULT DATE ==== ")
-                    elif self.last_scraped_county != 30:
-                        self.start_date = last_start_date
-                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
-                    elif self.last_scraped_county == 30 and self.last_scraped_muni != "White Twp.":
-                        self.start_date = last_start_date
-                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
-                    elif self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == 'No':
-                        self.start_date = last_start_date
-                        print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
-                    else:
-                        print(f" ==== ALL DATA FROM MIXED TIMEFRAME HAS BEEN ACQUIRED. GENERATING NEW START DATE ==== ")
-
-                else:
-                    # Date produced is the date the program scraped that data
-                    # For a current timeframe, date of last run + 1 day will be new start date
-                    if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
-                        self.start_date = last_date_scraped + timedelta(days=1)
-                        print(f" ==== SCRAPPING NEW DATA FROM NEXT START DATE ==== ")
-                    else:
-                        self.start_date = last_start_date
-                        print(f" ==== SCRAPPING NEW DATA FROM SAVED DATE ==== ")
-
-                    print(f" ==== START DATE : {self.start_date} ==== ")
+                self.set_start_date(last_start_date, last_date_scraped)
 
             else:
                 # In the event of a complete program shutdown, the class will initiate a new
@@ -1033,19 +1024,10 @@ class GSMLS:
 
             assert datetime.now(tz=timezone("America/New_York")) > self.true_date(), \
                 " ==== START DATE IS GREATER THAN TODAYS DATE. NO NEW DATA TO SCRAPE ==== "
+            self.update_metadata()  # If all data was scraped from previous timeframe, update the metadata
 
-            # All data from last run was scraped. Reset the value to scrape all new data
-            if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
-                self.last_scraped_muni = None
-                self.last_scraped_county = None
-                if self.timeframe in ["historic", "mixed"]:
-                    self.last_scraped_year += 1
-                    self.assign_timeframe()
-                    default_date = f'{self.last_scraped_year}-01-01 00:00:00'
-                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
-                    print(f" ==== NEW START DATE : {self.start_date} ==== ")
-
-    def login(self, website, driver_var):
+    @staticmethod
+    def login(driver_var):
         """
 
         :param website:
@@ -1053,21 +1035,18 @@ class GSMLS:
         :return:
         """
 
-        if self.remote is False:
-            username, _, pw = get_us_pw(website)
-        else:
-            try:
-                username = os.getenv("GSMLS_USER")
-                pw = os.getenv("GSMLS_PASSWORD")
+        try:
+            username = os.getenv("GSMLS_USER")
+            pw = os.getenv("GSMLS_PASSWORD")
 
-                if username is None or pw is None:
-                    raise ValueError
-            except ValueError:
-                print(" ==== LOGIN ERROR: GSMLS USER INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
-                print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
-                load_dotenv(get_filepath("env"))
-                username = os.getenv("GSMLS_USER")
-                pw = os.getenv("GSMLS_PASSWORD")
+            if username is None or pw is None:
+                raise ValueError
+        except ValueError:
+            print(" ==== LOGIN ERROR: GSMLS USER INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
+            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+            load_dotenv(get_filepath("env"))
+            username = os.getenv("GSMLS_USER")
+            pw = os.getenv("GSMLS_PASSWORD")
 
         GSMLS.explicit_page_load("Login", driver_var)
 
@@ -1090,7 +1069,7 @@ class GSMLS:
                 "class": "gs-btn-submit-sh gs-btn-submit-two tertiary-color ps-tertiary-color fs14 popup_button_0"
             },
         )
-        if type(duplicate) == bs4.element.Tag:
+        if isinstance(duplicate, bs4.element.Tag):
             terminate_duplicate_session = WebDriverWait(driver_var, 30).until(
                 EC.presence_of_element_located(
                     (By.XPATH, '//*[@id="alert_popup"]/div/div[2]/input[1]')
@@ -1104,7 +1083,7 @@ class GSMLS:
         notice_msg = soup.find("div", {"id": "notice-box"})
 
         # Check if there's a GSMLS popup notice. If so, close the message
-        if type(notice_msg) == bs4.element.Tag:
+        if isinstance(notice_msg, bs4.element.Tag):
             try:
                 ok_button = WebDriverWait(driver_var, 30).until(
                     EC.presence_of_element_located((By.XPATH, "//input[@value='OK']"))
@@ -1113,8 +1092,9 @@ class GSMLS:
             except TimeoutException:
                 pass
 
-    def login_load_main_page(self, driver_var, **kwargs):
-        self.login("GSMLS", driver_var)
+    @staticmethod
+    def login_load_main_page(driver_var, **kwargs):
+        GSMLS.login(driver_var)
         GSMLS.explicit_page_load("Garden State MLS", driver_var)
         print(f' ==== CURRENT WINDOW ID: {driver_var.current_window_handle} ==== ')
         kwargs["Main_Window"] = driver_var.current_window_handle
@@ -1261,13 +1241,15 @@ class GSMLS:
             kwargs["logger"].warning(f"{kte}")
             kwargs["logger"].info(f"Re-attempting to send {kwargs['Filename']}")
             self.publish_data_2kafka(soldlistings, **kwargs)
-            GSMLS.sendfile2trash()
+            # GSMLS.sendfile2trash()
+            self.store_raw_data(**kwargs)
 
         except MessageSizeTooLargeError:
 
             # Reduce the size of the raw dataframe and send to Kafka in chunks
             GSMLS.reduce_df_size(raw_data,500, **kwargs)
-            GSMLS.sendfile2trash()
+            # GSMLS.sendfile2trash()
+            self.store_raw_data(**kwargs)
 
         else:
             kwargs["logger"].info(
@@ -1277,7 +1259,8 @@ class GSMLS:
             self.rows_counted[self.prop_type] += len(sold_df)
             self.download_log["Rows_Produced"][-1] = len(sold_df)
             self.download_log["Date_Produced"][-1] = str(datetime.now().date())
-            GSMLS.sendfile2trash()
+            # GSMLS.sendfile2trash()
+            self.store_raw_data(**kwargs)
 
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
@@ -1784,12 +1767,14 @@ class GSMLS:
 
             return df[columns]
 
-
     def save_metadata(self):
+
+        # db = 'gsmls_event_log_new'
+        db = 'backfill_event_log'
 
         metadata = pd.DataFrame(self.download_log)
         metadata.columns = metadata.columns.str.lower()
-        metadata.to_sql("gsmls_event_log_new", con=self.engine,
+        metadata.to_sql(db, con=self.engine,
                         if_exists="append", index=False)
         self.download_log = GSMLS.create_download_log()
 
@@ -1959,30 +1944,21 @@ class GSMLS:
     def set_dates(self, date_range, driver_var):
 
         ids_list = [
-            ("CLOSEDDATEmin", "CLOSEDDATEmax"),
-            ("EXPIREDATEmin", "EXPIREDATEmax"),
-            ("WITHDRAWNDATEmin", "WITHDRAWNDATEmax"),
-        ]
-        rent_ids = [
-            ("RENTEDDATEmin", "RENTEDDATEmax"),
-            ("EXPIREDATEmin", "EXPIREDATEmax"),
-            ("WITHDRAWNDATEmin", "WITHDRAWNDATEmax"),
-        ]
+            ("STATUSDATEmin", "STATUSDATEmax")]
+
         tax_ids = [("SALEDATEmin", "SALEDATEmax")]
 
-        # XPath ID values which correspond to the closed, expired and withdrawn dates
+        # XPath ID values which correspond to the status date tabs for each property type
         values = {
-            "RES": [48, 66, 174],
-            "MUL": [33, 47, 174],
-            "LND": [31, 42, 102],
-            "RNT": [142, 61, 172],
+            "RES": [12],
+            "MUL": [13],
+            "LND": [8],
+            "RNT": [14],
             "TAX": [81],
         }
 
-        if self.prop_type in ["RES", "MUL", "LND"]:
+        if self.prop_type in ["RES", "MUL", "LND", "RNT"]:
             target_list = ids_list
-        elif self.prop_type == "RNT":
-            target_list = rent_ids
         else:
             target_list = tax_ids
 
@@ -2009,6 +1985,96 @@ class GSMLS:
             AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
                 Keys.CONTROL
             ).send_keys(date_range[1]).perform()
+
+    def set_dates_lists(self, year, start_date):
+
+        if self.start_date is None:
+            self.start_date = start_date
+            start_date_list = start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
+        else:
+            start_date_list = self.start_date.strftime("%Y-%m-%d %H:%M:%S").split("-")
+
+        if self.timeframe == 'mixed':
+            stop_date_list = [year, 12, 31]
+        else:
+            stop_date_list = datetime.now().date().strftime("%Y-%m-%d").split("-")
+
+        return start_date_list, stop_date_list
+
+    def set_metadata(self, metadata: pd.DataFrame, last_row: int):
+
+        self.last_scraped_qtr = metadata.loc[last_row, "quarter"]
+        self.last_scraped_year = metadata.loc[last_row, "year_"]
+        self.last_scraped_county = metadata.loc[last_row, "county"]
+        self.last_scraped_muni = metadata.loc[last_row, "municipality"]
+        self.finished = metadata.loc[last_row, "finished"]
+        self.last_scraped_property_type = metadata.loc[last_row, "property_type"]
+        self.alt_split_type = metadata.loc[last_row, "split_type"]
+        self.last_timeframe = metadata.loc[last_row, "timeframe"]
+        last_start_date = metadata.loc[last_row, "start_date"]
+        last_date_scraped = metadata.loc[last_row, "date_produced"]
+        if self.alt_split_type is not None:
+            self.generate_level_sets()
+        self.assign_timeframe()
+        print(f" ==== ALT. SPLIT TYPE: {self.alt_split_type} ====")
+        print(f" ==== LAST START DATE: {last_start_date} ====")
+        print(f" ==== LAST DATE PRODUCED: {last_date_scraped} ====")
+        print(f" ==== LEVEL SET: {self.level_set} ====")
+        print(f" ==== SCRAPED COUNTY: {self.last_scraped_county} ====")
+        print(f" ==== SCRAPED MUNICIPALITY: {self.last_scraped_muni} ====")
+        print(f" ==== SCRAPED FINISHED: {self.finished} ====")
+        print(f" ==== SCRAPED PROPERTY TYPE: {self.last_scraped_property_type} ====")
+        print(f" ==== SCRAPED QUARTER: {self.last_scraped_qtr} ====")
+        print(f" ==== SCRAPED YEAR: {self.last_scraped_year} ====")
+        print(f" ==== LAST SCRAPED TIMEFRAME: {self.last_timeframe} ====")
+        print(f" ==== CURRENT TIMEFRAME: {self.timeframe} ==== ")
+
+        return last_start_date, last_date_scraped
+
+    def set_start_date(self, last_start_date=None, last_date_scraped=None):
+
+        # Block is initiated on program start
+        # self.start_date is used to understand what date the program should start scraping from
+        # A historic or mixed timeframe will always start on Jan. 1st of the last scraped year
+        default_date = f'{self.last_scraped_year}-01-01 00:00:00'
+        if self.timeframe == 'historic':
+            self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+            print(f" ==== SCRAPPING HISTORICAL DATA FROM DEFAULT DATE ==== ")
+            print(f" ==== START DATE : {self.start_date} ==== ")
+
+        elif self.timeframe == 'mixed':
+            if last_start_date == default_date:
+                self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                print(f" ==== SCRAPPING MIXED DATA FROM DEFAULT DATE ==== ")
+            elif self.last_scraped_county != 30:
+                self.start_date = last_start_date
+                print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
+            elif self.last_scraped_county == 30 and self.last_scraped_muni != "White Twp.":
+                self.start_date = last_start_date
+                print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
+            elif self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == 'No':
+                self.start_date = last_start_date
+                print(f" ==== SCRAPPING MIXED DATA FROM SAVED DATE ==== ")
+            else:
+                print(f" ==== ALL DATA FROM MIXED TIMEFRAME HAS BEEN ACQUIRED. GENERATING NEW START DATE ==== ")
+
+        else:
+            if self.start_date is None:
+                default_date = f'{datetime.now().year}-01-01 00:00:00'
+                self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+            # Date produced is the date the program scraped that data
+            # For a current timeframe, date of last run + 1 day will be new start date
+            if self.last_timeframe == 'historic' and self.timeframe == 'current_max':
+                # Should be a one-time search to pull the last "current" timeframe date
+                self.start_date = self.get_latest_production_date()
+            elif self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
+                self.start_date = last_date_scraped + timedelta(days=1)
+                print(f" ==== SCRAPPING NEW DATA FROM NEXT START DATE ==== ")
+            else:
+                self.start_date = last_start_date
+                print(f" ==== SCRAPPING NEW DATA FROM SAVED DATE ==== ")
+
+            print(f" ==== START DATE : {self.start_date} ==== ")
 
     @staticmethod
     def show_results(driver_var):
@@ -2185,6 +2251,35 @@ class GSMLS:
 
             return True
 
+    def store_raw_data(self, **kwargs):
+
+        print(' ==== STORING FILES IN AWS S3 ==== ')
+        base_path = get_filepath("downloads")
+        bucket = "amzn-s3-gsmls-datalake"
+        s3_key_path = os.path.join(kwargs["County_Name"], kwargs["Municipality"], str(kwargs["Year"]))
+
+        if self.download_log['File_Type'][-1] in ['both', 'tsv']:
+            target_file = os.path.join(base_path, kwargs['Filename'] + '.tsv')
+            file_key = os.path.join(s3_key_path, kwargs['Filename'] + '.tsv')
+        else:
+            target_file = os.path.join(base_path, kwargs['Filename'] + '.xls')
+            file_key = os.path.join(s3_key_path, kwargs['Filename'] + '.xls')
+
+        if os.path.isfile(target_file):
+
+            try:
+                # Check if file exists in AWS S3 bucket
+                kwargs["s3_client"].head_object(Bucket=bucket, Key=file_key)
+
+            except ClientError as e:  # File does not exist in AWS S3 Bucket
+                if e.response["Error"]["Code"] == "404":
+                    kwargs["s3_client"].upload_file(target_file, bucket, file_key)
+                else:
+                    raise
+
+        self.download_log["Data_Lake_Storage"][-1] = "Yes"
+        GSMLS.sendfile2trash()
+
     @staticmethod
     def string_month(value):
 
@@ -2226,6 +2321,22 @@ class GSMLS:
         day = self.start_date.day
 
         return datetime(year, month, day, tzinfo=timezone('America/New_York'))
+
+    def update_metadata(self):
+
+        # All data from last run was scraped. Reset the value to scrape all new data
+        if self.last_scraped_county == 30 and self.last_scraped_muni == "White Twp." and self.finished == "Yes":
+            self.last_scraped_muni = None
+            self.last_scraped_county = None
+            if self.timeframe in ["historic", "mixed"]:
+                self.last_scraped_year -= 1
+                self.assign_timeframe()
+                if self.last_scraped_year is not None:
+                    default_date = f'{self.last_scraped_year}-01-01 00:00:00'
+                    self.start_date = datetime.strptime(default_date, '%Y-%m-%d %H:%M:%S')
+                    print(f" ==== NEW START DATE : {self.start_date} ==== ")
+                else:
+                    print(f" ==== ALL HISTORICAL DATA ACQUIRED. NEW TIMEFRAME CREATED: current_max ==== ")
 
     def value_generator(self, key_name, update_bar, values=None):
 
@@ -2308,6 +2419,7 @@ class GSMLS:
         logger = kwargs["logger"]
         f_handler = kwargs["f_handler"]
         c_handler = kwargs["c_handler"]
+        kwargs['s3_client'] = boto3.client('s3')
         kwargs["data-producer"] = create_kafka_producer("data_producer", logger=logger, remote=True)
 
         try:
@@ -2317,14 +2429,14 @@ class GSMLS:
                 "Program cutoff time reached. Saving progress and ending"
 
             # Step 1: Login to the GSMLS
-            self.login_load_main_page(driver_var, **kwargs)
+            GSMLS.login_load_main_page(driver_var, **kwargs)
 
             # Step 2: Scrape the county and municipality data
             # Choose the property search type
             self.scrape_state_data(driver_var)
 
             # Step 3: Create the time periods for which to search for data
-            years = range(1995, datetime.now().year + 1)
+            years = self.generate_years()
             with tqdm(total=len(years), desc="Years", colour="red") as year_bar:
                 for idx, year in enumerate(self.value_generator('year', year_bar, years)):
 
