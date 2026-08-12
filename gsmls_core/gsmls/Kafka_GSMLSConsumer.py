@@ -18,7 +18,8 @@ from sqlalchemy.exc import DatabaseError
 
 class KafkaGSMLSConsumer:
 
-    def __init__(self):
+    def __init__(self, order_nums=None):
+        self.order_nums = order_nums
         self.connection = create_sql_engine('gsmls', True)
         self.producer = create_kafka_producer(client_id="data_producer")
         self.consumer = create_kafka_consumer("data_consumer", "data_consumer")
@@ -1604,8 +1605,8 @@ class KafkaGSMLSConsumer:
         topic_data = self.prop_dict[prop]
         cleaning_bar = tqdm(total=topic_data['functions'], desc='Cleaning Functions', colour='blue')
         re_image_obj = None
-        if prop == 'IMAGES':
-            re_image_obj = RealEstateImages(latest_order_num=64872924)
+        if prop == 'IMAGES' and self.order_nums is not None:
+            re_image_obj = RealEstateImages(latest_order_num=self.order_nums)
         self.consumer.subscribe([topic_data['topic']])
         # Using the subscribe method instead of directly assigning a topic so Kafka can
         # handle the re-balancing of partitions for me
