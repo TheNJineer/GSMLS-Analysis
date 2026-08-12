@@ -17,11 +17,15 @@ from pprint import pformat
 from pprint import pprint
 from tqdm.auto import tqdm
 from collections import defaultdict
+from io import BytesIO
+from requests import Session
 from requests_futures.sessions import FuturesSession
 from concurrent.futures import as_completed
 from pymongo.errors import CursorNotFound
 from botocore.exceptions import ClientError
 from urllib3.exceptions import ProtocolError, IncompleteRead
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 from requests.exceptions import ChunkedEncodingError, ConnectionError, SSLError, ProxyError, HTTPError
 from gsmls.utility_func import logger_decorator, create_sql_engine, create_mongodb_conn
 from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_status
@@ -392,6 +396,38 @@ class RealEstateImages:
         return total_image_list
 
     @staticmethod
+    def create_futures_session():
+
+        retry = Retry(
+            total=4,
+            connect=4,
+            read=4,
+            status=4,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods={"GET"},
+            respect_retry_after_header=True,
+        )
+
+        adapter = HTTPAdapter(
+            max_retries=retry,
+            pool_connections=8,
+            pool_maxsize=8,
+            pool_block=True,
+        )
+
+        base_session = Session()
+        base_session.mount("http://", adapter)
+        base_session.mount("https://", adapter)
+
+        session = FuturesSession(
+            session=base_session,
+            max_workers=5
+        )
+
+        return session
+
+    @staticmethod
     def date_and_condition(series):
 
         try:
@@ -506,9 +542,14 @@ class RealEstateImages:
     def generate_current_isps(self, current_proxies):
 
         isps = {}
+        raw_proxies_list = []
+        default_ports = current_proxies[0]['proxy_data']['ports']
 
-        for idx, isp in enumerate(current_proxies['proxies']):
-            isps[idx] = {"proxy": f"{isp['ip']}:{current_proxies['ports']['http|https']}",
+        for proxy_data in current_proxies:
+            raw_proxies_list.extend(proxy_data['proxy_data']['proxies'])
+
+        for idx, isp in enumerate(raw_proxies_list):
+            isps[idx] = {"proxy": f"{isp['ip']}:{default_ports['http|https']}",
                          "proxy_auth": f"{isp['username']}:{isp['password']}"}
 
         # pprint(isps)
@@ -563,39 +604,21 @@ class RealEstateImages:
 
     def generate_proxy(self, logger=None):
 
-        # Only use static proxies which have authentication to access https://img.gsmls.com
-        proxy_dict = {
-            'residential': {"proxy": "geo.iproyal.com:12321",
-                            "proxy_auth": "EC0m7tQy2GtYN9nv:QgurSG8NEOo6TYE3"},
-            'isp': self.isp_ips
-        }
-
         if datetime.now() >= self.proxy_check_time + timedelta(minutes=10):
             print(" ==== TESTING PROXIES ==== ")
             self.proxy_check_time = datetime.now()
             self.test_proxies(logger)
 
-        num = random.randint(1, 100)
-
-        if num <= 25:
-            proxy = proxy_dict['residential']["proxy"]
-            proxy_auth = proxy_dict['residential']["proxy_auth"]
-
-        else:
-            idx = random.randint(0, 9)
-            proxy = proxy_dict['isp'][idx]["proxy"]
-            proxy_auth = proxy_dict['isp'][idx]["proxy_auth"]
-            if idx in self.dead_ips:
-                # proxy 1 and 2 failed during the test
-                proxy = proxy_dict['residential']["proxy"]
-                proxy_auth = proxy_dict['residential']["proxy_auth"]
+        idx = random.randint(0, 19)
+        proxy = self.isp_ips[idx]["proxy"]
+        proxy_auth = self.isp_ips[idx]["proxy_auth"]
+        # if idx in self.dead_ips:  I need to properly account for when dead_ips are chosen and how to rectify it
 
         proxies = {
             "http": f"http://{proxy_auth}@{proxy}",
             "https": f"http://{proxy_auth}@{proxy}",
         }
 
-        # print(f' ==== PROXY IN USE: {proxies} ==== ')
         return proxies
 
     @staticmethod
@@ -631,23 +654,19 @@ class RealEstateImages:
 
     def get_static_proxy_order(self):
 
-        url_isp = f'https://apid.iproyal.com/v1/reseller/orders/{self.latest_isp_order_num}'
-        # url_isp = f'https://apid.iproyal.com/v1/reseller/orders'
+        data_isp_list = []
         headers_isp = {'X-Access-Token': f'{self.ip_api}', 'Content-Type': 'application/json'}
-        # params = {
-        #     'product_id': 22,
-        #     'page': 1,
-        #     'per_page': 10,
-        #     'status': 'confirmed',
-        #     'order_ids': [64872924]
-        # }
 
-        response_isp = requests.get(url_isp, headers=headers_isp)
+        for order_num in self.latest_isp_order_num:
+            url_isp = f'https://apid.iproyal.com/v1/reseller/orders/{order_num}'
+            response_isp = requests.get(url_isp, headers=headers_isp)
 
-        if response_isp.status_code == 200:
-            print(' ==== PREVIOUS ORDERS FOR ISP PROXIES ==== ')
-            data_isp = response_isp.json()
-            return data_isp
+            if response_isp.status_code == 200:
+                print(' ==== PREVIOUS ORDERS FOR ISP PROXIES ==== ')
+                data_isp = response_isp.json()
+                data_isp_list.append(data_isp)
+
+        return data_isp_list
 
     @staticmethod
     def get_us_pw(website):
@@ -692,6 +711,21 @@ class RealEstateImages:
             check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None, key_="start_mls")
             print(' ==== NO MORE DUPLICATION RESULTS AVAILABLE ==== ')
             print(' ==== RESETTING START_MLS KEY IN METADATA ==== ')
+
+    @staticmethod
+    def parse_request_error(error, file_data, **kwargs):
+
+        base_url = "https://img.gsmls.com"
+        error_url_pattern = re.compile(r'url: (.*.jpg)')
+        error_type = type(error).__name__
+        image_url = error_url_pattern.search(str(error)).group(1)
+        full_url = base_url + image_url
+        idx = file_data['url'].index(full_url)
+        suspected_proxy = file_data['proxy'][idx]['pycharm_display_http']
+
+        kwargs['logger'].warning(f' ==== FUTURES REQUEST ERROR! ERROR TYPE: {error_type} @ {suspected_proxy}')
+
+        return full_url
 
     @staticmethod
     def prepare_data(image_list):
@@ -758,12 +792,45 @@ class RealEstateImages:
         elif not isinstance(rnt_style, float):
             return "RNT", RealEstateImages.style_type_split(rnt_style, prop_data)
 
+    def prepare_image_for_aws(self, futures_list, file_data, session, **kwargs):
+
+        error_url_pattern = re.compile(r'url: (.*.jpg)')
+        retriable_errors = (ProtocolError, IncompleteRead,
+                            ChunkedEncodingError, ConnectionError,
+                            SSLError, ProxyError)
+
+        for _, future in zip(tqdm(range(kwargs['total_images']), desc='Images', file=sys.stderr,
+                                  dynamic_ncols=True), as_completed(futures_list)):
+
+            try:
+                response = future.result()
+
+            except retriable_errors as e:
+                image_url = RealEstateImages.parse_request_error(e, file_data, **kwargs)
+                idx = file_data['url'].index(image_url)
+                filepath = file_data['directory'][idx]
+                response = self.single_session_request(session, image_url, retriable_errors, **kwargs)
+                if response is not None:
+                    RealEstateImages.store_image_in_aws(response, filepath, **kwargs)
+
+            except ClientError as e:
+                base_url = error_url_pattern.search(str(e)).group(1)
+                kwargs['logger'].warning(f'{e}')
+                kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
+                kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
+            else:
+                url = response.url
+                idx = file_data['url'].index(url)
+                filepath = file_data['directory'][idx]
+
+                RealEstateImages.store_image_in_aws(response, filepath, **kwargs)
+
     def proxy_manager(self):
 
         # Obtain the residential user hash to conduct actions in IPRoyal
         user_data = self.get_residential_hash()
         isp_orders = self.get_static_proxy_order()
-        isp_expiration = pendulum.parse(isp_orders['expire_date'])
+        isp_expiration = pendulum.parse(isp_orders[-1]['expire_date'])
         print(f' ==== CURRENT PROXY EXPIRATION DATE: {isp_expiration} ==== ')
         available_traffic = float(user_data['available_traffic'])
         print(f' ==== CURRENT  RESIDENTIAL PROXY AVAILABLE TRAFFIC: {available_traffic} ==== ')
@@ -784,7 +851,7 @@ class RealEstateImages:
         elif isp_expiration > pendulum.now(tz=timezone("America/New_York")):
             print(f' ==== STATIC PROXIES ARE STILL ACTIVE ==== ')
 
-        self.generate_current_isps(isp_orders['proxy_data'])
+        self.generate_current_isps(isp_orders)
         # self.generate_current_res_ip()
 
     def request_image(self, session, image_list: list, **kwargs):
@@ -794,23 +861,49 @@ class RealEstateImages:
         futures = []
         files_data = {
             'url': [],
-            'directory': []
+            'directory': [],
+            'proxy': []
         }
 
         for batch in RealEstateImages.prepare_data(image_list):
             for image in batch:
                 url = image["URL"]
+                proxy = self.generate_proxy(logger=kwargs['logger'])
                 file_directory = RealEstateImages.create_new_filename(image["Directory"], mlsnum)
                 files_data['url'].append(url)
                 files_data['directory'].append(file_directory)
-                future = session.get(url, stream=True, proxies=self.generate_proxy(logger=kwargs['logger']))
+                files_data['proxy'].append(proxy)
+                future = session.get(url, proxies=proxy)
                 futures.append(future)
                 total_images += 1
                 self.total_images += 1
 
         print(f" ==== STORING {total_images} IMAGES FOR {kwargs['metadata']['mlsnum']} - {kwargs['metadata']['address']} ==== ")
         kwargs['total_images'] = total_images
-        RealEstateImages.store_in_aws(futures, files_data, **kwargs)
+        self.prepare_image_for_aws(futures, files_data, session, **kwargs)
+
+    def single_session_request(self, session, url, error_list, **kwargs):
+
+        attemps = 0
+        max_retries = 5
+        error_base = ' ==== SINGLE SESSION REQUEST ERROR! ERROR TYPE:'
+
+        while attemps < max_retries:
+            proxy = self.generate_proxy(logger=kwargs['logger'])
+            future = session.get(url, proxies=proxy)
+
+            try:
+                response = future.result()
+                if response.status_code == 200:
+                    return response
+
+            except error_list as e:
+                error_type = type(e).__name__
+                kwargs['logger'].warning(f'{error_base} {error_type} @ {proxy["pycharm_display_http"]}')
+                attemps += 1
+
+        kwargs['logger'].warning(f' ==== SINGLE SESSION REQUEST ERROR MAX ATTEMPTS REACHED. {url} NOT DOWNLOADED ==== ')
+        return None
 
     @staticmethod
     def sleep_variation(image_num: int):
@@ -858,51 +951,12 @@ class RealEstateImages:
             return "0000-00-00", "Unknown"
 
     @staticmethod
-    def store_in_aws(futures_list, file_data, **kwargs):
+    def store_image_in_aws(response, filepath, **kwargs):
 
-        max_retries = 5
-        error_url_pattern = re.compile(r'url: (.*).jpg')
-        retriable_errors = (ProtocolError, IncompleteRead,
-                            ChunkedEncodingError, ConnectionError,
-                            SSLError, ProxyError)
-
-        for _, future in zip(tqdm(range(kwargs['total_images']), desc='Images', file=sys.stderr,
-                                  dynamic_ncols=True), as_completed(futures_list)):
-            for attempt in range(max_retries):
-                try:
-                    response = future.result()
-                    url = response.url
-                    idx = file_data['url'].index(url)
-                    filepath = file_data['directory'][idx]
-
-                    if response.status_code == 200:
-                        response.raw.decode_content = True
-                        kwargs['s3_client'].upload_fileobj(response.raw, "amzn-s3-gsmls-propertyimages",
-                                                           filepath, ExtraArgs={'Metadata': kwargs['metadata']})
-                except ClientError as e:
-                    base_url = error_url_pattern.search(str(e)).group(1)
-                    kwargs['logger'].warning(f'{e}')
-                    kwargs['logger'].warning(f' ==== IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
-                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: {base_url} ===== ")
-                except retriable_errors as e:
-                    base_url = error_url_pattern.search(str(e))
-                    if attempt < max_retries:
-                        sleep_time = 2 ** attempt
-                        if base_url is not None:
-                            kwargs['logger'].warning(f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} "
-                                                     f"===== URL: {base_url.group(1)} ===== ")
-                        else:
-                            kwargs['logger'].warning(f"MLSNUM: Error: {kwargs['metadata']['mlsnum']} "
-                                                     f"===== URL: UNKNOWN ===== ")
-                        kwargs['logger'].warning(f' ==== SLEEPING FOR {sleep_time} SECS THEN RETRYING ==== ')
-                        time.sleep(sleep_time)
-                        continue
-                    kwargs['logger'].warning(f' ==== MAX TRIES REACHED. IMAGE DID NOT UPLOAD TO AWS S3 ==== ')
-                    kwargs['logger'].warning(f"MLSNUM: {kwargs['metadata']['mlsnum']} ===== URL: UNKNOWN ===== ")
-                    break
-                else:
-
-                    break
+        if response.status_code == 200:
+            image_data = response.content
+            kwargs['s3_client'].upload_fileobj(BytesIO(image_data), "amzn-s3-gsmls-propertyimages",
+                                               filepath, ExtraArgs={'Metadata': kwargs['metadata']})
 
     @staticmethod
     def style_type_split(style_type, prop_data):
@@ -1178,7 +1232,7 @@ class RealEstateImages:
         """
 
         outer_update_operation = {"$set": {"Images_Downloaded": "Yes"}}
-        session = FuturesSession(max_workers=5)
+        session = RealEstateImages.create_futures_session()
         kwargs['s3_client'] = boto3.client('s3')
         max_mls = self.max_mlsnum()
 
