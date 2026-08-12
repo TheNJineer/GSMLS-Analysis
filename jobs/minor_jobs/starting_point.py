@@ -9,17 +9,18 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='Check the GSMLS data start point for target property type')
     parser.add_argument("--prop_type", required=True)
+    parser.add_argument("--table_name", required=True)
 
     # return parser.parse_args(['--prop_type', 'RES'])
     return parser.parse_args()
 
 
-def starting_point(prop_type):
+def starting_point(prop_type, table_name):
 
     engine = create_sql_engine("gsmls", remote=True)
 
     query = f"""
-                SELECT * FROM gsmls_event_log_new
+                SELECT * FROM {table_name}
                 WHERE property_type = '{prop_type}'
                 ORDER BY id DESC
                 LIMIT 1;
@@ -65,7 +66,7 @@ if __name__ == '__main__':
     args = parse_args()
     # Creates the meta-dictionary for this prop type if there isn't one already
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_="start_point")
-    status = starting_point(args.prop_type)
+    status = starting_point(args.prop_type, args.table_name)
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,
                             key_="start_point", status_=status)
     sys.exit(0)
