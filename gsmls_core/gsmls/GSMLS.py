@@ -354,7 +354,7 @@ class GSMLS:
                                        engine="python")
             except UnicodeDecodeError as e:
                 print(f'{e}')
-                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
+                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type, encoding_errors='replace')
 
             try:
                 xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
@@ -394,7 +394,7 @@ class GSMLS:
                                    engine="python")
             except UnicodeDecodeError as e:
                 print(f'{e}')
-                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type)
+                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type, encoding_errors='replace')
             print(f' ==== ONLY TSV FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
             self.download_log["File_Type"][-1] = 'tsv'
             return df
