@@ -9,14 +9,24 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='Consume image data from Apache Kafka into MongoDB')
     parser.add_argument("--prop_type", required=True)
+    parser.add_argument("--order_num", required=True)
 
     # return parser.parse_args(['--prop_type', 'RES'])
     return parser.parse_args()
 
 
+def parse_order_nums(num_str: str):
+
+    order_list = num_str.split(',')
+    cleaned_orders = [int(i.strip(' ')) for i in order_list]
+
+    return cleaned_orders
+
+
 if __name__ == "__main__":
 
     args = parse_args()
+    order_nums = parse_order_nums(args.order_num)
     base_path = get_filepath('backups')
     filepath = os.path.join(base_path, f'prop_images.xlsx')
     retry = False
@@ -27,7 +37,7 @@ if __name__ == "__main__":
         print(f' ==== BACKUP DATA EXISTS: {retry} ==== ')
 
     producer_status = current_status('gsmls_airflow_pipeline', args.prop_type, 'producer')
-    img_consumer = KafkaGSMLSConsumer()  # Add logger back into the class script
+    img_consumer = KafkaGSMLSConsumer(order_nums=order_nums)  # Add logger back into the class script
 
     if producer_status is False:
         while True:
