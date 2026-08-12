@@ -555,7 +555,10 @@ class RealEstateImages:
         # pprint(isps)
         self.isp_ips = isps
         print(" ==== TESTING PROXIES ==== ")
-        self.test_proxies()
+        try:
+            self.test_proxies()
+        except HTTPError:
+            print(f" ==== HTTPBIN SERVICE UNAVAIALABLE. RETRYING PROXY TEST LATER === ")
 
     def generate_duplicate_mlsnums(self, cutoff_time, batch_size=500):
 
@@ -602,12 +605,15 @@ class RealEstateImages:
                 check_pipeline_metadata("gsmls_download_images", prop_type_=None,
                                         key_="last_mls", status_=mls_num)
 
-    def generate_proxy(self, logger=None):
+    def generate_proxy(self):
 
         if datetime.now() >= self.proxy_check_time + timedelta(minutes=10):
             print(" ==== TESTING PROXIES ==== ")
             self.proxy_check_time = datetime.now()
-            self.test_proxies(logger)
+            try:
+                self.test_proxies()
+            except HTTPError:
+                print(f" ==== HTTPBIN SERVICE UNAVAIALABLE. RETRYING PROXY TEST LATER === ")
 
         idx = random.randint(0, 19)
         proxy = self.isp_ips[idx]["proxy"]
@@ -868,7 +874,7 @@ class RealEstateImages:
         for batch in RealEstateImages.prepare_data(image_list):
             for image in batch:
                 url = image["URL"]
-                proxy = self.generate_proxy(logger=kwargs['logger'])
+                proxy = self.generate_proxy()
                 file_directory = RealEstateImages.create_new_filename(image["Directory"], mlsnum)
                 files_data['url'].append(url)
                 files_data['directory'].append(file_directory)
@@ -889,7 +895,7 @@ class RealEstateImages:
         error_base = ' ==== SINGLE SESSION REQUEST ERROR! ERROR TYPE:'
 
         while attemps < max_retries:
-            proxy = self.generate_proxy(logger=kwargs['logger'])
+            proxy = self.generate_proxy()
             future = session.get(url, proxies=proxy)
 
             try:
@@ -1011,7 +1017,7 @@ class RealEstateImages:
 
             return style_type
 
-    def test_proxies(self, logger=None):
+    def test_proxies(self):
 
         for key, value in self.isp_ips.items():
 
@@ -1030,19 +1036,28 @@ class RealEstateImages:
                         if key not in self.dead_ips:
                             self.dead_ips.append(key)
                 else:
+                    status_code = response.status_code
                     response.raise_for_status()
 
-            except (requests.exceptions.Timeout, ProxyError, HTTPError):
-                if logger is not None:
-                    logger.warning(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST")
+            except HTTPError as e:
+                if status_code == 503:
+                    print(f" ==== HTTPBIN SERVICE UNAVAIALABLE. RETRYING PROXY TEST LATER === ")
+                    e.response.raise_for_status()
                 else:
-                    print(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST")
+                    print(
+                        f" ==== UNKNOWN HTTPERROR FOR PROXY http://{proxy_auth}@{proxy} DURING TEST. STATUS CODE {status_code}")
+                    if key not in self.dead_ips:
+                        self.dead_ips.append(key)
+            except ProxyError:
+                print(f" ==== PROXYERROR FOR http://{proxy_auth}@{proxy} DURING TEST. STATUS CODE {status_code}")
                 if key not in self.dead_ips:
                     self.dead_ips.append(key)
-        if logger is not None:
-            logger.info(f" ==== DEAD IPS HAVE BEEN CAPTURED. RESUMING IMAGE DOWNLOADS ==== ")
-        else:
-            print(f" ==== DEAD IPS HAVE BEEN CAPTURED. RESUMING IMAGE DOWNLOADS ==== ")
+            except requests.exceptions.Timeout:
+                print(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST. STATUS CODE {status_code}")
+                if key not in self.dead_ips:
+                    self.dead_ips.append(key)
+
+        print(f" ==== DEAD IPS HAVE BEEN CAPTURED. RESUMING IMAGE DOWNLOADS ==== ")
 
     @staticmethod
     def update_date_datatype(date_value, update_op):
