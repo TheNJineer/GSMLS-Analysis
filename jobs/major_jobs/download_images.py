@@ -23,8 +23,6 @@ def parse_args():
     parser.add_argument("--local", required=True)
     parser.add_argument("--order_num", required=True)
 
-    # return parser.parse_args(['--local', 'false', '--order_num', '79065846, 64872924'])
-    # return parser.parse_args(['--local', 'false', '--order_num', '79065846'])
     return parser.parse_args()
 
 
@@ -56,16 +54,6 @@ if __name__ == "__main__":
         print(f" ==== TOTAL PROPERTIES QUERIED: {obj.total_props} ==== ")
         print(f" ==== TOTAL IMAGES DOWNLOADED: {obj.total_images} ==== ")
         sys.exit(0)
-
-    # elif args.local == 'true' and status != "Expired":
-    #     # Initiates two separate objects both querying data from a MongoDB Atlas
-    #     # and a Docker container local connection respectively. Make async
-    #     results = obj.download_images_main(cutoff_time=program_cutoff)
-    #     results2 = (RealEstateImages(latest_order_num=64872924, local=True).
-    #                 download_images_main(cutoff_time=program_cutoff))
-    #     check_pipeline_metadata("gsmls_download_images", prop_type_=None,
-    #                             key_="downloads_completed", status_=(results, results2))
-    #     sys.exit(0)
 
     else:
         print(f' ==== MORE STATIC PROXY DATA NEEDS TO BE PURCHASED. ENDING PROGRAM ==== ')
