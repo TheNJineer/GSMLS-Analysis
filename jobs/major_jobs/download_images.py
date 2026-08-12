@@ -6,15 +6,6 @@ from gsmls.RealEstateImages import RealEstateImages
 from gsmls.utility_func import check_pipeline_metadata, cutoff_time, get_filepath
 
 
-def parse_args():
-
-    parser = argparse.ArgumentParser(description='GSMLS Image Downloading')
-    parser.add_argument("--local", required=True)
-
-    # return parser.parse_args(['--local', 'false'])
-    return parser.parse_args()
-
-
 def ips_status():
 
     data_path = get_filepath("metadata")
@@ -26,13 +17,33 @@ def ips_status():
         return result["downloads_completed"]
 
 
+def parse_args():
+
+    parser = argparse.ArgumentParser(description='GSMLS Image Downloading')
+    parser.add_argument("--local", required=True)
+    parser.add_argument("--order_num", required=True)
+
+    # return parser.parse_args(['--local', 'false', '--order_num', '79065846, 64872924'])
+    # return parser.parse_args(['--local', 'false', '--order_num', '79065846'])
+    return parser.parse_args()
+
+
+def parse_order_nums(num_str: str):
+
+    order_list = num_str.split(',')
+    cleaned_orders = [int(i.strip(' ')) for i in order_list]
+
+    return cleaned_orders
+
+
 if __name__ == "__main__":
 
     args = parse_args()
     program_cutoff = cutoff_time(hours=7, minutes=30, tz="America/New_York")
     # program_cutoff = cutoff_time(days=1, hours=7, minutes=30, tz="America/New_York")  # use while debugging
     status = ips_status()
-    obj = RealEstateImages(latest_order_num=64872924)
+    order_nums = parse_order_nums(args.order_num)
+    obj = RealEstateImages(latest_order_num=order_nums)
 
     if args.local == 'false' and status != "Expired":
 
@@ -46,15 +57,15 @@ if __name__ == "__main__":
         print(f" ==== TOTAL IMAGES DOWNLOADED: {obj.total_images} ==== ")
         sys.exit(0)
 
-    elif args.local == 'true' and status != "Expired":
-        # Initiates two separate objects both querying data from a MongoDB Atlas
-        # and a Docker container local connection respectively. Make async
-        results = obj.download_images_main(cutoff_time=program_cutoff)
-        results2 = (RealEstateImages(latest_order_num=64872924, local=True).
-                    download_images_main(cutoff_time=program_cutoff))
-        check_pipeline_metadata("gsmls_download_images", prop_type_=None,
-                                key_="downloads_completed", status_=(results, results2))
-        sys.exit(0)
+    # elif args.local == 'true' and status != "Expired":
+    #     # Initiates two separate objects both querying data from a MongoDB Atlas
+    #     # and a Docker container local connection respectively. Make async
+    #     results = obj.download_images_main(cutoff_time=program_cutoff)
+    #     results2 = (RealEstateImages(latest_order_num=64872924, local=True).
+    #                 download_images_main(cutoff_time=program_cutoff))
+    #     check_pipeline_metadata("gsmls_download_images", prop_type_=None,
+    #                             key_="downloads_completed", status_=(results, results2))
+    #     sys.exit(0)
 
     else:
         print(f' ==== MORE STATIC PROXY DATA NEEDS TO BE PURCHASED. ENDING PROGRAM ==== ')
