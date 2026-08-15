@@ -235,6 +235,20 @@ class GSMLS:
 
             return os.path.join(base_path, kwargs["Filename"])
 
+    @staticmethod
+    def create_s3_document_path(file_type: str, address: str | None = None, document_type: str | None = None, **kwargs):
+
+        if file_type == 'pdf':
+            filename = f'{address.title()}_{document_type}.{file_type}'
+            return os.path.join(kwargs['County_Name'], kwargs['Municipality'],
+                                str(kwargs['Year']), document_type, filename)
+
+        elif file_type in ['tsv', 'xls']:
+            filename = f'{kwargs["Filename"]}.{file_type}'
+            return os.path.join(kwargs["County_Name"], kwargs["Municipality"],
+                                str(kwargs["Year"]), filename)
+
+
     def create_state_dictionary(self, driver_var):
 
         results = driver_var.page_source
@@ -407,6 +421,14 @@ class GSMLS:
             print(f' ==== File: {path}, Encoding Result: {results[0]} ==== ')
 
         return results[0]['encoding']
+
+    @staticmethod
+    def does_file_already_exist(filename):
+
+        download_folder = get_filepath("downloads")
+        target_path = os.path.join(download_folder, filename)
+
+        return os.path.isfile(target_path)
 
     def download_complete(self, **kwargs):
 
@@ -822,6 +844,7 @@ class GSMLS:
             "LATITUDE": [],
             "LONGITUDE": [],
             "IMAGES": [],
+            "DOCUMENTS": []
         }
 
         year = kwargs["Year"],
@@ -848,8 +871,8 @@ class GSMLS:
             # Step 2: Scrape the links for all high resolution images associated with each property
             if type(first_media_idx) is int:
                 try:
-                    GSMLS.scrape_image_links(
-                        sold_listings_dictionary, driver_var, first_media_idx, prop_id
+                    GSMLS.scrape_image_links_and_documents(
+                        sold_listings_dictionary, driver_var, first_media_idx, prop_id, **kwargs
                     )
                     # Step 3: Switch to main property table window after scraping images
                     driver_var.switch_to.window(main_window)
@@ -926,18 +949,22 @@ class GSMLS:
             EC.presence_of_element_located((By.ID, "downloadfiletype3")))
         tsv_file_output = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.ID, "downloadfiletype2")))
-        filename = self.create_filename(**kwargs)
+        temp_filename = self.create_filename(**kwargs)
 
         for idx, input_type in enumerate([excel_file_output, tsv_file_output]):
             input_type.click()
 
             if idx == 0:
+                true_filename = temp_filename + ".xls"
                 filename_input = driver_var.find_element(By.ID, "filename")
                 filename_input.click()
                 AC(driver_var).key_down(Keys.CONTROL).send_keys("A").key_up(
                     Keys.CONTROL
-                ).send_keys(filename + ".xls").perform()
+                ).send_keys(true_filename).perform()
                 input_type.click()  # Clicking the radio button again corrects the .xls file ending
+            else:
+                true_filename = temp_filename + ".tsv"
+
             time.sleep(0.5)
 
             # Request the download and close the page
@@ -946,13 +973,16 @@ class GSMLS:
                     (By.XPATH, "//a[normalize-space()='Download']")
                 )
             )
-            download_button.click()
-            error_result = GSMLS.download_error(driver_var, kwargs["logger"])
+            if GSMLS.does_file_already_exist(true_filename) is not True:
+                download_button.click()
+                error_result = GSMLS.download_error(driver_var, kwargs["logger"])
+            else:
+                error_result = False
 
             if error_result is True:
                 return "Server Error"
 
-        return filename
+        return temp_filename
 
     def input_download_log_data(self, split_type=None, split_index=None, results_found=None, **kwargs):
 
@@ -1025,6 +1055,22 @@ class GSMLS:
             assert datetime.now(tz=timezone("America/New_York")) > self.true_date(), \
                 " ==== START DATE IS GREATER THAN TODAYS DATE. NO NEW DATA TO SCRAPE ==== "
             self.update_metadata()  # If all data was scraped from previous timeframe, update the metadata
+
+    @staticmethod
+    def locate_image_media_window(driver_var, link_var):
+
+        # Step 1: Find the respective media link on the results page and open it
+        current_windows = driver_var.window_handles
+        media_link = WebDriverWait(driver_var, 30).until(
+            EC.presence_of_element_located((By.XPATH,
+                                            f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[4]/a',)))
+        media_link.click()
+        media_window = [window for window in driver_var.window_handles if window not in current_windows][-1]
+
+        # Step 2: Switch to new media links window
+        driver_var.switch_to.window(media_window)
+
+        return media_window
 
     @staticmethod
     def login(driver_var):
@@ -1241,15 +1287,16 @@ class GSMLS:
             kwargs["logger"].warning(f"{kte}")
             kwargs["logger"].info(f"Re-attempting to send {kwargs['Filename']}")
             self.publish_data_2kafka(soldlistings, **kwargs)
-            # GSMLS.sendfile2trash()
             self.store_raw_data(**kwargs)
 
         except MessageSizeTooLargeError:
 
             # Reduce the size of the raw dataframe and send to Kafka in chunks
-            GSMLS.reduce_df_size(raw_data,500, **kwargs)
-            # GSMLS.sendfile2trash()
-            self.store_raw_data(**kwargs)
+            GSMLS.reduce_df_size(raw_data, 500, **kwargs)
+            self.rows_counted[self.prop_type] += len(sold_df)
+            self.download_log["Rows_Produced"][-1] = len(sold_df)
+            self.download_log["Date_Produced"][-1] = str(datetime.now().date())
+            self.store_raw_data(soldlistings, **kwargs)
 
         else:
             kwargs["logger"].info(
@@ -1259,8 +1306,7 @@ class GSMLS:
             self.rows_counted[self.prop_type] += len(sold_df)
             self.download_log["Rows_Produced"][-1] = len(sold_df)
             self.download_log["Date_Produced"][-1] = str(datetime.now().date())
-            # GSMLS.sendfile2trash()
-            self.store_raw_data(**kwargs)
+            self.store_raw_data(soldlistings, **kwargs)
 
     def quarterly_sales_res(self, driver_var, **kwargs):
         """
@@ -1779,47 +1825,21 @@ class GSMLS:
         self.download_log = GSMLS.create_download_log()
 
     @staticmethod
-    def scrape_image_links(dict_var, driver_var, link_var, prop_id):
+    def scrape_image_links_and_documents(dict_var, driver_var, link_var, prop_id, **kwargs):
 
-        # Step 1: Find the respective media link and open it
-        # print('Before media:', driver_var.window_handles)
-        current_windows = driver_var.window_handles
-        media_link = WebDriverWait(driver_var, 30).until(
-            EC.presence_of_element_located(
-                (
-                    By.XPATH,
-                    f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[4]/a',
-                )
-            )
-        )
-        media_link.click()
-        media_window = [
-            window
-            for window in driver_var.window_handles
-            if window not in current_windows
-        ][-1]
-
-        # Step 2: Switch to new media links window
-        driver_var.switch_to.window(media_window)
-        # WebDriverWait(driver_var, 10).until(
-        #     lambda d: d.execute_script("return document.readyState") == "complete"
-        # )
-
+        media_window = GSMLS.locate_image_media_window(driver_var, link_var)
         GSMLS.explicit_page_load(
             "Media Page", driver_var, prop_id=prop_id, window_id=media_window
         )
 
-        # Step 3: Scrape the listing IDs
+        # Step 1: Scrape the listing IDs
         soup = BeautifulSoup(driver_var.page_source, "html.parser")
-        outercontainer = (
-            soup.find("div", {"id": "outerContainer"})
-            .find("form")
-            .find("input", {"name": "sysIds"})
-        )
+        outercontainer = (soup.find("div", {"id": "outerContainer"}).find("form")
+                          .find("input", {"name": "sysIds"}))
         sys_ids = outercontainer["value"].split(",")
 
-        # Step 3: Scrape the webpage and all associated high res image links starting from the first image link
-        for listing_id in sys_ids[link_var - 1 :]:
+        # Step 2: Scrape the webpage and all associated high res image links starting from the first image link
+        for listing_id in sys_ids[link_var - 1:]:
 
             image_dictionary = {}
 
@@ -1830,14 +1850,18 @@ class GSMLS:
             soup = BeautifulSoup(driver_var.page_source, "html.parser")
             images_list = soup.find_all("div", {"class": "imageReportContainer"})
 
-            if len(images_list) > 0:
-                raw_property_address = (
-                    soup.find("div", {"class": "imagesReportTitle"})
-                    .get_text(strip=True)
-                    .split("•")[1]
-                    .strip()
-                )
+            try:
+                raw_property_address = (soup.find("div", {"class": "imagesReportTitle"})
+                                        .get_text(strip=True).split("•")[1].strip())
                 clean_address = GSMLS.clean_address(raw_property_address)
+                GSMLS.scrape_property_documents(driver_var, soup, clean_address, listing_id, dict_var, **kwargs)
+
+            except AttributeError:
+                # Cause by a blank image media page. raw_property_address will be NoneType and non-subscriptable
+                pass
+
+            if len(images_list) > 0:
+
                 for image_num, image in enumerate(images_list):
                     # The high res image is in the value attribute of the first input tag
                     image_dictionary[
@@ -1859,7 +1883,8 @@ class GSMLS:
                     )
                     next_button.click()
                 except UnexpectedAlertPresentException:
-                    # This alert is raised when the 'Next' button is clicked and there are no more properties left in the list
+                    # This alert is raised when the 'Next' button is clicked
+                    # and there are no more properties left in the list
                     alert = Alert(driver_var)
                     alert.accept()
                     driver_var.close()
@@ -1872,6 +1897,42 @@ class GSMLS:
         time.sleep(1)  # Latency period added in order to load and scrape city names
         self.find_cities(county_id, driver_var.page_source)
         GSMLS.set_county(1, county_id, driver_var)
+
+    @staticmethod
+    def scrape_property_documents(driver_var, soup, address, sys_id, data_dict, **kwargs):
+
+        search_pattern = re.compile(r'method=getDocument&docId=(\d{5,7})&lstngmlsnum=(\d{5,7})')
+        target_doc_list = ['Seller Disclosure', 'Survey', 'Floor Plans', 'Additional Disclosures']
+        documents_table = soup.find('div', {'class': 'flex-row'}).tbody
+        metadata = {
+            'Documents': {}
+        }
+
+        if documents_table is not None:
+
+            raw_documents_list = documents_table.find_all('tr')
+
+            for idx, doc in enumerate(raw_documents_list):
+                document_link = doc.find_all('td')[1]
+                document_type = document_link.get_text(strip=True)
+                if document_type in target_doc_list:
+                    id_matches = search_pattern.search(str(document_link.a['href']))
+                    doc_id = id_matches.group(1)
+                    mls_id = id_matches.group(2)
+                    filename = f'{mls_id}_{doc_id}.pdf'
+                    s3_path = GSMLS.create_s3_document_path('pdf', address=address,
+                                                            document_type=document_type, **kwargs)
+                    xpath = f"//*[@id={sys_id}]/div/div[2]/div/table/tbody/tr[{idx+1}]/td[2]/a"
+                    download = WebDriverWait(driver_var, 30).until(EC.element_to_be_clickable(
+                            (By.XPATH, xpath)))
+
+                    if GSMLS.does_file_already_exist(filename) is not True:
+                        download.click()
+                    metadata['Documents'].update({filename: s3_path})
+            data_dict['DOCUMENTS'].append(metadata)
+        else:
+            metadata['Documents'].update({'No_Documents': None})
+            data_dict['DOCUMENTS'].append(metadata)
 
     def scrape_state_data(self, driver_var):
 
@@ -1900,6 +1961,21 @@ class GSMLS:
         page_results = driver_var.page_source
 
         return page_results
+
+    @staticmethod
+    def send_to_aws(target_file, bucket, file_key, **kwargs):
+
+        if os.path.isfile(target_file):
+
+            try:
+                # Check if file exists in AWS S3 bucket
+                kwargs["s3_client"].head_object(Bucket=bucket, Key=file_key)
+
+            except ClientError as e:  # File does not exist in AWS S3 Bucket
+                if e.response["Error"]["Code"] == "404":
+                    kwargs["s3_client"].upload_file(target_file, bucket, file_key)
+                else:
+                    raise
 
     @staticmethod
     def sendfile2trash():
@@ -2251,34 +2327,43 @@ class GSMLS:
 
             return True
 
-    def store_raw_data(self, **kwargs):
+    @staticmethod
+    def store_property_documents(data_dict, base_path, bucket, **kwargs):
 
-        print(' ==== STORING FILES IN AWS S3 ==== ')
+        print(' ==== STORING PROPERTY FILES IN AWS S3 ==== ')
+
+        for i in data_dict['DOCUMENTS']:
+            for filename, s3_path in i['Documents'].items():
+                if filename != 'No_Documents':
+                    target_path = os.path.join(base_path, filename)
+                    GSMLS.send_to_aws(target_path, bucket, s3_path, **kwargs)
+
+        print(' ==== PROPERTY FILE STORAGE IN AWS S3 IS COMPLETE ==== ')
+
+    def store_raw_data(self, data_dict, **kwargs):
+
         base_path = get_filepath("downloads")
         bucket = "amzn-s3-gsmls-datalake"
-        s3_key_path = os.path.join(kwargs["County_Name"], kwargs["Municipality"], str(kwargs["Year"]))
+
+        self.store_relational_data(base_path, bucket, **kwargs)
+        GSMLS.store_property_documents(data_dict, base_path, bucket, **kwargs)
+        self.download_log["Data_Lake_Storage"][-1] = "Yes"
+        GSMLS.sendfile2trash()
+
+    def store_relational_data(self, base_path, bucket, **kwargs):
+
+        print(' ==== STORING DATA FILES IN AWS S3 ==== ')
 
         if self.download_log['File_Type'][-1] in ['both', 'tsv']:
             target_file = os.path.join(base_path, kwargs['Filename'] + '.tsv')
-            file_key = os.path.join(s3_key_path, kwargs['Filename'] + '.tsv')
+            file_key = GSMLS.create_s3_document_path('tsv', **kwargs)
         else:
             target_file = os.path.join(base_path, kwargs['Filename'] + '.xls')
-            file_key = os.path.join(s3_key_path, kwargs['Filename'] + '.xls')
+            file_key = GSMLS.create_s3_document_path('xls', **kwargs)
 
-        if os.path.isfile(target_file):
+        GSMLS.send_to_aws(target_file, bucket, file_key, **kwargs)
+        print(' ==== DATA FILE STORAGE IN AWS S3 IS COMPLETE ==== ')
 
-            try:
-                # Check if file exists in AWS S3 bucket
-                kwargs["s3_client"].head_object(Bucket=bucket, Key=file_key)
-
-            except ClientError as e:  # File does not exist in AWS S3 Bucket
-                if e.response["Error"]["Code"] == "404":
-                    kwargs["s3_client"].upload_file(target_file, bucket, file_key)
-                else:
-                    raise
-
-        self.download_log["Data_Lake_Storage"][-1] = "Yes"
-        GSMLS.sendfile2trash()
 
     @staticmethod
     def string_month(value):
