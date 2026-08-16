@@ -1039,23 +1039,21 @@ class RealEstateImages:
                     response.raise_for_status()
 
             except HTTPError as e:
-                if e.response.status_code == 503:
-                    print(f" ==== HTTPBIN SERVICE UNAVAIALABLE. RETRYING PROXY TEST LATER === ")
+                if e.response.status_code in [503, 504]:
                     e.response.raise_for_status()
                 else:
                     print(
                         f" ==== UNKNOWN HTTPERROR FOR PROXY http://{proxy_auth}@{proxy} "
-                        f"DURING TEST. STATUS CODE {e.response.status_code}")
+                        f"DURING TEST. STATUS CODE {e.response.status_code} ==== ")
                     if key not in self.dead_ips:
                         self.dead_ips.append(key)
             except ProxyError as e:
                 print(f" ==== PROXYERROR FOR http://{proxy_auth}@{proxy} "
-                      f"DURING TEST. STATUS CODE {e.response.status_code}")
+                      f"DURING TEST. STATUS CODE {e.response.status_code} ==== ")
                 if key not in self.dead_ips:
                     self.dead_ips.append(key)
-            except requests.exceptions.Timeout as e:
-                print(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT "
-                      f"DURING TEST. STATUS CODE {e.response.status_code}")
+            except requests.exceptions.Timeout:
+                print(f" ==== PROXY http://{proxy_auth}@{proxy} TIMED OUT DURING TEST ==== ")
                 if key not in self.dead_ips:
                     self.dead_ips.append(key)
 
