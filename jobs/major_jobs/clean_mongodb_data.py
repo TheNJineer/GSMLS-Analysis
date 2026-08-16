@@ -7,9 +7,18 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='Cleaning the MongoDB Database of duplicate documents')
     parser.add_argument("--local", required=True)
+    parser.add_argument("--order_num", required=True)
 
     # return parser.parse_args(['--local', 'false'])
     return parser.parse_args()
+
+
+def parse_order_nums(num_str: str):
+
+    order_list = num_str.split(',')
+    cleaned_orders = [int(i.strip(' ')) for i in order_list]
+
+    return cleaned_orders
 
 
 if __name__ == "__main__":
@@ -17,7 +26,8 @@ if __name__ == "__main__":
     args = parse_args()
     program_cutoff = cutoff_time(hours=4, minutes=35, tz="America/New_York")
     # program_cutoff = cutoff_time(days=1, hours=4, minutes=35, tz="America/New_York")   use while debugging
-    obj = RealEstateImages(latest_order_num=64872924)
+    order_nums = parse_order_nums(args.order_num)
+    obj = RealEstateImages(latest_order_num=order_nums)
 
     if args.local == 'false':
         print(' ==== CLEANING THE MONGODB ATLAS DATABASE ==== ')
