@@ -368,7 +368,8 @@ class GSMLS:
                                        engine="python")
             except UnicodeDecodeError as e:
                 print(f'{e}')
-                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type, encoding_errors='replace')
+                tsv_df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type,
+                                       encoding_errors='replace', on_bad_lines='warn')
 
             try:
                 xls_data_captured = round((len(xls_df) / kwargs["Expected_Data"]) * 100, 2)
@@ -408,7 +409,8 @@ class GSMLS:
                                    engine="python")
             except UnicodeDecodeError as e:
                 print(f'{e}')
-                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type, encoding_errors='replace')
+                df = pd.read_table(path_to_file + ".tsv", encoding=encoding_type,
+                                   encoding_errors='replace', on_bad_lines='warn')
             print(f' ==== ONLY TSV FILETYPE CAPTURED FOR {kwargs["Filename"]}==== ')
             self.download_log["File_Type"][-1] = 'tsv'
             return df
@@ -507,7 +509,7 @@ class GSMLS:
     def download_sales_data(self, driver_var, **kwargs):
 
         GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
-
+        print(f' ==== DATA FOR {kwargs["Municipality"]} IS AVAILABLE ==== ')
         page_source = driver_var.page_source
 
         # Check all items to be downloaded
@@ -869,6 +871,7 @@ class GSMLS:
             main_window = driver_var.current_window_handle
 
             # Step 2: Scrape the links for all high resolution images associated with each property
+            print(' ==== SCRAPPING IMAGE AND PDF DATA ==== ')
             if type(first_media_idx) is int:
                 try:
                     GSMLS.scrape_image_links_and_documents(
