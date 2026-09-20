@@ -1,0 +1,635 @@
+# Consolidated GSMLS platform with optional CVAT Community services.
+#
+# This is a separate deployment file. The existing docker-compose.yaml is
+# intentionally unchanged.
+#
+# Normal platform:
+#   docker compose -f docker-compose.platform.yaml up -d
+#
+# With CVAT:
+#   docker compose -f docker-compose.platform.yaml --profile cvat up -d
+#
+# With debugging or Flower:
+#   docker compose -f docker-compose.platform.yaml --profile debug --profile flower up -d
+#
+# MongoDB requires MONGO_ROOT_PASSWORD, MONGO_EXPRESS_PASSWORD, and an
+# authenticated GSMLS_MONGODB_URL in .env. Use mongodb as the hostname in the
+# container URL; percent-encode reserved characters in its credentials.
+
+name: gsmls-platform
+
+x-airflow-common: &airflow-common
+  build: ${AIRFLOW_PROJ_DIR:-.}
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres_airflow/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres_airflow/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8085/execution/
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
+    PYTHONPATH: /home/airflow/.local/lib/python3.12/site-packages:/opt/airflow:/opt/airflow/dags:/opt/airflow/plugins
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    GSMLS_MONGODB_URL: ${GSMLS_MONGODB_URL:?Set GSMLS_MONGODB_URL}
+  env_file:
+    - ${AIRFLOW_PROJ_DIR:-.}/.env
+  networks: [airflow_network]
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/.env:/opt/airflow/.env
+    - ${AIRFLOW_PROJ_DIR:-.}/downloads:/opt/airflow/downloads
+    - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+    - ${AIRFLOW_PROJ_DIR:-.}/jobs:/opt/airflow/jobs
+    - ${AIRFLOW_PROJ_DIR:-.}/pipeline_metadata:/opt/airflow/pipeline_metadata
+    - ${AIRFLOW_PROJ_DIR:-.}/consumer_backup_data:/opt/airflow/consumer_backup_data
+    - /var/run/docker.sock:/var/run/docker.sock
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-depends-on
+    redis: {condition: service_healthy}
+    postgres_airflow: {condition: service_healthy}
+    mongodb: {condition: service_healthy}
+
+x-kafka-env: &kafka-env
+  KAFKA_PROCESS_ROLES: broker
+  KAFKA_LISTENERS: PLAINTEXT://:9092
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_NUM_PARTITIONS: 3
+  KAFKA_MIN_IN_SYNC_REPLICAS: 2
+  KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_OFFSETS_TOPIC_MIN_ISR: 2
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+  KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS: 6000
+  KAFKA_GROUP_MAX_SESSION_TIMEOUT_MS: 300000
+  KAFKA_GROUP_MAX_SIZE: 10000
+  KAFKA_MESSAGE_MAX_BYTES: 20971520
+  KAFKA_REPLICA_FETCH_MAX_BYTES: 20971520
+  KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+  KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT_MS: 30000
+  KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS: 30000
+  KAFKA_REPLICA_SOCKET_TIMEOUT_MS: 30000
+  KAFKA_CONTROLLER_SOCKET_TIMEOUT_MS: 30000
+  KAFKA_NUM_NETWORK_THREADS: 8
+  KAFKA_NUM_IO_THREADS: 16
+  KAFKA_LOG_RETENTION_HOURS: 72
+  KAFKA_LOG_SEGMENT_BYTES: 1073741824
+  KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_MAX_PARTITION_FETCH_BYTES: 20971520
+  KAFKA_FETCH_MAX_BYTES: 52428800
+
+x-kafka-broker-healthcheck: &kafka-broker-healthcheck
+  test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 60s
+
+x-kafka-broker: &kafka-broker
+  image: apache/kafka:latest
+  networks: [airflow_network]
+  environment:
+    <<: *kafka-env
+  depends_on: [controller-1, controller-2, controller-3]
+  restart: unless-stopped
+  cpus: "0.50"
+  mem_limit: 1g
+  healthcheck:
+    <<: *kafka-broker-healthcheck
+
+x-cvat-common: &cvat-common
+  image: cvat/server:${CVAT_VERSION:-v2.26.1}
+  profiles: [cvat]
+  networks: [cvat_internal]
+  environment:
+    CVAT_POSTGRES_HOST: cvat_db
+    CVAT_POSTGRES_PORT: 5432
+    CVAT_POSTGRES_DBNAME: cvat
+    CVAT_POSTGRES_USER: ${CVAT_POSTGRES_USER:-cvat}
+    CVAT_POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD:?Set CVAT_POSTGRES_PASSWORD}
+    CVAT_REDIS_HOST: cvat_redis
+    CVAT_REDIS_PORT: 6379
+    CVAT_OPA_HOST: cvat_opa
+    CVAT_OPA_PORT: 8181
+  depends_on:
+    cvat_db: {condition: service_healthy}
+    cvat_redis: {condition: service_healthy}
+    cvat_opa: {condition: service_started}
+
+x-healthcheck-default: &healthcheck-default
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 30s
+
+x-healthcheck-fast: &healthcheck-fast
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 5s
+
+services:
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    env_file:
+      - ${AIRFLOW_PROJ_DIR:-.}/.env
+    networks: [airflow_network]
+    ports: ["127.0.0.1:5050:80"]
+    volumes:
+      - pgadmin-user-data:/var/lib/pgadmin
+      - ${AIRFLOW_PROJ_DIR:-.}/servers.json:/pgadmin4/servers.json:ro
+      - ${AIRFLOW_PROJ_DIR:-.}/.pgpass:/pgpass:ro
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "wget -q -O - http://localhost/misc/ping || exit 1"]
+    restart: unless-stopped
+
+  selenium-edge:
+    image: selenium/standalone-edge:4.13.0
+    networks: [airflow_network]
+    ports:
+      - "127.0.0.1:4444:4444"
+      - "127.0.0.1:7900:7900"
+    shm_size: 2g
+    volumes: [${AIRFLOW_PROJ_DIR:-.}/data/stage_one/downloads:/home/seluser/downloads]
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "curl -fsS http://localhost:4444/status | grep -q 'ready' || exit 1"]
+    cpus: "0.75"
+    mem_limit: 2g
+    restart: unless-stopped
+
+  spark:
+    image: bitnamilegacy/spark:3.5.0
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      SPARK_USER: spark
+    user: root
+    networks: [airflow_network]
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:7077:7077"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/data:/workspace/data
+      - ${AIRFLOW_PROJ_DIR:-.}/data/stage_one/parquet_files:/app/parquet_files
+      - ${AIRFLOW_PROJ_DIR:-.}/logs/pyspark_logs:/opt/bitnami/spark/work
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "ps aux | grep -v grep | grep org.apache.spark.deploy.master.Master || exit 1"]
+    cpus: "0.50"
+    mem_limit: 1g
+    restart: unless-stopped
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.0
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark:7077
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_WORKER_CORES: 1
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      SPARK_USER: spark
+    user: root
+    networks: [airflow_network]
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/data:/workspace/data
+      - ${AIRFLOW_PROJ_DIR:-.}/data/stage_one/parquet_files:/app/parquet_files
+      - ${AIRFLOW_PROJ_DIR:-.}/logs/pyspark_logs:/opt/bitnami/spark/work
+    entrypoint: >-
+      /bin/bash -c "chown -R 1001:1001 /opt/bitnami/spark/work &&
+      pip install pyarrow pandas==2.3.3 numpy==1.26.4 &&
+      /opt/bitnami/scripts/spark/entrypoint.sh /opt/bitnami/scripts/spark/run.sh"
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "ps aux | grep -v grep | grep org.apache.spark.deploy.worker.Worker || exit 1"]
+    cpus: "1.25"
+    mem_limit: 3g
+    restart: unless-stopped
+
+  controller-1: &controller-1
+    image: apache/kafka:latest
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks: [airflow_network]
+    restart: unless-stopped
+    cpus: "0.15"
+    mem_limit: 384m
+
+  controller-2:
+    <<: *controller-1
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+
+  controller-3:
+    <<: *controller-1
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://:9095
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+
+  broker-1:
+    <<: *kafka-broker
+    container_name: gsmls-broker-1
+    ports: ["127.0.0.1:29092:9092"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 4
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-1:9092
+    volumes: [broker1-data:/var/lib/kafka/data]
+
+  broker-2:
+    <<: *kafka-broker
+    container_name: gsmls-broker-2
+    ports: ["127.0.0.1:39092:9092"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 5
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-2:9092
+    volumes: [broker2-data:/var/lib/kafka/data]
+
+  broker-3:
+    <<: *kafka-broker
+    container_name: gsmls-broker-3
+    ports: ["127.0.0.1:49092:9092"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 6
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-3:9092
+    volumes: [broker3-data:/var/lib/kafka/data]
+
+  kafka-quorum-monitor:
+    image: apache/kafka:latest
+    networks: [airflow_network]
+    command: ["/bin/sh", "-c", "while :; do sleep 3600; done"]
+    depends_on:
+      broker-1: {condition: service_started}
+      broker-2: {condition: service_started}
+      broker-3: {condition: service_started}
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server broker-1:9092 describe --status >/dev/null 2>&1 || exit 1"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 256m
+
+  postgres_airflow:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    networks: [airflow_network]
+    volumes: [postgres-airflow-volume:/var/lib/postgresql/data]
+    healthcheck:
+      <<: *healthcheck-fast
+      test: [CMD-SHELL, "pg_isready -U airflow -d airflow"]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 768m
+
+  redis:
+    image: redis:7.2-bookworm
+    networks: [airflow_network]
+    expose: [6379]
+    healthcheck:
+      <<: *healthcheck-fast
+      test: [CMD, redis-cli, ping]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 512m
+
+  mongodb:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-gsmls_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-realEstate}
+    networks: [airflow_network]
+    ports: ["127.0.0.1:27017:27017"]
+    volumes: [mongodb-data:/data/db]
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })' >/dev/null || exit 1"]
+      start_period: 40s
+    restart: unless-stopped
+    cpus: "0.50"
+    mem_limit: 1g
+
+  mongo-express:
+    image: mongo-express:1.0.2-20
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME:-gsmls_admin}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+      ME_CONFIG_BASICAUTH_ENABLED: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:-gsmls}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:?Set MONGO_EXPRESS_PASSWORD}
+    networks: [airflow_network]
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      mongodb: {condition: service_healthy}
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 256m
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server --port 8085
+    ports: ["127.0.0.1:8085:8085"]
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD, curl, --fail, http://localhost:8085/api/v2/version]
+      start_period: 75s
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    cpus: "0.50"
+    mem_limit: 1g
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    cpus: "0.50"
+    mem_limit: 1g
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 768m
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-apiserver: {condition: service_healthy}
+      airflow-init: {condition: service_completed_successfully}
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
+    restart: unless-stopped
+    cpus: "1.00"
+    mem_limit: 3g
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 768m
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command: ["-c", "airflow db migrate && (airflow users create --username ${_AIRFLOW_WWW_USER_USERNAME:-airflow} --password ${_AIRFLOW_WWW_USER_PASSWORD:-airflow} --firstname Airflow --lastname Admin --role Admin --email ${PGADMIN_DEFAULT_EMAIL:-airflow@example.com} || true)"]
+    user: "0:0"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+    restart: "no"
+
+  airflow-cli:
+    <<: *airflow-common
+    profiles: [debug]
+    command: [bash, -c, airflow]
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+
+  job-debug:
+    build:
+      context: .
+      dockerfile: Dockerfile.debug
+    profiles: [debug]
+    tty: true
+    stdin_open: true
+    networks: [airflow_network]
+    environment:
+      PYTHONNOUSERSITE: "1"
+      PYTHONPATH: /workspace/gsmls_core:/workspace
+    volumes: [.:/workspace]
+    env_file: [.env]
+    working_dir: /workspace
+    command: [bash, -c, "pip install -e /workspace/gsmls_core && tail -f /dev/null"]
+    cpus: "0.50"
+    mem_limit: 1g
+
+  flower:
+    <<: *airflow-common
+    profiles: [flower]
+    command: celery flower
+    ports: ["127.0.0.1:5555:5555"]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 512m
+
+  # ------------------------- CVAT Community -------------------------
+  # CVAT is optional and starts only with --profile cvat.
+  cvat_db:
+    image: postgres:15-alpine
+    profiles: [cvat]
+    environment:
+      POSTGRES_DB: cvat
+      POSTGRES_USER: ${CVAT_POSTGRES_USER:-cvat}
+      POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD:?Set CVAT_POSTGRES_PASSWORD}
+    networks: [cvat_internal]
+    volumes: [cvat-db-data:/var/lib/postgresql/data]
+    healthcheck:
+      <<: *healthcheck-fast
+      test: [CMD-SHELL, "pg_isready -U ${CVAT_POSTGRES_USER:-cvat} -d cvat"]
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 1g
+
+  cvat_redis:
+    image: redis:7.2-alpine
+    profiles: [cvat]
+    command: [redis-server, --appendonly, "yes"]
+    networks: [cvat_internal]
+    volumes: [cvat-redis-data:/data]
+    healthcheck:
+      <<: *healthcheck-fast
+      test: [CMD, redis-cli, ping]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 512m
+
+  cvat_opa:
+    image: openpolicyagent/opa:0.63.0-rootless
+    profiles: [cvat]
+    command: [run, --server, --set=decision_logs.console=true]
+    networks: [cvat_internal]
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD-SHELL, "wget -q -O - http://localhost:8181/health >/dev/null || exit 1"]
+    restart: unless-stopped
+    cpus: "0.20"
+    mem_limit: 256m
+
+  cvat:
+    <<: *cvat-common
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.cvat-api.rule: PathPrefix(`/api`) || PathPrefix(`/auth`) || PathPrefix(`/admin`)
+      traefik.http.routers.cvat-api.entrypoints: web
+      traefik.http.services.cvat-api.loadbalancer.server.port: "8080"
+    volumes:
+      - cvat-data:/home/django/data
+      - cvat-keys:/home/django/keys
+      - cvat-logs:/home/django/logs
+      - cvat-events:/home/django/events
+    restart: unless-stopped
+    cpus: "0.75"
+    mem_limit: 2g
+
+  cvat_ui:
+    image: cvat/ui:${CVAT_VERSION:-v2.26.1}
+    profiles: [cvat]
+    networks: [cvat_internal]
+    depends_on: [cvat]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.cvat-ui.rule: PathPrefix(`/`)
+      traefik.http.routers.cvat-ui.entrypoints: web
+      traefik.http.services.cvat-ui.loadbalancer.server.port: "80"
+    restart: unless-stopped
+    cpus: "0.50"
+    mem_limit: 512m
+
+  cvat_proxy:
+    image: traefik:v3.3
+    profiles: [cvat]
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --ping=true
+      - --entrypoints.web.address=:8080
+    ports: ["127.0.0.1:8090:8080"]
+    networks: [cvat_internal]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [cvat, cvat_ui]
+    healthcheck:
+      <<: *healthcheck-default
+      test: [CMD, traefik, healthcheck, --ping]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 384m
+
+  cvat_worker_annotation:
+    <<: *cvat-common
+    command: [run, worker, annotation]
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 1g
+
+  cvat_worker_export:
+    <<: *cvat-common
+    command: [run, worker, export]
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 1g
+
+  cvat_worker_import:
+    <<: *cvat-common
+    command: [run, worker, import]
+    restart: unless-stopped
+    cpus: "0.35"
+    mem_limit: 1g
+
+  cvat_worker_webhooks:
+    <<: *cvat-common
+    command: [run, worker, webhooks]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 768m
+
+  cvat_utils:
+    <<: *cvat-common
+    command: [run, utils]
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 768m
+
+networks:
+  airflow_network:
+    name: airflow_network
+    driver: bridge
+  cvat_internal:
+    name: gsmls_cvat_internal
+    driver: bridge
+
+volumes:
+  postgres-airflow-volume:
+  pgadmin-user-data:
+  broker1-data:
+  broker2-data:
+  broker3-data:
+  mongodb-data:
+  cvat-db-data:
+  cvat-redis-data:
+  cvat-data:
+  cvat-keys:
+  cvat-logs:
+  cvat-events:
