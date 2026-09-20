@@ -140,6 +140,49 @@ class RealEstateImages:
                 except IndexError:
                     self.default_image_capture(image_num, imagedict, **kwargs)
 
+    @staticmethod
+    def calculate_document_completeness(document):
+        """Return completeness and image scores for survivor selection.
+
+        Bookkeeping and aggregation-only fields do not contribute to the
+        score. Missing values, ``None``, empty strings, and empty containers
+        are not meaningful. Nested dictionary and list values are evaluated
+        recursively so richer image and geodata structures score higher.
+
+        Args:
+            document: MongoDB property document to evaluate.
+
+        Returns:
+            A tuple containing the meaningful-value score and image score.
+        """
+
+        ignored_fields = {
+            "_id", "Update_Log", "_cleanup_mlsnum", "_cleanup_mlsnum_type"}
+
+        def meaningful_values(value):
+            """
+            Return a meaningful-value score for the given value. Recursively
+            implements the function for nested values
+
+            :param value: Value to evaluate.
+            :return: Meaningful-value score.
+            """
+            if value is None or value == "":
+                return 0
+            if isinstance(value, dict):
+                return sum(meaningful_values(item) for item in value.values())
+            if isinstance(value, (list, tuple, set)):
+                return sum(meaningful_values(item) for item in value)
+            return 1
+
+        completeness = sum(
+            meaningful_values(value)
+            for field, value in document.items()
+            if field not in ignored_fields
+        )
+        image_score = meaningful_values(document.get("Images"))
+        return completeness, image_score
+
     def capture_image_url(self, image_num, imagedict, **kwargs):
 
         filename = os.path.join(
@@ -257,60 +300,62 @@ class RealEstateImages:
             RealEstateImages.clean_image_key(property_data)
 
     @staticmethod
-    def create_agg_pipeline():
+    def create_agg_pipeline(include_non_integer=True):
+        """Build the aggregation used to find canonical MLSNum groups.
 
-        pipeline = [
-            # Match string OR date types
+        MLSNum values are converted to integers before grouping so values such
+        as ``123`` and ``"123"`` are treated as the same listing. Every source
+        document is returned with its group because survivor selection depends
+        on ``Images_Downloaded`` and document completeness. Values that cannot
+        be converted to an integer are excluded and handled separately by
+        :meth:`invalid_mlsnum_documents`.
+
+        Args:
+            include_non_integer: Include single-document groups whose MLSNum
+                requires datatype normalization in addition to duplicates.
+
+        Returns:
+            A MongoDB aggregation pipeline sorted by canonical MLSNum.
+        """
+
+        result_filter = [{"document_count": {"$gt": 1}}]
+        if include_non_integer:
+            result_filter.append({"requires_normalization": 1})
+
+        return [
             {
-                "$match": {
-                    "Date": {
-                        "$type": ["string", "date"]
-                    }
+                "$set": {
+                    "_cleanup_mlsnum": {
+                        "$convert": {
+                            "input": "$MLSNum",
+                            "to": "long",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    },
+                    "_cleanup_mlsnum_type": {"$type": "$MLSNum"},
                 }
             },
-
-            # Group by MLSNum
+            {"$match": {"_cleanup_mlsnum": {"$ne": None}}},
             {
                 "$group": {
-                    "_id": "$MLSNum",
-
-                    "Date": {"$push": "$Date"},
-                    "Address": {"$push": "$Address"},
-                    "Town": {"$push": "$Town"},
-                    "Zipcode": {"$push": "$Zipcode"},
-                    "Condition": {"$push": "$Condition"},
-                    "Images": {"$push": "$Images"},
-
-                    # Push Geo_Data only if it exists
-                    "Geo_Data": {
-                        "$push": {
+                    "_id": "$_cleanup_mlsnum",
+                    "documents": {"$push": "$$ROOT"},
+                    "document_count": {"$sum": 1},
+                    "requires_normalization": {
+                        "$max": {
                             "$cond": [
-                                {"$ne": ["$Geo_Data", None]},
-                                "$Geo_Data",
-                                "$$REMOVE"
+                                {"$in": ["$_cleanup_mlsnum_type", ["int", "long"]]},
+                                0,
+                                1,
                             ]
                         }
                     },
-
-                    # Count documents per MLSNum
-                    "document_count": {"$sum": 1},
-
-                    # Preserve old _id
-                    "property_attr": {
-                        "$push": {
-                            "old_id": "$_id"
-                        }
-                    },
                 }
             },
-
-            # Sort descending
-            {
-                "$sort": {"document_count": -1}
-            }
+            {"$match": {"$or": result_filter}},
+            {"$sort": {"_id": 1}},
         ]
-
-        return pipeline
 
     @staticmethod
     def create_base_document(target_row, **kwargs):
@@ -336,6 +381,13 @@ class RealEstateImages:
         kwargs["CountyCode"] = property_data["CountyCode"] = target_row["COUNTYCODE"]
         kwargs["BlockID"] = property_data["BlockID"] = target_row["BLOCKID"]
         kwargs["LotID"] = property_data["LotID"] = target_row["LOTID"]
+        property_data["Update_Log"] = {
+            "events":[
+                {"operation":"document_creation",
+                 "event_date":datetime.now()
+                 }
+            ]
+        }
 
         try:
             if prop_type != 'RNT':
@@ -353,47 +405,6 @@ class RealEstateImages:
             pass
 
         return property_data, kwargs
-
-    @staticmethod
-    def create_new_filename(filepath, mlsnum):
-
-        filepath_list = filepath.split('/')
-
-        if filepath_list[1] != 'raw':
-
-            filepath_list = filepath_list[-3:]
-            file_address = str(mlsnum) + " - " + filepath_list[-1]
-            section = filepath_list[0]
-            condition = filepath_list[1]
-
-            return os.path.join('raw', 'images', 'original', section, condition, file_address)
-        else:
-            return filepath
-
-    def create_image_dict(self):
-
-        imagedict = {}
-        image_sections_list = list(self.home_sections.keys())
-        image_sections_list.append("Other")
-
-        for section in image_sections_list:
-            imagedict.setdefault(section, [])
-
-        return imagedict
-
-    @staticmethod
-    def create_image_list(image_dict: dict):
-
-        total_image_list = []
-
-        for category in image_dict.keys():
-
-            if image_dict[category] == []:
-                continue
-            else:
-                total_image_list.extend(image_dict[category])
-
-        return total_image_list
 
     @staticmethod
     def create_futures_session():
@@ -426,6 +437,77 @@ class RealEstateImages:
         )
 
         return session
+
+    def create_image_dict(self):
+
+        imagedict = {}
+        image_sections_list = list(self.home_sections.keys())
+        image_sections_list.append("Other")
+
+        for section in image_sections_list:
+            imagedict.setdefault(section, [])
+
+        return imagedict
+
+    @staticmethod
+    def create_image_list(image_dict: dict):
+
+        total_image_list = []
+
+        for category in image_dict.keys():
+
+            if image_dict[category] == []:
+                continue
+            else:
+                total_image_list.extend(image_dict[category])
+
+        return total_image_list
+
+    @staticmethod
+    def create_new_filename(filepath, mlsnum):
+
+        filepath_list = filepath.split('/')
+
+        if filepath_list[1] != 'raw':
+
+            filepath_list = filepath_list[-3:]
+            file_address = str(mlsnum) + " - " + filepath_list[-1]
+            section = filepath_list[0]
+            condition = filepath_list[1]
+
+            return os.path.join('raw', 'images', 'original', section, condition, file_address)
+        else:
+            return filepath
+
+    @staticmethod
+    def create_update_log(existing_log, changes, operation="database_cleanup"):
+        """Create or append to an ``Update_Log`` event history.
+
+        Args:
+            existing_log: Current Update_Log value. A dictionary containing an
+                events list is preserved; a missing or malformed value starts
+                a new history.
+            changes: Dictionary describing changes made during this operation.
+            operation: Name of the process responsible for the changes.
+
+        Returns:
+            A dictionary containing the existing history and a new event.
+        """
+
+        if isinstance(existing_log, dict) and isinstance(existing_log.get("events"), list):
+            update_log = dict(existing_log)
+            events = list(existing_log["events"])
+        else:
+            update_log = {}
+            events = []
+
+        events.append({
+            "operation": operation,
+            "event_date": pendulum.now(tz="UTC"),
+            "changes": changes,
+        })
+        update_log["events"] = events
+        return update_log
 
     @staticmethod
     def date_and_condition(series):
@@ -466,54 +548,58 @@ class RealEstateImages:
             {"Condition": kwargs["Condition"], "URL": kwargs["image_url"], "Directory": filename}
         )
 
-    def delete_duplicates(self, doc_count, id_num, logger):
+    def delete_duplicate_documents(self, duplicate_ids: list, logger):
+        """Delete losing duplicate documents by exact MongoDB ``_id``.
 
-        if int(doc_count) >= 2:
+        Args:
+            duplicate_ids: Iterable of exact identifiers to remove.
+            logger: Logger supplied by ``logger_decorator``.
 
-            # Log how many documents will be deleted
-            print(
-                f" ==== MLSNUM {id_num} HAS {doc_count} DUPLICATED DOCUMENTS STORED ==== "
-                f"Program will delete {int(doc_count) - 1} documents"
-            )
+        Returns:
+            Number of documents deleted.
 
-            for _ in range(int(doc_count) - 1):
-                self.collection.delete_one({"MLSNum": id_num})
-
-            logger.info(
-                f'New document count for {id_num}: {self.collection.count_documents({"MLSNum": id_num})}'
-            )
-
-    def fetch_duplicate_mlsnums(self, batch_size=500):
-        """
-        Returns a list of MLSNum values >= start_mls.
-        If start_mls is None, just return first batch_size documents.
+        Raises:
+            RuntimeError: If MongoDB deletes fewer documents than requested.
         """
 
-        while True:
-            query = {}
-            start_mls = RealEstateImages.get_latest_mlsnum("gsmls_cleaning_pipeline", "start_mls")
+        duplicate_ids = list(duplicate_ids)
+        if not duplicate_ids:
+            return 0
 
-            if start_mls is not None:
-                print(f" ==== DUPLICATE MLS QUERY WILL START FROM: {start_mls} ==== ")
-                query["MLSNum"] = {"$gte": start_mls}
+        # PyMongo returns a DeleteResult object with a 'deleted_count' attribute
+        result = self.collection.delete_many({"_id": {"$in": duplicate_ids}})
+        if result.deleted_count != len(duplicate_ids):
+            raise RuntimeError(
+                f"Expected to delete {len(duplicate_ids)} duplicates but deleted "
+                f"{result.deleted_count}"
+            )
+        logger.info(f"Deleted duplicate document ids: {duplicate_ids}")
+        return result.deleted_count
 
-            cursor = self.collection.find(
-                query,
-                {"MLSNum": 1, "_id": 0}
-            ).sort("MLSNum", 1).limit(batch_size)
+    def does_document_exist(self, document_id):
+        """Return True if the document with the given ID exists."""
+        return self.collection.find_one({"_id": document_id}) is not None
 
-            # Turns the Mongo query cursor into a list
-            mls_list = [doc["MLSNum"] for doc in cursor]
+    def invalid_mlsnum_documents(self):
+        """Return documents whose MLSNum cannot be converted to an integer."""
 
-            if len(mls_list) > 1:
-                print(' ==== GENERATING LIST OF NEW DUPLICATE DOCUMENTS ==== ')
-                yield mls_list
-                # for mls_num in mls_list:
-                #     yield mls_num
-            else:
-                # No further MLSNum to provide. Breaks while query
-                RealEstateImages.no_more_results(mls_list[0])
-                break
+        pipeline = [
+            {
+                "$set": {
+                    "canonical_mlsnum": {
+                        "$convert": {
+                            "input": "$MLSNum",
+                            "to": "long",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    }
+                }
+            },
+            {"$match": {"canonical_mlsnum": None}},
+            {"$project": {"_id": 1, "MLSNum": 1}},
+        ]
+        return list(self.collection.aggregate(pipeline))
 
     def fetch_mlsnums(self, batch_size):
         """
@@ -559,41 +645,6 @@ class RealEstateImages:
             self.test_proxies()
         except HTTPError:
             print(f" ==== HTTPBIN SERVICE UNAVAIALABLE. RETRYING PROXY TEST LATER === ")
-
-    def generate_duplicate_mlsnums(self, cutoff_time, batch_size=500):
-
-        idx_checkpoint = 0
-
-        for mls_list in self.fetch_duplicate_mlsnums(batch_size=batch_size):
-
-            for mls_num in mls_list:
-
-                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
-                    f" ==== IMAGE DOWNLOAD CUTOFF TIME HAS BEEN REACHED ==== "
-                count = self.collection.count_documents({"MLSNum": mls_num})
-
-                if count <= 1:
-                    print(f' ==== NO DUPLICATES LOCATED FOR MLSNUM {mls_num} ==== ')
-
-                    if idx_checkpoint >= batch_size:
-                        # In order to reduce the amount of writes, save points occur when the checkpoint
-                        # equals the batch size. Reset idx_checkpoint
-                        idx_checkpoint = 0
-                        print(f' ==== INDEX CHECKPOINT REACHED ==== ')
-                        check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                                prop_type_=None, key_="start_mls", status_=mls_num)
-
-                    idx_checkpoint += 1
-                    continue
-
-                # Fetch all documents for inspection / cleanup
-                docs = list(self.collection.find({"MLSNum": mls_num}))
-
-                # Yield or process: MLSNum, docs, count
-                yield mls_num, docs, count
-                idx_checkpoint += 1
-                check_pipeline_metadata("gsmls_cleaning_pipeline",
-                                        prop_type_=None, key_="start_mls", status_=mls_num)
 
     def generate_image_docs(self, batch_size=60):
 
@@ -708,15 +759,6 @@ class RealEstateImages:
 
         for result in results:
             return result['MLSNum']
-
-    @staticmethod
-    def no_more_results(mls_num):
-
-        if mls_num == current_status("gsmls_cleaning_pipeline", "start_mls"):
-            # Reset the metadata key and end the program
-            check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None, key_="start_mls")
-            print(' ==== NO MORE DUPLICATION RESULTS AVAILABLE ==== ')
-            print(' ==== RESETTING START_MLS KEY IN METADATA ==== ')
 
     @staticmethod
     def parse_request_error(error, file_data, **kwargs):
@@ -887,6 +929,50 @@ class RealEstateImages:
         print(f" ==== STORING {total_images} IMAGES FOR {kwargs['metadata']['mlsnum']} - {kwargs['metadata']['address']} ==== ")
         kwargs['total_images'] = total_images
         self.prepare_image_for_aws(futures, files_data, session, **kwargs)
+
+    @staticmethod
+    def select_duplicate_survivor(documents):
+        """Select a duplicate survivor without merging losing documents.
+
+        Presence of ``Images_Downloaded`` has first priority. Completeness and
+        image scores resolve ties, followed by the string form of ``_id`` for
+        deterministic behavior.
+
+        Args:
+            documents: Documents belonging to one canonical MLSNum group.
+
+        Returns:
+            A tuple of the selected survivor and the losing documents.
+
+        Raises:
+            ValueError: If no documents are supplied.
+        """
+
+        def survivor_score(document):
+            """
+            Return a survivor score for the given document.
+            Example output of survivor score:
+            document_a = (1, 12, 5, "...")
+            document_b = (0, 20, 9, "...")
+
+            :param document: Document to evaluate.
+            :return: Survivor score.
+            """
+            completeness, image_score = RealEstateImages.calculate_document_completeness(document)
+            return (
+                int("Images_Downloaded" in document),  # Boolean determinant to 1 or 0
+                completeness,
+                image_score,
+                str(document["_id"]),
+            )
+
+        if not documents:
+            raise ValueError("Cannot select a survivor from an empty document list")
+
+        # Selects the document with the highest score starting from left most index
+        survivor = max(documents, key=survivor_score)
+        losing_documents = [doc for doc in documents if doc["_id"] != survivor["_id"]]
+        return survivor, losing_documents
 
     def single_session_request(self, session, url, error_list, **kwargs):
 
@@ -1108,27 +1194,26 @@ class RealEstateImages:
 
     @staticmethod
     def update_image_object(image_obj, update_op):
+        """Schedule removal of empty image categories from a document."""
+
+        if not isinstance(image_obj, dict):
+            return
 
         for category, value in image_obj.items():
             if len(value) == 0:
                 update_op["$unset"].update({f"Images.{category}": ""})
 
     @staticmethod
-    def update_mlsnum(id_num, update_op):
-
-        if isinstance(id_num, str):
-            update_op["$set"].update({"MLSNum": int(id_num)})
-
-    @staticmethod
     def update_str_values(town_val, address_val, condition_val, zip_val, update_op):
+        """Schedule safe casing and ZIP code normalization operations."""
 
-        if town_val == town_val.upper():
+        if isinstance(town_val, str) and town_val == town_val.upper():
             update_op["$set"].update({"Town": town_val.title()})
 
-        if address_val == address_val.upper():
+        if isinstance(address_val, str) and address_val == address_val.upper():
             update_op["$set"].update({"Address": address_val.title()})
 
-        if condition_val == condition_val.upper():
+        if isinstance(condition_val, str) and condition_val == condition_val.upper():
             update_op["$set"].update({"Condition": condition_val.title()})
 
         if isinstance(zip_val, float):
@@ -1137,7 +1222,7 @@ class RealEstateImages:
         elif isinstance(zip_val, int):
             pass
 
-        elif len(zip_val) == 4:
+        elif isinstance(zip_val, str) and len(zip_val) == 4:
             update_op["$set"].update({"Zipcode": "0" + zip_val})
 
     """
@@ -1148,16 +1233,23 @@ class RealEstateImages:
 
     @logger_decorator
     def database_cleanup(self, cutoff_time, **kwargs):
-        """
-        Cleanup the database with the following actions:
-            - Deleting duplicate documents
-            - Update the date field to ISODate or Datetime formats
-            - Delete the "Image_Downloaded" field if it exists. Will be replaced with "Images_Downloaded
-            in a different process
-            - Use title case for the Address, Town and Condition fields
-            - Make the _id field the MLSNum
+        """Normalize property documents and remove canonical MLSNum duplicates.
 
-        :return:
+        Duplicate groups are built after converting MLSNum values to integers.
+        A document containing ``Images_Downloaded`` has survivor priority;
+        completeness and image content resolve ties. Losing documents are not
+        merged and are deleted by exact ``_id``. The survivor then receives the
+        existing datatype, date, geodata, casing, and image cleanup operations.
+        Every applied change is appended to its ``Update_Log`` dictionary.
+
+        Args:
+            cutoff_time: Zoned datetime after which cleanup must stop.
+            **kwargs: Receives the logger injected by ``logger_decorator``.
+
+        Returns:
+            ``True`` only when no duplicate or non-integer convertible MLSNum
+            groups remain and no invalid MLSNum values were found; otherwise
+            ``False``.
         """
 
         logger = kwargs["logger"]
@@ -1165,69 +1257,140 @@ class RealEstateImages:
                     f" ==== TOTAL: {self.collection.count_documents({})}")
 
         try:
-            # The cursor will die if idle for 10+ minutes. Each document result takes about 6 seconds to go through
-            # the update. 600secs (10 mins) / 6 sec/doc should put us at a batch size of 100. I'll put the batchSize
-            # at 85 to account for time variances
-            print(' ==== GATHERING DOCUMENTS FROM AGGREGATE PIPELINE ==== ')
-            for mlsnum, docs, count in self.generate_duplicate_mlsnums(cutoff_time, batch_size=10000):
-
-                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
-                    f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== "
-                update_operation = {
-                    "$set": {},  # Dictionary to hold all update operations
-                    "$unset": {
-                        "Image_Downloaded": ""
-                    },  # Delete the fields if they exists
-                }
-
-                res = docs[0]
-                address = res["Address"]
-                condition = res["Condition"]
-                current_doc_count = count
-                date = res["Date"]
-                images = res["Images"]
-                town = res["Town"]
-                query_filter = {"MLSNum": mlsnum}
-                zipcode = res["Zipcode"]
-                geo_data = res.get("Geo_data", None)
-
-                # Log the current document information
-                logger.info(f"Current document: {mlsnum}")
-
-                # Delete duplicate documents
-                self.delete_duplicates(current_doc_count, mlsnum, logger)
-
-                # Update the longitude and latitude data
-                self.update_geodata(mlsnum, geo_data, update_operation)
-
-                # Check _id datatype, if it's a str object, switch to the int
-                RealEstateImages.update_mlsnum(mlsnum, update_operation)
-
-                # Check Date datatype
-                RealEstateImages.update_date_datatype(date, update_operation)
-
-                # Update the string values
-                RealEstateImages.update_str_values(
-                    town, address, condition, zipcode, update_operation
+            # Be sure to handle invalid MLSNum values. Deletion should be the default behavior.
+            invalid_documents = self.invalid_mlsnum_documents()
+            if invalid_documents:
+                logger.error(
+                    f" ==== MLSNUM VALUES COULD NOT BE CONVERTED TO INTEGERS: {invalid_documents} ==== "
                 )
 
-                # Update the Image value to remove empty arrays
-                RealEstateImages.update_image_object(images, update_operation)
-                temp_dict = update_operation.copy()
-                temp_dict["$unset"].pop("Image_Downloaded")
+            print(' ==== GATHERING DOCUMENTS FROM AGGREGATE PIPELINE ==== ')
+            duplicate_cursor = self.collection.aggregate(
+                RealEstateImages.create_agg_pipeline(),
+                allowDiskUse=True,
+                batchSize=100,
+            )
+            for result in duplicate_cursor:
+                assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
+                    f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== "
+                canonical_mlsnum = int(result["_id"])  # Canonical grouped MLSNum
+                survivor, losing_documents = RealEstateImages.select_duplicate_survivor(
+                    result["documents"]
+                )
+                losing_ids = [document["_id"] for document in losing_documents]  # List of MongoDB document identifiers
+                logger.info(f" ==== CURRENT DOCUMENT: {canonical_mlsnum} ==== ")
 
-                set_operations = len(list(temp_dict['$set'].keys()))
-                unset_operations = len(list(temp_dict['$unset'].keys()))
+                deleted_count = self.delete_duplicate_documents(losing_ids, logger)
+                update_operation = {"$set": {}, "$unset": {}}
+                changes = {}
 
-                # Update the document
-                if set_operations != 0 and unset_operations != 0:
-                    self.collection.update_one(query_filter, update_operation)
-                    # pprint(update_operation)
-                    # pprint(res)
+                original_mlsnum = survivor.get("MLSNum")
+                if type(original_mlsnum) is not int or original_mlsnum != canonical_mlsnum:
+                    update_operation["$set"]["MLSNum"] = canonical_mlsnum
+                    changes["MLSNum"] = {
+                        "from": original_mlsnum,
+                        "to": canonical_mlsnum,
+                    }
+
+                self.update_geodata(
+                    canonical_mlsnum,
+                    survivor.get("Geo_Data"),
+                    update_operation,
+                )
+                RealEstateImages.update_date_datatype(
+                    survivor.get("Date"),
+                    update_operation,
+                )
+                RealEstateImages.update_str_values(
+                    survivor.get("Town", ""),
+                    survivor.get("Address", ""),
+                    survivor.get("Condition", ""),
+                    survivor.get("Zipcode"),
+                    update_operation,
+                )
+                RealEstateImages.update_image_object(
+                    survivor.get("Images", {}),
+                    update_operation,
+                )
+                if "Image_Downloaded" in survivor:
+                    update_operation["$unset"]["Image_Downloaded"] = ""
+
+                for field, new_value in list(update_operation["$set"].items()):
+                    old_value = survivor.get(field)
+                    if old_value == new_value:
+                        del update_operation["$set"][field]
+                    elif field not in changes:
+                        changes[field] = {"from": old_value, "to": new_value}
+
+                for field in update_operation["$unset"]:
+                    if field.startswith("Images."):
+                        category = field.split(".", 1)[1]
+                        old_value = survivor.get("Images", {}).get(category)
+                    else:
+                        old_value = survivor.get(field)
+                    changes.setdefault("fields_removed", []).append({
+                        "field": field,
+                        "from": old_value,
+                        "to": "removed",
+                    })
+
+                if deleted_count:
+                    changes["duplicates_removed"] = {
+                        "count": deleted_count,
+                        "removed_ids": losing_ids,
+                    }
+
+                existing_update_log = survivor.get("Update_Log")
+                if (
+                    isinstance(existing_update_log, dict)
+                    and isinstance(existing_update_log.get("events"), list)
+                ):
+                    # Preserve document_creation and append database_cleanup.
+                    updated_log = RealEstateImages.create_update_log(
+                        existing_update_log,
+                        changes,
+                    )
+                else:
+                    # Older documents begin their history with database_cleanup.
+                    updated_log = RealEstateImages.create_update_log(None, changes)
+
+                update_operation["$set"]["Update_Log"] = updated_log
+                update_operation = {
+                    operator: values
+                    for operator, values in update_operation.items()
+                    if values
+                }
+                update_result = self.collection.update_one(
+                    {"_id": survivor["_id"]},
+                    update_operation,
+                )
+                if update_result.matched_count != 1:
+                    raise RuntimeError(
+                        f"Survivor {survivor['_id']} was not available for update"
+                    )
+
+                check_pipeline_metadata(
+                    "gsmls_cleaning_pipeline",
+                    prop_type_=None,
+                    key_="start_mls",
+                    status_=canonical_mlsnum,
+                )
+
+            remaining_results = list(self.collection.aggregate(
+                RealEstateImages.create_agg_pipeline(),
+                allowDiskUse=True,
+            ))
+            if remaining_results:
+                logger.error(
+                    f"Database cleanup verification failed. Remaining groups: "
+                    f"{[result['_id'] for result in remaining_results]}"
+                )
+                return False
 
         except CursorNotFound as cnf:
             logger.warning(f"{cnf}")
-            logger.info("Starting new aggregate cursor")
+            logger.info("Aggregate cursor expired before cleanup completed")
+            return False
         except AssertionError as e:
             logger.info(f"{e}")
             logger.info(f" ==== DATABASE CLEANING COMPLETED ==== ")
@@ -1314,7 +1477,7 @@ class RealEstateImages:
         for _, row_data in zip(tqdm(range(len(df_var)), "Row"), df_var.iterrows()):
 
             target_row = row_data[1]
-            # target_date, condition = self.sql_query(target_row)
+
             try:
                 if (
                     (target_row["IMAGES"] == "None")
@@ -1329,13 +1492,9 @@ class RealEstateImages:
 
             property_data, kwargs = RealEstateImages.create_base_document(target_row, **kwargs)
             self.collect_image_data(target_row, property_data, **kwargs)
-            self.collection.insert_one(dict(property_data))
-            print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
-                  f"{property_data['MLSNum']} - {property_data['Address']}, {property_data['Town']} ==== ")
-            # print(pformat(dict(property_data)))
 
+            if not self.does_document_exist(property_data["MLSNum"]):
+                self.collection.insert_one(dict(property_data))
+                print(f" ==== NEW PROPERTY DOCUMENT CREATED IN MONGODB: "
+                      f"{property_data['MLSNum']} - {property_data['Address']}, {property_data['Town']} ==== ")
 
-# if __name__ == '__main__':
-#
-#     obj = RealEstateImages(latest_order_num=64872924)
-#     # obj.generate_current_isps()
