@@ -33,3 +33,8 @@ servers.json
 .env
 /data
 /gsmls_airflow_pipeline_old.py
+/old_scripts
+PRELAUNCH_CHECKLIST.txt
+/log_files
+sample_data_09102026.xls
+sample_data_list.json
