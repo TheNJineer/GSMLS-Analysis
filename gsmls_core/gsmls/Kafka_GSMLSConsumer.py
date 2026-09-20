@@ -10,6 +10,9 @@ from datetime import datetime
 from datetime import timedelta
 from gsmls.utility_func import create_sql_engine, create_kafka_producer
 from gsmls.utility_func import create_kafka_consumer, logger_decorator, get_filepath
+from gsmls.property_condition import classify_condition, ConditionResult
+from gsmls.property_lot_size import calculate_property_lot_size, LotSizeResult
+from gsmls.property_sale_status import classify_property_sale_status, PropertySaleStatusResult
 from kafka.errors import KafkaTimeoutError, MessageSizeTooLargeError, RebalanceInProgressError
 from gsmls.RealEstateImages import RealEstateImages
 from sqlalchemy.exc import DataError, IntegrityError
@@ -21,12 +24,13 @@ class KafkaGSMLSConsumer:
     def __init__(self, order_nums=None):
         self.order_nums = order_nums
         self.connection = create_sql_engine('gsmls', True)
-        self.producer = create_kafka_producer(client_id="data_producer")
+        self.data_producer = create_kafka_producer(client_id="data_producer")
+        self.log_producer = create_kafka_producer(client_id="log_producer")
         self.consumer = create_kafka_consumer("data_consumer", "data_consumer")
         self.prop_dict = {
-            'RES': {'topic': 'res_properties', 'functions': 14, 'clean_type': KafkaGSMLSConsumer.res_property_cleaning},
-            'MUL': {'topic': 'mul_properties', 'functions': 13, 'clean_type': KafkaGSMLSConsumer.mul_property_cleaning},
-            'LND': {'topic': 'lnd_properties', 'functions': 12, 'clean_type': KafkaGSMLSConsumer.lnd_property_cleaning},
+            'RES': {'topic': 'res_properties', 'functions': 14, 'clean_type': self.res_property_cleaning},
+            'MUL': {'topic': 'mul_properties', 'functions': 13, 'clean_type': self.mul_property_cleaning},
+            'LND': {'topic': 'lnd_properties', 'functions': 12, 'clean_type': self.lnd_property_cleaning},
             'RNT': {'topic': 'rnt_properties', 'functions': 8, 'clean_type': KafkaGSMLSConsumer.rnt_property_cleaning},
             'TAX': {'topic': 'tax_properties_new', 'functions': 6, 'clean_type': KafkaGSMLSConsumer.tax_property_cleaning},
             'IMAGES': {'topic': 'prop_images', 'functions': 0, 'clean_type': None},
@@ -211,26 +215,15 @@ class KafkaGSMLSConsumer:
             except ValueError:
                 pass
 
-    @staticmethod
-    def convert_lot_size(df_var, update_bar):
-
-        try:
-            df_var['ACRES'] = df_var['ACRES'].astype('float64')
-            df_var['LOTSIZE (SQFT)'] = df_var['ACRES'] * 43560
-        except ValueError:
-            df_var['ACRES'] = pd.to_numeric(df_var['ACRES'], errors='coerce')
-            df_var['LOTSIZE (SQFT)'] = df_var['ACRES'] * 43560
+    def convert_lot_size(self, df_var, update_bar):
 
         temp_df_ = df_var.copy()
 
         for idx, row in temp_df_.iterrows():
 
-            try:
-                if row['LOTSIZE (SQFT)'] == 0.0:
-                    value = row['LOTSIZE']
-                    df_var.loc[idx, 'LOTSIZE (SQFT)'] = KafkaGSMLSConsumer.fix_lotsize(value)
-            except TypeError:
-                df_var.loc[idx, 'LOTSIZE (SQFT)'] = 0.0
+            result = calculate_property_lot_size(row['LOTSIZE'], row['ACRES'])
+            self.produce_log(result)
+            df_var.loc[idx, 'LOTSIZE (SQFT)'] = result.square_feet if result.square_feet is not None else 0.0
 
         update_bar.update(1)
         return df_var
@@ -676,73 +669,42 @@ class KafkaGSMLSConsumer:
 
         return 0.0
 
-    @staticmethod
-    def fixer_upper(df_var, prop_type, update_bar):
+    def fixer_upper(self, df_var, prop_type, update_bar):
         """
         REFACTOR
         """
 
+        cols = []
         condition_dict = {
             'RES': ['STYLEPRIMARY_SHORT', 'STYLE_SHORT'],
             'MUL': ['UNITSTYLE_SHORT', 'UNITSTYLE_SHORT']
         }
 
         temp_df_ = df_var.copy()
-        fixup_pattern = re.compile(r'HANDY(\s)?MAN|NEEDS WORK|FIXER(-|\s)?UPPER|BOARDED(\sUP)?'
-                                   r'IN NEED OF WORK|NEEDS REHAB|TOTAL REHAB|EXTENSIVE REPAIR|COMPLETE OVERHAUL'
-                                   r'YOUR OWN RISK|TLC|INVESTOR SPECIAL|203(\s)?K|PROCEED WITH CAUTION'
-                                   r'SIGNIFICANT REPAIR|DAMAGE|CASH(\sOFFER(S)?\s)?ONLY|NEED OF REPAIR|FULL GUT(\sRENOVATION)?'
-                                   r'TOTAL GUT(\sRENOVATION)?|(?<!crown\s)(?<!base\s)mold\b(?!ing)', flags=re.IGNORECASE)
-        bankowned_pattern = re.compile(r'BANK OWNED|ESTATE SALE|BANK FORECLOSURE|CORPORATE OWNED',flags=re.IGNORECASE)
-        short_sale_pattern = re.compile(r'(?<!THIS IS NOT A )(?<!NOT A )SHORT SALE|SUBJECT TO LENDER(S)? APPROVAL'
-                                        r'SUBJECT TO THIRD PARTY APPROVAL|SUBJECT TO BANK(S)? APPROVAL', flags=re.IGNORECASE)
-        not_short_sale_pattern = re.compile(r'(THIS\sIS\s)?NOT A SHORT SALE', flags=re.IGNORECASE)
 
         for idx, row in temp_df_.iterrows():
 
             primary_style = row[condition_dict[prop_type][0]]
-            styles = row[condition_dict[prop_type][1]].split(',')
+            styles = [i.strip() for i in row[condition_dict[prop_type][1]].split(',')]
+            listing_remarks = row['LISTING_REMARKS']
 
-            # Bank Owned pattern
-            if bankowned_pattern.search(row['LISTING_REMARKS']) is not None:
-
-                df_var.loc[idx, 'BANK_OWNED'] = True
-                df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = True
-                df_var.loc[idx, 'DISTRESSED_SALE'] = True
-
+            if (primary_style == 'FixrUppr') or ('FixrUppr' in styles):
+                condition = 'Fixer Upper'
             else:
-                df_var.loc[idx, 'BANK_OWNED'] = False
-                df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = False
-                df_var.loc[idx, 'DISTRESSED_SALE'] = False
+                property_condition_results = classify_condition(primary_style, listing_remarks)
+                self.produce_log(property_condition_results)
+                condition = property_condition_results.condition
 
-            # Short Sale pattern
-            if (short_sale_pattern.search(row['LISTING_REMARKS']) is not None) and (not_short_sale_pattern.search(row['LISTING_REMARKS']) is None):
+            sales_status_results = classify_property_sale_status(listing_remarks)
+            self.produce_log(sales_status_results)
+            short_sale = False if sales_status_results.short_sale.value is not True else sales_status_results.short_sale.value
+            bank_owned = False if sales_status_results.bank_owned.value is not True else sales_status_results.bank_owned.value
 
-                df_var.loc[idx, 'SHORT_SALE'] = True
-                df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = True
-                df_var.loc[idx, 'DISTRESSED_SALE'] = True
-
-            else:
-                df_var.loc[idx, 'SHORT_SALE'] = False
-
-                if (df_var.loc[idx, 'POTENTIAL_INVESTMENT'] and df_var.loc[idx, 'DISTRESSED_SALE']) != True:
-                    df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = False
-                    df_var.loc[idx, 'DISTRESSED_SALE'] = False
-
-            # Fixer upper pattern
-            if (primary_style == 'FixrUppr') or ('FixrUppr' in styles) or (
-                    fixup_pattern.search(row['LISTING_REMARKS']) is not None):
-
-                df_var.loc[idx, 'CONDITION'] = 'Fixer Upper'
-                df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = True
-                df_var.loc[idx, 'DISTRESSED_SALE'] = True
-
-            else:
-                df_var.loc[idx, 'CONDITION'] = 'Unknown'
-
-                if (df_var.loc[idx, 'POTENTIAL_INVESTMENT'] and df_var.loc[idx, 'DISTRESSED_SALE']) != True:
-                    df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = False
-                    df_var.loc[idx, 'DISTRESSED_SALE'] = False
+            df_var.loc[idx, 'CONDITION'] = condition
+            df_var.loc[idx, 'SHORT_SALE'] = short_sale
+            df_var.loc[idx, 'BANK_OWNED'] = bank_owned
+            df_var.loc[idx, 'POTENTIAL_INVESTMENT'] = True if True in [short_sale, bank_owned] or condition == 'Fixer Upper' else False
+            df_var.loc[idx, 'DISTRESSED_SALE'] = True if True in [short_sale, bank_owned] or condition == 'Fixer Upper' else False
 
         update_bar.update(1)
         return df_var
@@ -1080,19 +1042,16 @@ class KafkaGSMLSConsumer:
                 # Used for RES, MUL, LND property types
                 self.consumer.commit()
                 df = df[mask]
-                return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'LISTDATE'],
-                                          keep='last').reset_index(drop=True)
+                return df.drop_duplicates(subset=['MLSNUM'], keep='last').reset_index(drop=True)
 
             elif prop_type == 'RNT':
                 try:
                     # Used for RNT proeprty types
                     self.consumer.commit()
-                    return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
-                                              keep='last').reset_index(drop=True)
+                    return df.drop_duplicates(subset=['MLSNUM'], keep='last').reset_index(drop=True)
                 except KeyError:
                     df.insert(17, 'RENTEDDATE', '00/00/0000 00:00:00')
-                    return df.drop_duplicates(subset=['STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'RENTEDDATE'],
-                                              keep='last').reset_index(drop=True)
+                    return df.drop_duplicates(subset=['MLSNUM'], keep='last').reset_index(drop=True)
 
             elif prop_type == 'TAX':
                 # Used for TAX data
@@ -1102,8 +1061,7 @@ class KafkaGSMLSConsumer:
             else:
                 # Used for property images
                 self.consumer.commit()
-                return df.drop_duplicates(subset=['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', ],
-                                          keep='last').reset_index(drop=True)
+                return df.drop_duplicates(subset=['MLSNUM'], keep='last').reset_index(drop=True)
 
         except RebalanceInProgressError:
             print(f' ==== BROKER REBALANCING IN PROGRESS. RETRYING EFFORT ==== ')
@@ -1146,7 +1104,7 @@ class KafkaGSMLSConsumer:
                   f"{municipality_data['year']} FOR THE FOLLOWING MUNICIPALITIES: ==== \n"
                   f" ==== {value}")
 
-    def produce_images(self, df_var, prop_type):
+    def produce_images(self, df_var, prop_type, duplicates: list | None):
         """
         REFACTOR
         """
@@ -1176,18 +1134,35 @@ class KafkaGSMLSConsumer:
             #                        'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
             #                        'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
 
-            prepared_image_df = image_df.to_json(orient='split', date_format='iso')
-            try:
-                results = self.producer.send('prop_images', value=prepared_image_df)
-                result_metadata = results.get(timeout=10)
+            if duplicates is not None:
+                # Remove duplicates from the dataframe
+                image_df = image_df[~image_df['MLSNUM'].isin(duplicates)]
 
-            except MessageSizeTooLargeError:
-                self.reduce_df_size(image_df, 500)
+            if not image_df.empty or duplicates is None:
+                prepared_image_df = image_df.to_json(orient='split', date_format='iso')
+                try:
+                    results = self.data_producer.send('prop_images', value=prepared_image_df)
+                    result_metadata = results.get(timeout=10)
 
-            except KafkaTimeoutError:
-                print(f' === IMAGES HAVE NOT BEEN PRODUCED TO {result_metadata.topic} IN KAFKA')
+                except MessageSizeTooLargeError:
+                    self.reduce_df_size(image_df, 500)
 
-            print(f" ==== SUCCESSFULLY PRODUCED {prop_type} PROPERTY IMAGES TO KAFKA ==== ")
+                except KafkaTimeoutError:
+                    print(f' === IMAGES HAVE NOT BEEN PRODUCED TO {result_metadata.topic} IN KAFKA')
+
+                print(f" ==== SUCCESSFULLY PRODUCED {prop_type} PROPERTY IMAGES TO KAFKA ==== ")
+            else:
+                print(f" ==== NO {prop_type} PROPERTY IMAGES TO PRODUCE TO KAFKA ==== ")
+
+    def produce_log(self, log_result: PropertySaleStatusResult | ConditionResult | LotSizeResult ):
+        try:
+            log_dict = log_result.__dict__
+            results = self.log_producer.send('status_logs', value=log_dict)
+            result_metadata = results.get(timeout=10)
+
+        except KafkaTimeoutError:
+            print(f' === LOG HAS NOT BEEN PRODUCED TO {result_metadata.topic} IN KAFKA')
+
 
     @staticmethod
     def reorder_columns(df_var, prop_type, update_bar):
@@ -1295,45 +1270,42 @@ class KafkaGSMLSConsumer:
         update_bar.update(1)
         return df_var
 
-    @staticmethod
-    def res_property_cleaning(df_var, prop_type, update_bar):
+    def res_property_cleaning(self, df_var, prop_type, update_bar):
 
         return (df_var.pipe(KafkaGSMLSConsumer.fill_na_values, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.standard_cleaning, prop_type=prop_type, update_bar=update_bar)
-                    .pipe(KafkaGSMLSConsumer.convert_lot_size, update_bar=update_bar)
+                    .pipe(self.convert_lot_size, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.calculate_dates, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.combine_listing_remarks, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.sub_property_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.parse_property_attr, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.investment_label, update_bar=update_bar)
-                    .pipe(KafkaGSMLSConsumer.fixer_upper, prop_type=prop_type, update_bar=update_bar)
+                    .pipe(self.fixer_upper, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.original_lp_diff, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                     .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
-    @staticmethod
-    def mul_property_cleaning(df_var, prop_type, update_bar):
+    def mul_property_cleaning(self, df_var, prop_type, update_bar):
 
         return (df_var.pipe(KafkaGSMLSConsumer.fill_na_values, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.standard_cleaning, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.convert_lot_size, update_bar=update_bar)
+                .pipe(self.convert_lot_size, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.calculate_dates, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.combine_listing_remarks, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.parse_property_attr, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.investment_label, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.fixer_upper, prop_type=prop_type, update_bar=update_bar)
+                .pipe(self.fixer_upper, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.original_lp_diff, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.reorder_columns, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.escape_illegal_char, prop_type=prop_type, update_bar=update_bar))
 
-    @staticmethod
-    def lnd_property_cleaning(df_var, prop_type, update_bar):
+    def lnd_property_cleaning(self, df_var, prop_type, update_bar):
 
         return (df_var.pipe(KafkaGSMLSConsumer.fill_na_values, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.standard_cleaning, prop_type=prop_type, update_bar=update_bar)
-                .pipe(KafkaGSMLSConsumer.convert_lot_size, update_bar=update_bar)
+                .pipe(self.convert_lot_size, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.calculate_dates, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.change_datatypes, prop_type=prop_type, update_bar=update_bar)
                 .pipe(KafkaGSMLSConsumer.combine_listing_remarks, update_bar=update_bar)
@@ -1365,7 +1337,7 @@ class KafkaGSMLSConsumer:
             prepared_image_df = slice_df.to_json(orient='split', date_format='iso')
 
             try:
-                results = self.producer.send('prop_images', value=prepared_image_df)
+                results = self.data_producer.send('prop_images', value=prepared_image_df)
                 result_metadata = results.get(timeout=10)
                 if block_num is None:
                     blocks += 1
@@ -1526,6 +1498,7 @@ class KafkaGSMLSConsumer:
     def submit2sql(self, df_var, topic, prop_type, cleaning_bar):
 
         step = 500
+        duplicates = []
 
         for idx, row in enumerate(range(0, len(df_var), step)):
 
@@ -1542,9 +1515,13 @@ class KafkaGSMLSConsumer:
             except (DataError, IntegrityError) as e:
                 print(f'{e}')
                 print(f' ==== ERROR HAS BEEN DETECTED IN BLOCK {idx}. NOW SUBMITTING DATA BY INDIVIDUAL ROW ==== ')
-                self.submit2sql_dataerror(final_df, topic)
+                dups = self.submit2sql_dataerror(final_df, topic)
+                if dups is not None:
+                    duplicates.extend(dups)
 
         print(f" ==== {topic} HAS SUCCESSFULLY BEEN STORED IN POSTGRESQL ==== ")
+
+        return duplicates if len(duplicates) > 0 else None
 
     def submit2sql_dataerror(self, df_var, topic):
         """
@@ -1557,6 +1534,7 @@ class KafkaGSMLSConsumer:
 
         completed = 0
         failed = 0
+        duplicates = []
 
         print(f' ==== NOW SUBMITTING DATA BY INDIVIDUAL ROW. PLEASE WAIT... ==== ')
 
@@ -1566,24 +1544,33 @@ class KafkaGSMLSConsumer:
             try:
                 temp_df.to_sql(topic, con=self.connection, if_exists='append', index=False)
                 completed += 1
-            except (DataError, IntegrityError) as e:
+            except IntegrityError:
                 failed += 1
-                continue
+                duplicates.append(temp_df['MLSNUM'].values[0])
+            except DataError as e:
+                print(f" ==== DATA ERROR FOR MLSNUM #{temp_df['MLSNUM'].values[0]}: {e} ==== ")
 
         print(f" ==== DUPLICATE ROWS REMOVED FROM DATA: {failed} ==== ")
         print(f" ==== NEW ROWS SAVED TO POSTGRESQL: {completed} ==== ")
+
+        if len(duplicates) > 0:
+            return duplicates
+        else:
+            return None
 
     def submit_data(self, df, prop, table, cleaning_bar, keys_list, re_image_obj, **kwargs):
 
         # filepath = f"/opt/airflow/downloads/test_data_{datetime.now().date()}.xlsx"
 
         if prop != 'IMAGES':
+
+            dups = self.submit2sql(df, table, prop, cleaning_bar)
+
             # Produce image data to Kafka topic and relational data to SQL
             if prop in ['RES', 'MUL', 'RNT']:
                 print(' ==== IMAGES PRODUCED ==== ')
-                self.produce_images(df, prop)
+                self.produce_images(df, prop, dups)
 
-            self.submit2sql(df, table, prop, cleaning_bar)
             if keys_list is not None:
                 try:
                     KafkaGSMLSConsumer.process_keys(keys_list)  # Print the data that has been processed
