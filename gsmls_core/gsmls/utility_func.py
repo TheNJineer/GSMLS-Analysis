@@ -215,17 +215,22 @@ def create_mongodb_conn(remote=False):
         connection_str = "mongodb://localhost:27017/"
 
     else:
+        connection_str = (
+            os.getenv("GSMLS_MONGODB_URL")
+            or os.getenv("ME_CONFIG_MONGODB_URL")
+        )
 
-        try:
-            connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
-
-            if connection_str is None:
-                raise ValueError
-        except ValueError:
-            print(" ==== ENV ERROR: MONGODB ATLAS INFO NOT SUPPLIED TO DOCKER CONTAINER ==== ")
-            print(" ==== LOADING INTERNAL ENVIRONMENT VARIABLES DOCUMENT ==== ")
+        if not connection_str:
             load_dotenv(get_filepath("env"))
-            connection_str = os.getenv("ME_CONFIG_MONGODB_URL")
+            connection_str = (
+                os.getenv("GSMLS_MONGODB_URL")
+                or os.getenv("ME_CONFIG_MONGODB_URL")
+            )
+
+        if not connection_str:
+            raise ValueError(
+                "Set GSMLS_MONGODB_URL to an authenticated MongoDB connection URL"
+            )
 
     return MongoClient(
             host=connection_str,
