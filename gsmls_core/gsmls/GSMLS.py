@@ -424,13 +424,30 @@ class GSMLS:
 
         return results[0]['encoding']
 
-    @staticmethod
-    def does_file_already_exist(filename):
+    def does_file_already_exist(self, filename=None, aws=False, **kwargs):
 
-        download_folder = get_filepath("downloads")
-        target_path = os.path.join(download_folder, filename)
+        if not aws:
+            download_folder = get_filepath("downloads")
+            target_path = os.path.join(download_folder, filename)
 
-        return os.path.isfile(target_path)
+            return os.path.isfile(target_path)
+
+        else:
+            if self.download_log['File_Type'][-1] in ['both', 'tsv']:
+                file_key = GSMLS.create_s3_document_path('tsv', **kwargs)
+            else:
+                file_key = GSMLS.create_s3_document_path('xls', **kwargs)
+
+            try:
+                # Check if file exists in AWS S3 bucket
+                kwargs["s3_client"].head_object(Bucket="amzn-s3-gsmls-datalake", Key=file_key)
+
+            except ClientError as e:  # File does not exist in AWS S3 Bucket
+                if e.response["Error"]["Code"] == "404":
+                    return False
+            else:
+                return True
+
 
     def download_complete(self, **kwargs):
 
@@ -874,7 +891,7 @@ class GSMLS:
             print(' ==== SCRAPPING IMAGE AND PDF DATA ==== ')
             if type(first_media_idx) is int:
                 try:
-                    GSMLS.scrape_image_links_and_documents(
+                    self.scrape_image_links_and_documents(
                         sold_listings_dictionary, driver_var, first_media_idx, prop_id, **kwargs
                     )
                     # Step 3: Switch to main property table window after scraping images
@@ -976,7 +993,7 @@ class GSMLS:
                     (By.XPATH, "//a[normalize-space()='Download']")
                 )
             )
-            if GSMLS.does_file_already_exist(true_filename) is not True:
+            if self.does_file_already_exist(true_filename) is not True:
                 download_button.click()
                 error_result = GSMLS.download_error(driver_var, kwargs["logger"])
             else:
@@ -1466,15 +1483,22 @@ class GSMLS:
         filename = self.download_sales_data(driver_var, **kwargs)
         kwargs["Filename"] = filename
         GSMLS.explicit_page_load("Results", driver_var, property_type=self.prop_type)
+        does_file_exist = self.does_file_already_exist(aws=True, **kwargs)
 
         # Do not try to publish any data to Kafka if there was a server error during the search
         # No data was returned
-        if filename != "Server Error":
+        if filename != "Server Error" and does_file_exist is not True:
             # Scrape the mlsnum, lat/long and image data to merge into Kafka data
             additional_info = self.format_data_for_kafka(driver_var, **kwargs)
             kwargs["Expected_Data"] = expected_data = len(additional_info["MLSNUM"])
             self.publish_data_2kafka(additional_info, **kwargs)
             self.download_log["Expected_Data"][-1] = expected_data
+
+        elif does_file_exist is True:
+            print(" ==== RAW DATA EXISTS IN AWS S3. WILL NOT PUBLISH DATA TO KAFKA ==== ")
+
+        elif filename == "Server Error":
+            print(" ==== SERVER ERROR. COULD NOT PUBLISH DATA TO KAFKA ==== ")
 
         GSMLS.exit_results_page(driver_var)
         self.download_log["Finished"][-1] = "Yes"
@@ -1827,8 +1851,7 @@ class GSMLS:
                         if_exists="append", index=False)
         self.download_log = GSMLS.create_download_log()
 
-    @staticmethod
-    def scrape_image_links_and_documents(dict_var, driver_var, link_var, prop_id, **kwargs):
+    def scrape_image_links_and_documents(self, dict_var, driver_var, link_var, prop_id, **kwargs):
 
         media_window = GSMLS.locate_image_media_window(driver_var, link_var)
         GSMLS.explicit_page_load(
@@ -1857,7 +1880,7 @@ class GSMLS:
                 raw_property_address = (soup.find("div", {"class": "imagesReportTitle"})
                                         .get_text(strip=True).split("•")[1].strip())
                 clean_address = GSMLS.clean_address(raw_property_address)
-                GSMLS.scrape_property_documents(driver_var, soup, clean_address, listing_id, dict_var, **kwargs)
+                self.scrape_property_documents(driver_var, soup, clean_address, listing_id, dict_var, **kwargs)
 
             except AttributeError:
                 # Cause by a blank image media page. raw_property_address will be NoneType and non-subscriptable
@@ -1901,8 +1924,7 @@ class GSMLS:
         self.find_cities(county_id, driver_var.page_source)
         GSMLS.set_county(1, county_id, driver_var)
 
-    @staticmethod
-    def scrape_property_documents(driver_var, soup, address, sys_id, data_dict, **kwargs):
+    def scrape_property_documents(self, driver_var, soup, address, sys_id, data_dict, **kwargs):
 
         search_pattern = re.compile(r'method=getDocument&docId=(\d{5,7})&lstngmlsnum=(\d{5,7})')
         target_doc_list = ['Seller Disclosure', 'Survey', 'Floor Plans', 'Additional Disclosures']
@@ -1929,7 +1951,7 @@ class GSMLS:
                     download = WebDriverWait(driver_var, 30).until(EC.element_to_be_clickable(
                             (By.XPATH, xpath)))
 
-                    if GSMLS.does_file_already_exist(filename) is not True:
+                    if self.does_file_already_exist(filename) is not True:
                         download.click()
                     metadata['Documents'].update({filename: s3_path})
             data_dict['DOCUMENTS'].append(metadata)
@@ -1966,7 +1988,7 @@ class GSMLS:
         return page_results
 
     @staticmethod
-    def send_to_aws(target_file, bucket, file_key, **kwargs):
+    def send_to_aws(bucket, file_key, target_file=None, **kwargs):
 
         if os.path.isfile(target_file):
 
@@ -2339,7 +2361,7 @@ class GSMLS:
             for filename, s3_path in i['Documents'].items():
                 if filename != 'No_Documents':
                     target_path = os.path.join(base_path, filename)
-                    GSMLS.send_to_aws(target_path, bucket, s3_path, **kwargs)
+                    GSMLS.send_to_aws(bucket, s3_path, target_path, **kwargs)
 
         print(' ==== PROPERTY FILE STORAGE IN AWS S3 IS COMPLETE ==== ')
 
@@ -2364,7 +2386,7 @@ class GSMLS:
             target_file = os.path.join(base_path, kwargs['Filename'] + '.xls')
             file_key = GSMLS.create_s3_document_path('xls', **kwargs)
 
-        GSMLS.send_to_aws(target_file, bucket, file_key, **kwargs)
+        GSMLS.send_to_aws(bucket, file_key, target_file, **kwargs)
         print(' ==== DATA FILE STORAGE IN AWS S3 IS COMPLETE ==== ')
 
 
