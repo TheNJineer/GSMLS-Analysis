@@ -34,18 +34,13 @@ from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_st
 class RealEstateImages:
 
     def __init__(self, db_name="realEstate", col_name="propertyImages",
-                 latest_order_num=None, local=False, remote=True):
+                 latest_order_num=None, mongo_local=True, sql_remote=True):
         self.db_name = db_name
         self.col_name = col_name
-        self.sql_conn = create_sql_engine("nj_tax_assessor", remote=remote)
-        if local is False:
-            self.mongo_db_conn = create_mongodb_conn(remote=remote)
-            self.database = self.check_for_database()
-            self.collection = self.check_for_collection()
-        else:
-            self.mongo_db_conn = create_mongodb_conn(remote=False)
-            self.database = self.check_for_database()
-            self.collection = self.check_for_collection()
+        self.sql_conn = create_sql_engine("nj_tax_assessor", remote=sql_remote)
+        self.mongo_db_conn = create_mongodb_conn(mongo_local=mongo_local)
+        self.database = self.check_for_database()
+        self.collection = self.check_for_collection()
         self.proxy_check_time = datetime.now()
         self.total_props = 0
         self.total_images = 0
@@ -340,7 +335,7 @@ class RealEstateImages:
             {
                 "$group": {
                     "_id": "$_cleanup_mlsnum",
-                    "documents": {"$push": "$$ROOT"},
+                    "document_ids": {"$push": "$_id"},
                     "document_count": {"$sum": 1},
                     "requires_normalization": {
                         "$max": {
@@ -577,8 +572,8 @@ class RealEstateImages:
         return result.deleted_count
 
     def does_document_exist(self, document_id):
-        """Return True if the document with the given ID exists."""
-        return self.collection.find_one({"_id": document_id}) is not None
+        """Return True if the document with the given MLSNum exists."""
+        return self.collection.find_one({"MLSNum": document_id}) is not None
 
     def invalid_mlsnum_documents(self):
         """Return documents whose MLSNum cannot be converted to an integer."""
@@ -1270,13 +1265,14 @@ class RealEstateImages:
                 allowDiskUse=True,
                 batchSize=100,
             )
+
             for result in duplicate_cursor:
                 assert pendulum.now(tz=timezone("America/New_York")) < cutoff_time, \
                     f" ==== DATABASE CLEANING CUTOFF TIME HAS BEEN REACHED ==== "
                 canonical_mlsnum = int(result["_id"])  # Canonical grouped MLSNum
-                survivor, losing_documents = RealEstateImages.select_duplicate_survivor(
-                    result["documents"]
-                )
+                documents = list(self.collection.find({"_id": {"$in": result['document_ids']}}))
+                survivor, losing_documents = RealEstateImages.select_duplicate_survivor(documents)
+
                 losing_ids = [document["_id"] for document in losing_documents]  # List of MongoDB document identifiers
                 logger.info(f" ==== CURRENT DOCUMENT: {canonical_mlsnum} ==== ")
 
