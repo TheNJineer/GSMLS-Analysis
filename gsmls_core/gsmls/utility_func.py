@@ -208,22 +208,24 @@ def create_kafka_producer(client_id, logger=None, remote=True):
     raise NoBrokersAvailable
 
 
-def create_mongodb_conn(remote=False):
+def create_mongodb_conn(mongo_local=True):
 
     # Create a MongoDB connection
-    if remote is False:
-        connection_str = "mongodb://localhost:27017/"
+    if mongo_local is True:
+        load_dotenv(get_filepath("env"))
+        connection_str = os.getenv("GSMLS_MONGODB_URL_LOCAL")
+
 
     else:
         connection_str = (
-            os.getenv("GSMLS_MONGODB_URL")
+            os.getenv("GSMLS_MONGODB_URL_REMOTE")
             or os.getenv("ME_CONFIG_MONGODB_URL")
         )
 
         if not connection_str:
             load_dotenv(get_filepath("env"))
             connection_str = (
-                os.getenv("GSMLS_MONGODB_URL")
+                os.getenv("GSMLS_MONGODB_URL_REMOTE")
                 or os.getenv("ME_CONFIG_MONGODB_URL")
             )
 
