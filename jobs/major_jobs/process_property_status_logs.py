@@ -89,7 +89,6 @@ def create_base_document(data: dict):
         else:
             status_data[formatted_key] = value
 
-
     return dict(status_data)
 
 
@@ -119,7 +118,8 @@ if __name__ == '__main__':
     db_name = 'realEstate'
     collection_name = 'property_status_logs'
     consumer = create_kafka_consumer("log_consumer", "log_consumer")
-    client = create_mongo_client(remote=True)
+    consumer.subscribe(['status_logs'])
+    client = create_mongodb_conn()
     cursor = client[db_name][collection_name]
     data_list = consume_data(consumer)
 
@@ -127,5 +127,4 @@ if __name__ == '__main__':
         for log_obj in data_list:
             final_obj = create_base_document(log_obj)
             cursor.insert_one(final_obj)
-            pprint(final_obj)
 
