@@ -697,8 +697,8 @@ class KafkaGSMLSConsumer:
 
             sales_status_results = classify_property_sale_status(listing_remarks)
             self.produce_log(sales_status_results)
-            short_sale = False if sales_status_results.short_sale.value is not True else sales_status_results.short_sale.value
-            bank_owned = False if sales_status_results.bank_owned.value is not True else sales_status_results.bank_owned.value
+            short_sale = False if sales_status_results.short_sale['value'] is not True else sales_status_results.short_sale['value']
+            bank_owned = False if sales_status_results.bank_owned['value'] is not True else sales_status_results.bank_owned['value']
 
             df_var.loc[idx, 'CONDITION'] = condition
             df_var.loc[idx, 'SHORT_SALE'] = short_sale
