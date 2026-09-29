@@ -247,7 +247,10 @@ class GSMLS:
             filename = f'{kwargs["Filename"]}.{file_type}'
             return os.path.join(kwargs["County_Name"], kwargs["Municipality"],
                                 str(kwargs["Year"]), filename)
-
+        elif file_type == 'precheck':
+            filename = f'{kwargs["Filename"]}.'
+            return os.path.join(kwargs["County_Name"], kwargs["Municipality"],
+                                str(kwargs["Year"]), filename)
 
     def create_state_dictionary(self, driver_var):
 
@@ -433,21 +436,8 @@ class GSMLS:
             return os.path.isfile(target_path)
 
         else:
-            if self.download_log['File_Type'][-1] in ['both', 'tsv']:
-                file_key = GSMLS.create_s3_document_path('tsv', **kwargs)
-            else:
-                file_key = GSMLS.create_s3_document_path('xls', **kwargs)
-
-            try:
-                # Check if file exists in AWS S3 bucket
-                kwargs["s3_client"].head_object(Bucket="amzn-s3-gsmls-datalake", Key=file_key)
-
-            except ClientError as e:  # File does not exist in AWS S3 Bucket
-                if e.response["Error"]["Code"] == "404":
-                    return False
-            else:
-                return True
-
+            file_key = GSMLS.create_s3_document_path('precheck', **kwargs)
+            return GSMLS.s3_key_exists_with_any_extension("amzn-s3-gsmls-datalake", file_key, **kwargs)
 
     def download_complete(self, **kwargs):
 
@@ -1840,6 +1830,22 @@ class GSMLS:
 
             return df[columns]
 
+    @staticmethod
+    def s3_key_exists_with_any_extension(bucket: str, file_key_without_extension: str, **kwargs):
+        response = kwargs["s3_client"].list_objects_v2(
+            Bucket=bucket,
+            Prefix=file_key_without_extension
+        )
+
+        for obj in response.get("Contents", []):
+            object_key = obj["Key"]
+            object_extension = os.path.splitext(object_key)[1]
+
+            if object_key.startswith(file_key_without_extension) and object_extension:
+                return True
+
+        return False
+
     def save_metadata(self):
 
         # db = 'gsmls_event_log_new'
@@ -1850,6 +1856,28 @@ class GSMLS:
         metadata.to_sql(db, con=self.engine,
                         if_exists="append", index=False)
         self.download_log = GSMLS.create_download_log()
+
+    def scrape_property_metadata(self, dict_var, driver_var, link_var, prop_id, **kwargs):
+
+        # Locate the media window (start from the first_media_link to click the mlsnum)
+        # Search for property history tab
+            # Should have the same usage as locate_image_media_window() return window_id or None
+        # Scrape all the listing IDs
+        # Scrape all media documents, images and property history
+            # Dynamically determine if the current focus window is media or client_full
+            # If the window is client_full, do SCRAPE TYPE 1:
+                # Search for property_history and scrape if its available
+                    # Switch to new window and scrape everything, else pass
+                # Switch to client_full window, change to media tab then scrape everything
+                # Make sure media window is in focus
+            # Else do SCRAPE TYPE 2:
+                # Make sure the media tab is in focus then scrape everything
+                # # Switch to client_full tab
+                # Search for property_history and scrape if its available
+                    # Switch to new window and scrape everything, else pass
+                # Refocus on the client_full window
+            # Click the next button
+        pass
 
     def scrape_image_links_and_documents(self, dict_var, driver_var, link_var, prop_id, **kwargs):
 
