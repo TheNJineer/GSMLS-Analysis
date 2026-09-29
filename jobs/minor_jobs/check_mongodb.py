@@ -15,7 +15,7 @@ def parse_args():
 
     # return parser.parse_args(['--db_name', 'realEstate',
     #                           "--table_name", "propertyImages",
-    #                           "--key", "mongodb_start"])
+    #                           "--key", "mongodb_start", "--prop_type", "RES"])
     return parser.parse_args()
 
 
@@ -23,7 +23,7 @@ def check_mongodb(db_name, table_name):
 
     retries = 0
 
-    client = create_mongodb_conn(remote=True)
+    client = create_mongodb_conn()
 
     # Confirm connection to MongoDB Atlas
     while retries < 10:
@@ -55,5 +55,6 @@ if __name__ == '__main__':
     args = parse_args()
     status = check_mongodb(args.db_name, args.table_name)
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_=args.key, status_=status)
+    # print(status)
     sys.exit(0)
 
