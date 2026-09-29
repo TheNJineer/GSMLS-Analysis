@@ -27,7 +27,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 1, 15,
+    "start_date": datetime(2026, 8, 18,
                            hour=9, minute=30, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -43,9 +43,9 @@ description = """'
 prop_type_dict = {
         'RES': 'res_properties',
         'MUL': 'mul_properties',
+        'TAX': 'tax_properties_new',
         'LND': 'lnd_properties',
-        # 'RNT': 'rnt_properties',
-        # 'TAX': 'tax_properties'
+        'RNT': 'rnt_properties',
     }
 
 """
@@ -76,19 +76,22 @@ def create_kafka_consumer(client_id, group_id):
 def create_volume_mounts(job: str):
 
     mount_list = []
+    # The source_base for the Docker volume is relative to the host machine, not the environment the DpckerOperator
+    # will be run in. The Docker daemon is mounted to Airflow, however, the Airflow daemon is rerouting tasks back
+    # to the local host daemon
     source_base = '/root/home/projects/GSMLS-Analysis'
     container_base = '/app'
     jobs_dict = {
-        'minor_job': {'source': ['pipeline_metadata'],
-                      'target': ['pipeline_metadata']},
-        'producer': {'source': ['pipeline_metadata', 'data/stage_one/downloads'],
-                     'target': ['pipeline_metadata', 'downloads']},
-        'consumer': {'source': ['pipeline_metadata', 'consumer_backup_data'],
-                     'target': ['pipeline_metadata', 'consumer_backup_data']},
-        'image_consumer': {'source': ['pipeline_metadata'],
-                           'target': ['pipeline_metadata']},
-        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs'],
-                     'target': ['pipeline_metadata', 'parquet_files', 'logs']},
+        'minor_job': {'source': ['pipeline_metadata', 'jobs', 'logs/logger_decorator'],
+                      'target': ['pipeline_metadata', 'jobs', 'logs']},
+        'producer': {'source': ['pipeline_metadata', 'data/stage_one/downloads', 'jobs', 'logs/logger_decorator'],
+                     'target': ['pipeline_metadata', 'downloads', 'jobs', 'logs']},
+        'consumer': {'source': ['pipeline_metadata', 'consumer_backup_data', 'jobs', 'logs/logger_decorator'],
+                     'target': ['pipeline_metadata', 'consumer_backup_data', 'jobs', 'logs']},
+        'image_consumer': {'source': ['pipeline_metadata', 'jobs', 'logs/logger_decorator'],
+                           'target': ['pipeline_metadata', 'jobs', 'logs']},
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs', 'jobs'],
+                     'target': ['pipeline_metadata', 'parquet_files', 'logs', 'jobs']}
     }
 
     source_list = jobs_dict[job]['source']
@@ -107,20 +110,16 @@ def create_volume_mounts(job: str):
 
 def cutoff_time(
     days: int = 0,
-    hours: int = None,
-    minutes: int = None,
-    seconds: int = None,
+    hours: int = 0,
+    minutes: int = 0,
+    seconds: int = 0,
     tz: str = None,
 ):
 
     start = pendulum.now(tz=timezone(tz))
-    day = start.day
-    day_delta = day + days
-    finish = start.set(
-        day=day_delta, hour=hours, minute=minutes, second=seconds, microsecond=0
-    )
+    finish = start + timedelta(days=days)
+    finish = finish.set(hour=hours, minute=minutes, second=seconds, microsecond=0)
 
-    assert finish > start, f" ==== CUTOFF TIME IS LESS THAN THE CURRENT DATETIME ==== "
     print(f" ==== THE CUTOFF TIME IS : {finish} ==== ")
 
     return finish
@@ -128,27 +127,18 @@ def cutoff_time(
 
 def get_filepath(usecase: str):
 
+    # Filepaths needed inside the DockerOperator environments. The only host path needed is
+    # for the environment file which is located on the host
     filepaths = {
-        'backups': ['/root/home/projects/GSMLS-Analysis/consumer_backup_data',
-                    '/workspace/consumer_backup_data', '/app/consumer_backup_data'],
-        'base': ['/root/home/projects/GSMLS-Analysis', '/workspace', '/app'],
-        'downloads': ['/root/home/projects/GSMLS-Analysis/data/stage_one/downloads',
-                      '/workspace/data/stage_one/downloads', '/app/downloads'],
-        'env': ['/root/home/projects/GSMLS-Analysis/.env', '/workspace/.env', '/app/.env', '/opt/airflow/.env'],
-        'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
-        'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
-        'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
-        'pyspark_logs': ['/workspace/logs/pyspark_logs', '/app/logs/pyspark_logs'],
-        'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
-                     '/workspace/pipeline_metadata', '/app/pipeline_metadata'],
-        'refined_data': ['/workspace/data/stage_one/parquet_files', '/app/parquet_files'],
+        'env': ['/opt/airflow/.env '],
+        'jobs_major': ['/app/jobs/major_jobs'],
+        'jobs_minor': ['/app/jobs/minor_jobs'],
+        'logger': ['/app/logs'],
+        'pyspark_logs': ['/app/logs/pyspark_logs'],
+        'metadata': ['/app/pipeline_metadata']
     }
 
-    for path in filepaths[usecase]:
-        if os.path.exists(path):
-            return path
-
-    raise ValueError(f" ==== CURRENT FILEPATHS FOR {usecase} DO NOT EXIST IN THIS ENVIRONMENT ==== ")
+    return filepaths[usecase][0]
 
 
 """
@@ -160,47 +150,75 @@ def branching_decision(**kwargs):
 
     # starting_point returns True or False
     prop_type = kwargs['prop_type']
-    if kwargs['ti'].xcom_pull(task_ids=f'get_current_status_{prop_type.lower()}', key='starting_point'):
+    status = kwargs['ti'].xcom_pull(task_ids=f'precheck_{prop_type.lower()}.get_current_status', key='return_value')
+    print(f'Status: {status}')
+    if status is True:
 
         # Returns the task_id based on the internal logic
-        return cutoff_condition(prop_type.lower())
+        return cutoff_condition(prop_type.lower(), kwargs['pipeline_start'])
 
     else:
         return f"skip_all_tasks_{prop_type.lower()}"
 
 
-def current_status(pipeline: str, key=None):
+def current_status(pipeline: str, prop_type: str, key=None):
 
-    data_path = get_filepath("metadata")
+    data_path = '/opt/airflow/pipeline_metadata'
     metadata_path = os.path.join(data_path, "metadata")
 
     with shelve.open(metadata_path) as reader:
         if key is None:
-            result = reader[pipeline]
+            result = reader[pipeline][prop_type]
         else:
-            result = reader[pipeline][key]
+            result = reader[pipeline][prop_type][key]
 
+    print(f'Pipeline: {pipeline} Key: {key}, Result: {result}')
     return result
 
 
-def cutoff_condition(prop_type):
+def cutoff_condition(prop_type, pipeline_start: str):
 
     now = pendulum.now(tz=timezone("America/New_York"))
+    pl_start = pendulum.parse(pipeline_start)
+    end_of_day = pl_start.set(hour=23, minute=59, second=59)
 
-    start_time = cutoff_time(days=1, hours=2, minutes=30)
-    end_time = start_time + timedelta(hours=1, minutes=30)
+    print(f' ==== PIPELINE START TIME: {pl_start} ==== ')
+    print(f' ==== CURRENT TIME: {now} ==== ')
+    print(f' ==== END OF DAY: {end_of_day} ==== ')
 
-    if start_time <= now <= end_time:
+    if pl_start <= now <= end_of_day:
+        start_cutoff = cutoff_time(days=1, hours=2, minutes=30, tz="America/New_York")
+    else:
+        start_cutoff = cutoff_time(hours=2, minutes=30, tz="America/New_York")
+
+    end_cutoff = start_cutoff + timedelta(hours=1, minutes=30)
+
+    if start_cutoff <= now <= end_cutoff:
+        print(f' ==== PROGRAM CUTOFF CONDITION MET. SKIPPING {prop_type.upper()} DATA SCRAPE ==== ')
         return f'skip_all_tasks_{prop_type}'
     else:
+        print(f' ==== PROGRAM CUTOFF CONDITION NOT MET. STARTING {prop_type.upper()} DATA SCRAPE ==== ')
         return f'start_pipeline_{prop_type}'
 
 
-def new_msgs_available(topic):
+def image_processing_decision(**kwargs):
+
+    prop_type = kwargs['prop_type']
+
+    if prop_type in ['RES', 'MUL', 'RNT']:
+        # Returns the task_id based on the internal logic
+        return f"etl_pipeline_{prop_type.lower()}.image_processing"
+
+    else:
+        return f"etl_pipeline_{prop_type.lower()}.skip_image_tasks"
+
+
+def new_msgs_available(topic, prop_type):
 
     offset_dict = {}
     # KafkaConsumer not thread safe, so I need to create one specifically for this task
     cons = create_kafka_consumer(f"{topic}_msg_check", "data_consumer")
+    producer_status = current_status('gsmls_airflow_pipeline', prop_type, 'producer')
 
     # Check the partitions in the consumer. Returns a set of partition ids
     partitions = cons.partitions_for_topic(topic)
@@ -236,12 +254,17 @@ def new_msgs_available(topic):
 
         if True in list(offset_dict.values()):
             print(f"New data found for {topic}")
-
             return True
-        else:
-            return False
+        elif producer_status is not False:
+            if isinstance(producer_status, int):
+                return False
+            else:
+                # Triggers sensor to start consumers. Consumers will shut down in next phase
+                print(' ==== GSMLS PRODUCER ENDED PRE-MATURELY. NO NEW DATA TO BE CONSUMED ==== ')
+                return True
 
     except AttributeError:
+        # Figure out how to properly handle or else this causes infinite loop of sensor not being trigger
         print(f"No partitions found for topic {topic}")
 
         return False
@@ -252,10 +275,10 @@ def skip_pipeline():
 
 
 @task(task_id="send_status_email")
-def status_email(phase: str = "Starting"):
+def status_email(prop_type: str, phase: str = "Starting"):
 
     # https://airflow.apache.org/docs/apache-airflow/stable/tutorial/taskflow.html
-    results = current_status("gsmls_airflow_pipeline")
+    results = current_status("gsmls_airflow_pipeline", prop_type)
 
     if phase is "Starting":
         postgres_results = results['postgresql_start']
@@ -286,7 +309,7 @@ def status_email(phase: str = "Starting"):
                     <b>MongoDB Table Name</b>: {mongo_table_name}<br>
                     <b>Postgres Row Count</b>: {postgres_count}<br>
                     <b>Postgres Table Name</b>: {postgres_table_name}<br>
-                    <b>Property Type</b>: {results['prop_type']}<br><br>
+                    <b>Property Type</b>: {prop_type}<br><br>
 
                     You can view the status and progress of your pipeline from the following ports:<br>
                     -- <b>Airflow</b>: http://{ip_address}:8085<br>
@@ -305,7 +328,7 @@ def status_email(phase: str = "Starting"):
                     <b>MongoDB Connection Status</b>: Closed<br>
                     <b>MongoDB Document Count</b>: {mongo_count}<br>  
                     <b>Postgres Table Name</b>: {postgres_table_name}<br>
-                    <b>Property Type</b>: {results['prop_type']}<br>
+                    <b>Property Type</b>: {prop_type}<br>
                     <b>Postgres Rows Added</b>: {rows_added}<br><br>
                 """
 
@@ -324,59 +347,65 @@ def status_email(phase: str = "Starting"):
 def gsmls_pipeline():
 
     previous_group = None
-
-    # Task 1: Check the health of Apache Kafka Connection
-    kafka_conn = DockerOperator(
-        task_id="check_kafka_connection",
-        image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_minor')}/kafka_connection.py",
-        api_version="auto",
-        auto_remove=True,
-        docker_url="unix://var/run/docker.sock",
-        network_mode="airflow_network",
-        mount=create_volume_mounts('minor_job')
-    )
-
-    # Task 2: Create and check the health of MongoDB Connection and if database exists
-    mongo_start_results = DockerOperator(
-        task_id="check_mongodb_connection",
-        image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_minor')}/check_mongodb.py "
-                f"--db_name realEstate --table_name propertyImages --key mongodb_start",
-        api_version="auto",
-        auto_remove=True,
-        docker_url="unix://var/run/docker.sock",
-        network_mode="airflow_network",
-        mount=create_volume_mounts('minor_job'),
-        env_file='/root/home/projects/GSMLS-Analysis/.env'
-    )
+    # pipeline_start = str(pendulum.now(tz=timezone("America/New_York")))
 
     for prop_type, topic in prop_type_dict.items():
 
-        starting_point = DockerOperator(
-            task_id=f"starting_point_{prop_type.lower()}",
-            image="gsmls-jobs:latest",
-            command=f"{get_filepath('jobs_minor')}/starting_point.py --prop_type {prop_type}",
-            api_version="auto",
-            auto_remove=True,
-            docker_url="unix://var/run/docker.sock",
-            network_mode="airflow_network",
-            mount=create_volume_mounts('minor_job'),
-            env_file='/root/home/projects/GSMLS-Analysis/.env'
-        )
+        with TaskGroup(group_id=f"precheck_{prop_type.lower()}") as pipeline_precheck:
+            # Task 1: Check the health of Apache Kafka Connection
+            kafka_conn = DockerOperator(
+                task_id=f"check_kafka_connection",
+                image="gsmls-jobs:0.9.6",
+                command=f"{get_filepath('jobs_minor')}/kafka_connection.py --prop_type {prop_type}",
+                api_version="auto",
+                auto_remove='force',
+                mount_tmp_dir=False,
+                docker_url="unix://var/run/docker.sock",
+                network_mode="airflow_network",
+                mounts=create_volume_mounts('minor_job')
+            )
 
-        start_result = PythonOperator(
-            task_id=f'get_current_status_{prop_type.lower()}',
-            python_callable=current_status,
-            op_kwargs={'pipeline': 'gsmls_airflow_pipeline', 'key': 'start_point'},
-            provide_context=True
-        )
+            # Task 2: Create and check the health of MongoDB Connection and if database exists
+            mongo_start_results = DockerOperator(
+                task_id=f"check_mongodb_connection",
+                image="gsmls-jobs:0.9.6",
+                command=f"{get_filepath('jobs_minor')}/check_mongodb.py "
+                        f"--db_name realEstate --table_name propertyImages --key mongodb_start --prop_type {prop_type}",
+                api_version="auto",
+                auto_remove='force',
+                mount_tmp_dir=False,
+                docker_url="unix://var/run/docker.sock",
+                network_mode="airflow_network",
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
+            )
+
+            starting_point = DockerOperator(
+                task_id=f"starting_point",
+                image="gsmls-jobs:0.9.6",
+                command=f"{get_filepath('jobs_minor')}/starting_point.py --prop_type {prop_type} "
+                        f"--table_name backfill_event_log",
+                api_version="auto",
+                auto_remove='force',
+                mount_tmp_dir=False,
+                docker_url="unix://var/run/docker.sock",
+                network_mode="airflow_network",
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
+            )
+
+            start_result = PythonOperator(
+                task_id=f'get_current_status',
+                python_callable=current_status,
+                op_kwargs={'pipeline': 'gsmls_airflow_pipeline', 'key': 'start_point', 'prop_type': prop_type}
+            )
+
+            kafka_conn >> mongo_start_results >> starting_point >> start_result
 
         branch_decision = BranchPythonOperator(
             task_id=f'branching_decision_{prop_type.lower()}',
             python_callable=branching_decision,
-            op_kwargs={'prop_type': prop_type},
-            provide_context=True,
+            op_kwargs={'prop_type': prop_type, 'pipeline_start': "{{ data_interval_start.in_timezone('America/New_York') }}"},
             trigger_rule="none_failed"
         )
 
@@ -392,37 +421,40 @@ def gsmls_pipeline():
             kafka_conn_status = PythonOperator(
                 task_id=f'kafka_conn_status',
                 python_callable=current_status,
-                op_kwargs={'pipeline': 'gsmls_airflow_pipeline', 'key': 'kafka_connection'},
-                provide_context=True
+                op_kwargs={'pipeline': 'gsmls_airflow_pipeline', 'key': 'kafka_connection', 'prop_type': prop_type}
             )
 
             kafka_topics = DockerOperator(
                 task_id="check_kafka_topics",
-                image="gsmls-jobs:latest",
-                command=f"{get_filepath('jobs_minor')}/kafka_topics.py --prop_type {prop_type} "
-                        f"--kafka_conn {{ ti.xcom_pull(task_ids='start_pipeline_{prop_type.lower()}.kafka_conn_status') }}",
+                image="gsmls-jobs:0.9.6",
+                command=f"{get_filepath('jobs_minor')}/kafka_topics.py --topic {topic} "
+                        f"--kafka_conn {{{{ ti.xcom_pull(task_ids='start_pipeline_{prop_type.lower()}.kafka_conn_status') }}}}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
                 docker_url="unix://var/run/docker.sock",
-                network_mode="airflow_network"
+                network_mode="airflow_network",
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
             )
 
             # Task 4: Get row count of target table
             postgresql_start = DockerOperator(
                 task_id="postgresql_start_data",
-                image="gsmls-jobs:latest",
+                image="gsmls-jobs:0.9.6",
                 command=f"{get_filepath('jobs_minor')}/get_postgresql_rows.py --table_name {topic} "
-                        f"--key postgresql_start",
+                        f"--key postgresql_start --prop_type {prop_type}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
             )
 
             # Task 5: Send pipeline initiation email
-            email = status_email()
+            email = status_email(prop_type=prop_type)
 
             kafka_conn_status >> kafka_topics >> postgresql_start >> email
 
@@ -430,16 +462,18 @@ def gsmls_pipeline():
             # Update so table_name and prop type isn't hard-coded
 
             # Task 6: Start the GSMLS message production
-            DockerOperator(
+            data_producer = DockerOperator(
                 task_id="gsmls_producer",
-                image="gsmls-jobs:latest",
+                image="gsmls-jobs:0.9.6",
                 command=f"{get_filepath('jobs_major')}/gsmls_producer.py --prop_type {prop_type}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
+                user="1200:0",  # Matches the Selenium container user permissions
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('producer'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+                mounts=create_volume_mounts('producer'),
+                env_file=get_filepath("env")
             )
 
             # The producer will publish data to both the data and image topics first
@@ -447,16 +481,7 @@ def gsmls_pipeline():
             kafka_msg_sensor = PythonSensor(
                 task_id="kafka_msg_sensor",
                 python_callable=new_msgs_available,
-                op_kwargs={'topic': topic},
-                poke_interval=60,
-                timeout=3600,
-                mode="reschedule"
-            )
-
-            kafka_img_sensor = PythonSensor(
-                task_id=f"kafka_image_sensor",
-                python_callable=new_msgs_available,
-                op_kwargs={'topic': 'prop_images'},
+                op_kwargs={'topic': topic, 'prop_type': prop_type},
                 poke_interval=60,
                 timeout=3600,
                 mode="reschedule"
@@ -464,82 +489,116 @@ def gsmls_pipeline():
 
             gsmls_consumer = DockerOperator(
                 task_id="gsmls_data_consumer",
-                image="gsmls-jobs:latest",
+                image="gsmls-jobs:0.9.6",
                 command=f"{get_filepath('jobs_major')}/gsmls_consumer.py --prop_type {prop_type} "
-                        f"--retry False --topic {topic}",
+                        f"--topic {topic}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('consumer'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+                mounts=create_volume_mounts('consumer'),
+                env_file=get_filepath("env")
             )
 
-            image_consumer = DockerOperator(
-                task_id="gsmls_image_consumer",
-                image="gsmls-jobs:latest",
-                command=f"{get_filepath('jobs_major')}/gsmls_image_consumer.py",
-                api_version="auto",
-                auto_remove=True,
-                docker_url="unix://var/run/docker.sock",
-                network_mode="airflow_network",
-                mount=create_volume_mounts('image_consumer'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+            image_decision = BranchPythonOperator(
+                task_id=f'image_processing_decision',
+                python_callable=image_processing_decision,
+                op_kwargs={'prop_type': prop_type},
+                trigger_rule="none_failed"
+            )
+
+            skip_image_tasks = PythonOperator(
+                task_id=f"skip_image_tasks",
+                python_callable=skip_pipeline,
+                trigger_rule="all_success"
+            )
+
+            with TaskGroup(group_id=f"image_processing") as image_processing_pipeline:
+
+                kafka_img_sensor = PythonSensor(
+                    task_id=f"kafka_image_sensor",
+                    python_callable=new_msgs_available,
+                    op_kwargs={'topic': 'prop_images', 'prop_type': prop_type},
+                    poke_interval=60,
+                    timeout=3600,
+                    mode="reschedule"
+                )
+
+                image_consumer = DockerOperator(
+                    task_id="gsmls_image_consumer",
+                    image="gsmls-jobs:0.9.6",
+                    command=f"{get_filepath('jobs_major')}/gsmls_image_consumer.py --prop_type {prop_type} "
+                            f"--order_num '79065846, 64872924'",
+                    api_version="auto",
+                    auto_remove='force',
+                    mount_tmp_dir=False,
+                    docker_url="unix://var/run/docker.sock",
+                    network_mode="airflow_network",
+                    mounts=create_volume_mounts('image_consumer'),
+                    env_file=get_filepath("env")
+                )
+
+                kafka_img_sensor >> image_consumer
+
+            merge = EmptyOperator(
+                task_id=f"merge_tasks",
+                trigger_rule="none_failed"
             )
 
             # ETL Pipeline dependencies
             kafka_msg_sensor >> gsmls_consumer
-            kafka_img_sensor >> image_consumer
-
-        merge = EmptyOperator(
-            task_id=f"merge_tasks_{prop_type.lower()}",
-            trigger_rule="none_failed_min_one_success"
-        )
+            branch_decision >> image_decision >> skip_image_tasks >> merge
+            branch_decision >> image_decision >> image_processing_pipeline >> merge
+            (data_producer, gsmls_consumer, image_processing_pipeline) >> merge
 
         with TaskGroup(group_id=f"ending_pipeline_{prop_type.lower()}") as ending_pipeline:
 
             mongo_final_results = DockerOperator(
                 task_id="check_mongodb_connection2",
-                image="gsmls-jobs:latest",
+                image="gsmls-jobs:0.9.6",
                 command=f"{get_filepath('jobs_minor')}/check_mongodb.py "
-                        f"--db_name realEstate --table_name propertyImages --key mongodb_final",
+                        f"--db_name realEstate --table_name propertyImages --key mongodb_final --prop_type {prop_type}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
             )
             postgresql_final = DockerOperator(
                 task_id="postgresql_final_data",
-                image="gsmls-jobs:latest",
+                image="gsmls-jobs:0.9.6",
                 command=f"{get_filepath('jobs_minor')}/get_postgresql_rows.py --table_name {topic} "
-                        f"--key postgresql_final",
+                        f"--key postgresql_final --prop_type {prop_type}",
                 api_version="auto",
-                auto_remove=True,
+                auto_remove='force',
+                mount_tmp_dir=False,
                 docker_url="unix://var/run/docker.sock",
                 network_mode="airflow_network",
-                mount=create_volume_mounts('minor_job'),
-                env_file='/root/home/projects/GSMLS-Analysis/.env'
+                mounts=create_volume_mounts('minor_job'),
+                env_file=get_filepath("env")
             )
 
-            status_email(phase='Ending')
+            final_email = status_email(prop_type, phase='Ending')
 
-            mongo_final_results >> postgresql_final
+            mongo_final_results >> postgresql_final >> final_email
+
+        outside_merge = EmptyOperator(
+            task_id=f"merge_tasks_{prop_type.lower()}",
+            trigger_rule="none_failed"
+        )
 
         # # Total pipeline dependencies
-        kafka_conn >> mongo_start_results
-        starting_point >> start_result >> branch_decision
-        branch_decision >> skip_all_tasks
-        branch_decision >> start_pipeline
-        start_pipeline >> etl_pipeline >> ending_pipeline
-        skip_all_tasks >> merge
-        ending_pipeline >> merge
+        pipeline_precheck >> branch_decision
+        branch_decision >> skip_all_tasks >> outside_merge
+        branch_decision >> start_pipeline >> etl_pipeline >> ending_pipeline >> outside_merge
 
         if previous_group:
-            previous_group >> branch_decision
+            previous_group >> pipeline_precheck
 
-        previous_group = ending_pipeline
+        previous_group = outside_merge
 
 
 # dag_instance = gsmls_pipeline()

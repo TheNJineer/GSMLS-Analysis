@@ -1,5 +1,6 @@
 import json
 import os
+import pendulum
 import shelve
 from datetime import datetime
 from datetime import timedelta
@@ -8,6 +9,7 @@ from pendulum import timezone
 from airflow.sdk import task, dag
 from airflow.providers.standard.operators.python import ShortCircuitOperator, PythonOperator
 from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
 
 
 # Define default args
@@ -16,7 +18,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 2, 10,
+    "start_date": datetime(2026, 9, 27,
                            hour=3, minute=15, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -44,8 +46,8 @@ def create_volume_mounts(job: str):
     source_base = '/root/home/projects/GSMLS-Analysis'
     container_base = '/app'
     jobs_dict = {
-        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs'],
-                     'target': ['pipeline_metadata', 'parquet_files', 'logs']}
+        'cleaning': {'source': ['pipeline_metadata', 'data/stage_one/parquet_files', 'logs/pyspark_logs', 'jobs'],
+                     'target': ['pipeline_metadata', 'parquet_files', 'logs', 'jobs']}
     }
 
     source_list = jobs_dict[job]['source']
@@ -65,14 +67,13 @@ def create_volume_mounts(job: str):
 def get_filepath(usecase: str):
 
     filepaths = {
-        'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
+        'env': ['/opt/airflow/.env '],
+        'jobs_minor': ['/app/jobs/minor_jobs'],
+        'jobs_major': ['/app/jobs/major_jobs'],
+        'metadata': ['/app/pipeline_metadata']
     }
 
-    for path in filepaths[usecase]:
-        if os.path.exists(path):
-            return path
-
-    raise ValueError(f" ==== CURRENT FILEPATHS FOR {usecase} DO NOT EXIST IN THIS ENVIRONMENT ==== ")
+    return filepaths[usecase][0]
 
 
 """
@@ -80,31 +81,53 @@ def get_filepath(usecase: str):
 """
 
 
-def data_sensor(**context):
+def data_sensor(**kwargs):
     # Short circuit the cleaning if the gsmls_airflow_pipeline is currently running or
     # if the prop_type isn't RES
-    pulled_value = context['ti'].xcom_pull(task_ids='get_pipeline_status', key='pipeline_status')
+    pulled_value = kwargs['ti'].xcom_pull(task_ids='get_pipeline_status', key='pipeline_status')
     value = json.loads(pulled_value)
-    if value['prop_type'] != 'RES':
+
+    if isinstance(value['pipeline_status'], bool):
         return False
-    elif value['prop_type'] == 'RES' and isinstance(value['pipeline_status'], bool):
-        return False
-    else:
+    elif isinstance(value['pipeline_status'], int):
         return True
 
 
-def get_pipeline_status(**context):
+# def get_latest_prop_type(results):
+#
+#     prop_type = None
+#     best_time = None
+#
+#     for key in results.keys():
+#         if prop_type is None:
+#             prop_type = key
+#             if results[key]['timestamp'] is not None:
+#                 best_time = pendulum.parse(results[key]['timestamp'])
+#         else:
+#             if results[key]['timestamp'] is not None:
+#                 if best_time < pendulum.parse(results[key]['timestamp']):
+#                     prop_type = key
+#                     best_time = pendulum.parse(results[key]['timestamp'])
+#
+#     return prop_type, results[prop_type]
 
-    data_path = get_filepath("metadata")
+
+def get_pipeline_status(**kwargs):
+
+    data_path = '/opt/airflow/pipeline_metadata'
     metadata_path = os.path.join(data_path, "metadata")
 
     with shelve.open(metadata_path) as reader:
-        result = reader["gsmls_airflow_pipeline"]
-        prop_type = result["prop_type"]
-        pipeline_status = result["producer"]
+        metadata = reader["gsmls_airflow_pipeline"]
+        results = metadata['RES']
+        producer_results = results['producer']
+        if not isinstance(producer_results, bool):
+            producer_results = int(producer_results)
 
-    value = json.dumps({'prop_type': prop_type, 'pipeline_status': pipeline_status})
-    context['ti'].xcom_push(key='pipeline_status', value=value)
+    value = json.dumps({'pipeline_status': producer_results,
+                        'data_consumer': results['data_consumer'],
+                        'image_consumer': results['image_consumer']})
+    kwargs['ti'].xcom_push(key='pipeline_status', value=value)
 
 
 @dag(
@@ -117,42 +140,51 @@ def gsmls_cleaning_pipeline():
 
     status = PythonOperator(
         task_id='get_pipeline_status',
-        python_callable=get_pipeline_status,
-        provide_context=True
+        python_callable=get_pipeline_status
     )
 
     data_ready = ShortCircuitOperator(
         task_id='data_ready',
-        python_callable=data_sensor,
-        provide_context=True
+        python_callable=data_sensor
     )
 
     # This job needs to be created
     # clean_duplicates = DockerOperator(
     #     task_id="data_cleaning",
-    #     image="gsmls-jobs:latest",
+    #     image="gsmls-jobs:0.9.6",
     #     command=f"{get_filepath('jobs_major')}/remove_duplicate_data.py",
     #     api_version="auto",
-    #     auto_remove=True,
+    #     auto_remove='force,
+    #     mount_tmp_dir=False,
     #     docker_url="unix://var/run/docker.sock",
     #     network_mode="airflow_network",
-    #     mount=create_volume_mounts('cleaning'),
-    #     env_file='/root/home/projects/GSMLS-Analysis/.env'
+    #     mounts=create_volume_mounts('cleaning'),
+    #     env_file=get_filepath('env')
     # )
 
     data_cleaning = DockerOperator(
         task_id="data_cleaning",
-        image="gsmls-jobs:latest",
-        command=f"{get_filepath('jobs_major')}/phased_cleaning.py",
+        image="gsmls-jobs:0.9.6",
+        # entrypoint="bash",
+        command=f"{get_filepath('jobs_major')}/phased_cleaning.py --table_name res_properties",
+        # command="-c 'ls -R /app'",
         api_version="auto",
-        auto_remove=True,
+        auto_remove='force',
+        mount_tmp_dir=False,
         docker_url="unix://var/run/docker.sock",
         network_mode="airflow_network",
-        mount=create_volume_mounts('cleaning'),
-        env_file='/root/home/projects/GSMLS-Analysis/.env'
+        mounts=create_volume_mounts('cleaning'),
+        env_file=get_filepath('env')
     )
 
-    status >> data_ready >> data_cleaning
+    merge = EmptyOperator(
+        task_id=f"merge_tasks",
+        trigger_rule="none_failed"
+    )
+
+    status >> data_ready >> data_cleaning >> merge
+    data_ready >> data_cleaning >> merge
+    data_ready >> merge
 
 
 # DAG Initiation
