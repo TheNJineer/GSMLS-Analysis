@@ -76,6 +76,7 @@ x-airflow-common:
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    AIRFLOW_CONN_SSH_HOST_CONN: '{"conn_type": "ssh", "host": "172.18.0.1", "login": "root", "port": 22, "extra": {"key_file": "/opt/airflow/config/airflow_host_key", "no_host_key_check": true}}'
   networks:
     - airflow_network
   volumes:

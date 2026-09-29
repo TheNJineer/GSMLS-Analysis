@@ -1,3 +1,4 @@
+# yamllint disable rule:line-length
 # Consolidated GSMLS platform with optional CVAT Community services.
 #
 # This is a separate deployment file. The existing docker-compose.yaml is
@@ -36,7 +37,9 @@ x-airflow-common: &airflow-common
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
-    GSMLS_MONGODB_URL: ${GSMLS_MONGODB_URL:?Set GSMLS_MONGODB_URL}
+    AIRFLOW_CONN_SSH_HOST_CONN: '{"conn_type": "ssh", "host": "172.18.0.1", "login": "root", "port": 22, "extra": {"key_file": "/opt/airflow/config/airflow_host_key", "no_host_key_check": true}}'
+    GSMLS_MONGODB_URL: ${GSMLS_MONGODB_URL_LOCAL}
+    GSMLS_MONGODB_URL_REMOTE: ${ME_CONFIG_MONGODB_URL}
   env_file:
     - ${AIRFLOW_PROJ_DIR:-.}/.env
   networks: [airflow_network]
@@ -113,15 +116,15 @@ x-kafka-broker: &kafka-broker
     <<: *kafka-broker-healthcheck
 
 x-cvat-common: &cvat-common
-  image: cvat/server:${CVAT_VERSION:-v2.26.1}
+  image: cvat/server:${CVAT_VERSION}
   profiles: [cvat]
   networks: [cvat_internal]
   environment:
     CVAT_POSTGRES_HOST: cvat_db
     CVAT_POSTGRES_PORT: 5432
     CVAT_POSTGRES_DBNAME: cvat
-    CVAT_POSTGRES_USER: ${CVAT_POSTGRES_USER:-cvat}
-    CVAT_POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD:?Set CVAT_POSTGRES_PASSWORD}
+    CVAT_POSTGRES_USER: ${CVAT_POSTGRES_USER}
+    CVAT_POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD}
     CVAT_REDIS_HOST: cvat_redis
     CVAT_REDIS_PORT: 6379
     CVAT_OPA_HOST: cvat_opa
@@ -152,7 +155,7 @@ services:
     env_file:
       - ${AIRFLOW_PROJ_DIR:-.}/.env
     networks: [airflow_network]
-    ports: ["127.0.0.1:5050:80"]
+    ports: ["5050:80"]
     volumes:
       - pgadmin-user-data:/var/lib/pgadmin
       - ${AIRFLOW_PROJ_DIR:-.}/servers.json:/pgadmin4/servers.json:ro
@@ -166,10 +169,11 @@ services:
     image: selenium/standalone-edge:4.13.0
     networks: [airflow_network]
     ports:
-      - "127.0.0.1:4444:4444"
-      - "127.0.0.1:7900:7900"
+      - "4444:4444"  # Selenium server
+      - "7900:7900"  # For viewing browser through VNC Server since container will run Selenium headless
     shm_size: 2g
-    volumes: [${AIRFLOW_PROJ_DIR:-.}/data/stage_one/downloads:/home/seluser/downloads]
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/data/stage_one/downloads:/home/seluser/downloads
     healthcheck:
       <<: *healthcheck-default
       test: [CMD-SHELL, "curl -fsS http://localhost:4444/status | grep -q 'ready' || exit 1"]
@@ -189,8 +193,8 @@ services:
     user: root
     networks: [airflow_network]
     ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:7077:7077"
+      - "8080:8080"
+      - "7077:7077"
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}/data:/workspace/data
       - ${AIRFLOW_PROJ_DIR:-.}/data/stage_one/parquet_files:/app/parquet_files
@@ -269,7 +273,7 @@ services:
   broker-1:
     <<: *kafka-broker
     container_name: gsmls-broker-1
-    ports: ["127.0.0.1:29092:9092"]
+    ports: ["29092:9092"]
     environment:
       <<: *kafka-env
       KAFKA_NODE_ID: 4
@@ -279,7 +283,7 @@ services:
   broker-2:
     <<: *kafka-broker
     container_name: gsmls-broker-2
-    ports: ["127.0.0.1:39092:9092"]
+    ports: ["39092:9092"]
     environment:
       <<: *kafka-env
       KAFKA_NODE_ID: 5
@@ -289,7 +293,7 @@ services:
   broker-3:
     <<: *kafka-broker
     container_name: gsmls-broker-3
-    ports: ["127.0.0.1:49092:9092"]
+    ports: ["49092:9092"]
     environment:
       <<: *kafka-env
       KAFKA_NODE_ID: 6
@@ -343,33 +347,35 @@ services:
   mongodb:
     image: mongo:8.0
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-gsmls_admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
-      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-realEstate}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
     networks: [airflow_network]
-    ports: ["127.0.0.1:27017:27017"]
-    volumes: [mongodb-data:/data/db]
+    ports: ["27017:27017"]
+    volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/mongodb_data:/data/db
     healthcheck:
       <<: *healthcheck-default
       test: [CMD-SHELL, "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 })' >/dev/null || exit 1"]
       start_period: 40s
     restart: unless-stopped
     cpus: "0.50"
-    mem_limit: 1g
+    mem_limit: 2g
 
   mongo-express:
     image: mongo-express:1.0.2-20
     environment:
       ME_CONFIG_MONGODB_SERVER: mongodb
       ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_URL: ${GSMLS_MONGODB_URL_LOCAL}
       ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
-      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME:-gsmls_admin}
-      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
       ME_CONFIG_BASICAUTH_ENABLED: "true"
-      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:-gsmls}
-      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:?Set MONGO_EXPRESS_PASSWORD}
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD}
     networks: [airflow_network]
-    ports: ["127.0.0.1:8081:8081"]
+    ports: ["8081:8081"]
     depends_on:
       mongodb: {condition: service_healthy}
     restart: unless-stopped
@@ -379,7 +385,7 @@ services:
   airflow-apiserver:
     <<: *airflow-common
     command: api-server --port 8085
-    ports: ["127.0.0.1:8085:8085"]
+    ports: ["8085:8085"]
     healthcheck:
       <<: *healthcheck-default
       test: [CMD, curl, --fail, http://localhost:8085/api/v2/version]
@@ -479,7 +485,7 @@ services:
     <<: *airflow-common
     profiles: [flower]
     command: celery flower
-    ports: ["127.0.0.1:5555:5555"]
+    ports: ["5555:5555"]
     restart: unless-stopped
     cpus: "0.25"
     mem_limit: 512m
@@ -491,8 +497,8 @@ services:
     profiles: [cvat]
     environment:
       POSTGRES_DB: cvat
-      POSTGRES_USER: ${CVAT_POSTGRES_USER:-cvat}
-      POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD:?Set CVAT_POSTGRES_PASSWORD}
+      POSTGRES_USER: ${CVAT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${CVAT_POSTGRES_PASSWORD}
     networks: [cvat_internal]
     volumes: [cvat-db-data:/var/lib/postgresql/data]
     healthcheck:
@@ -516,7 +522,7 @@ services:
     mem_limit: 512m
 
   cvat_opa:
-    image: openpolicyagent/opa:0.63.0-rootless
+    image: openpolicyagent/opa:0.63.0
     profiles: [cvat]
     command: [run, --server, --set=decision_logs.console=true]
     networks: [cvat_internal]
@@ -544,7 +550,7 @@ services:
     mem_limit: 2g
 
   cvat_ui:
-    image: cvat/ui:${CVAT_VERSION:-v2.26.1}
+    image: cvat/ui:${CVAT_VERSION}
     profiles: [cvat]
     networks: [cvat_internal]
     depends_on: [cvat]
@@ -565,7 +571,7 @@ services:
       - --providers.docker.exposedbydefault=false
       - --ping=true
       - --entrypoints.web.address=:8080
-    ports: ["127.0.0.1:8090:8080"]
+    ports: ["8090:8080"]
     networks: [cvat_internal]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -619,7 +625,7 @@ networks:
   cvat_internal:
     name: gsmls_cvat_internal
     driver: bridge
-
+# yamllint enable rules:line-length
 volumes:
   postgres-airflow-volume:
   pgadmin-user-data:
