@@ -41,9 +41,13 @@ if __name__ == "__main__":
     # program_cutoff = cutoff_time(days=1, hours=7, minutes=30, tz="America/New_York")  # use while debugging
     status = ips_status()
     order_nums = parse_order_nums(args.order_num)
-    obj = RealEstateImages(latest_order_num=order_nums)
 
-    if args.local == 'false' and status != "Expired":
+    if args.local == 'false':
+        obj = RealEstateImages(latest_order_num=order_nums, mongo_local=False)
+    else:
+        obj = RealEstateImages(latest_order_num=order_nums)
+
+    if status != "Expired":
 
         # Reset the last_mls key to account for newly input data in MongoDB
         check_pipeline_metadata("gsmls_download_images", prop_type_=None, key_="last_mls")
