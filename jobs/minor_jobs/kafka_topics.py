@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--kafka_conn", required=True)
 
     # return parser.parse_args(['--topic', 'res_properties', "--kafka_con", "True"])
+    # return parser.parse_args(['--topic', 'status_logs', "--kafka_con", "True"])
     return parser.parse_args()
 
 
