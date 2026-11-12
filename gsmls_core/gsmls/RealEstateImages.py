@@ -9,6 +9,7 @@ import boto3
 import pendulum
 import pandas as pd
 import numpy as np
+from ast import literal_eval
 from dotenv import load_dotenv
 from datetime import datetime
 from datetime import timedelta
@@ -376,6 +377,7 @@ class RealEstateImages:
         kwargs["CountyCode"] = property_data["CountyCode"] = target_row["COUNTYCODE"]
         kwargs["BlockID"] = property_data["BlockID"] = target_row["BLOCKID"]
         kwargs["LotID"] = property_data["LotID"] = target_row["LOTID"]
+        property_data["Previous_Sales_History"] = literal_eval(target_row["HISTORY"]) if target_row["HISTORY"] != "None" else None
         property_data["Update_Log"] = {
             "events":[
                 {"operation":"document_creation",
