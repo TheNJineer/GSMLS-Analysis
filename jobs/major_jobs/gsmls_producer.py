@@ -2,7 +2,7 @@ import argparse
 import pendulum
 import sys
 from gsmls.GSMLS import GSMLS
-from gsmls.utility_func import check_pipeline_metadata, cutoff_time
+from gsmls.utility_func import check_pipeline_metadata, cutoff_time, attach_pycharm_debugger
 from pendulum import timezone
 
 
@@ -17,6 +17,7 @@ def parse_args():
 
 if __name__ == "__main__":
 
+    attach_pycharm_debugger()
     args = parse_args()
     # Creates a pendulum object of the next day 2:30AM
     program_cutoff = cutoff_time(days=1, hours=2, minutes=30, tz="America/New_York")
