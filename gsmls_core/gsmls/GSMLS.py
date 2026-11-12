@@ -13,6 +13,7 @@ import time
 import sys, traceback
 from botocore.exceptions import ClientError
 from bs4 import BeautifulSoup
+from copy import deepcopy
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
@@ -28,7 +29,7 @@ from selenium.webdriver.common.alert import Alert
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains as AC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, InvalidSessionIdException
 from selenium.common.exceptions import UnexpectedAlertPresentException, WebDriverException
 from sqlalchemy.exc import DatabaseError
 from tqdm import tqdm
@@ -568,6 +569,7 @@ class GSMLS:
                     "LATITUDE": meta_dict["LATITUDE"],
                     "LONGITUDE": meta_dict["LONGITUDE"],
                     "IMAGES": meta_dict["IMAGES"],
+                    "HISTORY": meta_dict["HISTORY"]
                 }
             )
 
@@ -652,8 +654,8 @@ class GSMLS:
                 "//div[@class='side-bar-padding']",
                 f"//div[normalize-space()='{mlsnum}']",
             ],
-            "Media Page": ["//*[@id='menu-selectBox']",
-                # "//div[@id='menu-selectBox']//div[2]",
+            "Media Page": [# "//*[@id='menu-selectBox']",
+                "//*[@id='report-menu']/div[4]/a",
                 "//div[@class='imagesReportTitle']",
                 f'//*[@id="{prop_id}"]/div/form',
             ],
@@ -677,9 +679,14 @@ class GSMLS:
                 "//a[normalize-space()='HomePage']",
                 "//a[@id='closect']",
             ],
+            "Client Full": ["//*[@id='report-menu']/div[1]/a",  # Previous button
+                            "//*[@id='report-menu']/div[2]/a",  # Next button
+                            "//*[@id='selectListing']"],  # Select radio button
+            "Property Archive Summary": ["//*[@id='rptheader']", "//*[@id='shortrpt']",
+                                         "//*[@id='report-menu-archive']/div[2]/a"]
         }
 
-        if page_name in ["Garden State MLS", "Advanced Search", "Results", "Download"]:
+        if page_name in ["Garden State MLS", "Advanced Search", "Results", "Download", "Property Archive Summary"]:
             # Wait for the page to completely load
             # WebDriverWait(driver_var, 10).until(
             #     lambda d: d.execute_script("return document.readyState") == "complete"
@@ -738,13 +745,10 @@ class GSMLS:
                 EC.element_to_be_clickable((By.XPATH, arg_dict[page_name][1]))
             )
 
-        elif page_name in ["Media Page", "Property Report"]:
+        elif page_name in ["Media Page", "Property Report", "Client Full"]:
             assert window_id == driver_var.current_window_handle
-            # Wait 1
-            # WebDriverWait(driver_var, 30).until(
-            #     EC.presence_of_element_located((By.XPATH, arg_dict[page_name][0]))
-            # )
-            # # Wait 2
+
+            # Wait 2
             try:
                 # There are times when the ImageReportTitle Xpath doesn't show up and there no images
                 for path_var in arg_dict[page_name]:
@@ -823,7 +827,7 @@ class GSMLS:
     @staticmethod
     def first_media_link(bs4_obj, soldlistings):
         """
-        Find the first media link in the searches to scrape the hi res images
+        Find the first client_full link in the searches to scrape the hi res images and metadata
         :param bs4_obj:
         :param soldlistings:
         :return:
@@ -832,13 +836,8 @@ class GSMLS:
         for idx, item in enumerate(bs4_obj):
 
             try:
-                media_link = item.find("td", {"class": "media"}).a
-                if media_link.get_text().strip() != "":
-                    prop_id = item.find("td", {"class": "item-number"})["data-seq"]
-                    return prop_id, idx + 1
-                elif media_link.get_text().strip() == "":
-                    soldlistings["IMAGES"].append("None")
-                    continue
+                prop_id = item.find("td", {"class": "item-number"})["data-seq"]
+                return prop_id, idx + 1
 
             except AttributeError:
                 soldlistings["IMAGES"].append("None")
@@ -853,7 +852,15 @@ class GSMLS:
             "LATITUDE": [],
             "LONGITUDE": [],
             "IMAGES": [],
-            "DOCUMENTS": []
+            "DOCUMENTS": [],
+            "HISTORY": []
+        }
+
+        kwargs['open_windows'] = {
+            "Main Window": None,
+            "Client Full": None,
+            "Media Page": None,
+            "Property Archive": None
         }
 
         year = kwargs["Year"],
@@ -875,13 +882,13 @@ class GSMLS:
                 sold_listings, sold_listings_dictionary
             )
 
-            main_window = driver_var.current_window_handle
+            kwargs['open_windows']['Main Window'] = main_window = driver_var.current_window_handle
 
             # Step 2: Scrape the links for all high resolution images associated with each property
             print(' ==== SCRAPPING IMAGE AND PDF DATA ==== ')
             if type(first_media_idx) is int:
                 try:
-                    self.scrape_image_links_and_documents(
+                    self.scrape_all_data(
                         sold_listings_dictionary, driver_var, first_media_idx, prop_id, **kwargs
                     )
                     # Step 3: Switch to main property table window after scraping images
@@ -1067,13 +1074,13 @@ class GSMLS:
             self.update_metadata()  # If all data was scraped from previous timeframe, update the metadata
 
     @staticmethod
-    def locate_image_media_window(driver_var, link_var):
+    def locate_image_client_full_window(driver_var, link_var):
 
         # Step 1: Find the respective media link on the results page and open it
         current_windows = driver_var.window_handles
         media_link = WebDriverWait(driver_var, 30).until(
             EC.presence_of_element_located((By.XPATH,
-                                            f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[4]/a',)))
+                                            f'//*[@id="searchResult"]/main/div[1]/table/tbody/tr[{link_var}]/td[3]/a',)))
         media_link.click()
         media_window = [window for window in driver_var.window_handles if window not in current_windows][-1]
 
@@ -1857,34 +1864,178 @@ class GSMLS:
                         if_exists="append", index=False)
         self.download_log = GSMLS.create_download_log()
 
-    def scrape_property_metadata(self, dict_var, driver_var, link_var, prop_id, **kwargs):
+    @staticmethod
+    def scrape_property_metadata(dict_var, driver_var, history_xpath,**kwargs):
+
+        # If it exists, switch to new window and scrape everything, else pass and append None to list
+        # Focus on client full window
+
+        property_history = {}
+        standard_archive = {
+            'Status': None,
+            'List_Date': None,
+            'Original_listing_Price': None,
+            'List_Price': None,
+            'Under_Contract_Date': None,
+            'Sold_OM_Date': None,
+            'Sales_Price': None,
+            'DOM': None
+        }
+
+        if history_xpath is not None:
+            if kwargs['open_windows']['Property Archive'] is None:
+                driver_var.switch_to.window(kwargs['open_windows']['Client Full'])
+                WebDriverWait(driver_var, 30).until(
+                    EC.visibility_of_element_located((By.XPATH, history_xpath))
+                ).click()
+                kwargs['open_windows']['Property Archive'] = \
+                [window for window in driver_var.window_handles if window not in kwargs['open_windows'].values()][-1]
+                driver_var.switch_to.window(kwargs['open_windows']['Property Archive'])
+            else:
+                driver_var.switch_to.window(kwargs['open_windows']['Client Full'])
+
+                try:
+                    WebDriverWait(driver_var, 30).until(
+                        EC.visibility_of_element_located((By.XPATH, history_xpath))
+                    ).click()
+                    driver_var.switch_to.window(kwargs['open_windows']['Property Archive'])
+                except InvalidSessionIdException:
+                    current_window = [window for window in driver_var.window_handles if window not in kwargs['open_windows'].values()][-1]
+                    if current_window != kwargs['open_windows']['Property Archive']:
+                        kwargs['open_windows']['Property Archive'] = current_window
+                    driver_var.switch_to.window(kwargs['open_windows']['Property Archive'])
+
+
+            GSMLS.explicit_page_load(
+                "Property Archive Summary", driver_var, prop_id=kwargs['listing_id'],
+                window_id=kwargs['open_windows']['Property Archive']
+            )
+
+            soup = BeautifulSoup(driver_var.page_source, "html.parser")
+            archive_report = soup.find("div", {"id": "shortrpt"})
+            main_table = archive_report.tbody.tbody
+
+            for row in main_table.find_all("tr"):
+
+                temp_history = deepcopy(standard_archive)
+                cells = row.find_all("td")
+                old_mlsnum = cells[0].get_text(strip=True)
+                property_history.setdefault(old_mlsnum, temp_history)
+                property_history[old_mlsnum]['Status'] = cells[2].get_text(strip=True)
+                property_history[old_mlsnum]['List_Date'] = cells[6].get_text(strip=True)
+                property_history[old_mlsnum]['Original_listing_Price'] = cells[7].get_text(strip=True)
+                property_history[old_mlsnum]['List_Price'] = cells[8].get_text(strip=True)
+                property_history[old_mlsnum]['Under_Contract_Date'] = cells[10].get_text(strip=True)
+                property_history[old_mlsnum]['Sold_OM_Date'] = cells[11].get_text(strip=True)
+                property_history[old_mlsnum]['Sales_Price'] = cells[12].get_text(strip=True)
+                property_history[old_mlsnum]['DOM'] = cells[13].get_text(strip=True)
+
+            dict_var["HISTORY"].append(property_history)
+
+        else:
+            dict_var["HISTORY"].append("None")
+
+    @staticmethod
+    def scrape_sidebar_xpaths(driver_var, sys_id, **kwargs):
 
         # Locate the media window (start from the first_media_link to click the mlsnum)
-        # Search for property history tab
-            # Should have the same usage as locate_image_media_window() return window_id or None
-        # Scrape all the listing IDs
-        # Scrape all media documents, images and property history
-            # Dynamically determine if the current focus window is media or client_full
-            # If the window is client_full, do SCRAPE TYPE 1:
-                # Search for property_history and scrape if its available
-                    # Switch to new window and scrape everything, else pass
-                # Switch to client_full window, change to media tab then scrape everything
-                # Make sure media window is in focus
-            # Else do SCRAPE TYPE 2:
-                # Make sure the media tab is in focus then scrape everything
-                # # Switch to client_full tab
-                # Search for property_history and scrape if its available
-                    # Switch to new window and scrape everything, else pass
-                # Refocus on the client_full window
-            # Click the next button
-        pass
+        # Use BeautifulSoup to scrape all {div, {class:sidebar-button select}}
 
-    def scrape_image_links_and_documents(self, dict_var, driver_var, link_var, prop_id, **kwargs):
-
-        media_window = GSMLS.locate_image_media_window(driver_var, link_var)
         GSMLS.explicit_page_load(
-            "Media Page", driver_var, prop_id=prop_id, window_id=media_window
+            "Client Full", driver_var, prop_id=sys_id,
+                    window_id=kwargs['open_windows']['Client Full']
         )
+
+        soup = BeautifulSoup(driver_var.page_source, "html.parser")
+        sidebar_media = soup.find("div", {"class": "sidebar-button select media media-hover-element"})
+        sidebar_items = soup.find_all("div", {"class": "sidebar-button select"})
+        # Search for property media tab
+        if sidebar_media.find("span", {"class": "fa fa-image fa-lg"}):
+            media_xpath = f"//*[@id={sys_id}]/div/div[1]/div/div[4]"
+        else:
+            media_xpath = None
+        # Search for property history tab
+        for tab_idx, tab in enumerate(sidebar_items):
+            if tab.find("span", {"class": "fa fa-history fa-lg"}):
+                history_xpath = f"//*[@id={sys_id}]/div/div[1]/div/div[6]"
+                break
+            elif tab_idx < len(sidebar_items) - 1:
+                continue
+            else:
+                history_xpath = None
+
+        return media_xpath, history_xpath
+
+    def scrape_image_links_and_documents(self, dict_var, driver_var, media_xpath, **kwargs):
+
+        # If it exists, switch to new window and scrape everything, else pass and append None to list
+        # Focus on client full window
+
+        image_dictionary = {}
+
+        if media_xpath is not None:
+            try:
+                if kwargs['open_windows']['Media Page'] is None:
+                    WebDriverWait(driver_var, 30).until(
+                        EC.visibility_of_element_located((By.XPATH, media_xpath))
+                    ).click()
+                    kwargs['open_windows']['Media Page'] = [window for window in driver_var.window_handles if window not in kwargs['open_windows'].values()][-1]
+                    driver_var.switch_to.window(kwargs['open_windows']['Media Page'])
+                else:
+                    try:
+                        WebDriverWait(driver_var, 30).until(
+                            EC.visibility_of_element_located((By.XPATH, media_xpath))
+                        ).click()
+                        driver_var.switch_to.window(kwargs['open_windows']['Media Page'])
+                    except InvalidSessionIdException:
+                        current_window = [window for window in driver_var.window_handles if window not in kwargs['open_windows'].values()][-1]
+                        if current_window != kwargs['open_windows']['Media Page']:
+                            kwargs['open_windows']['Media Page'] = current_window
+                        driver_var.switch_to.window(kwargs['open_windows']['Media Page'])
+
+
+                GSMLS.explicit_page_load(
+                    "Media Page", driver_var, prop_id=kwargs['listing_id'],
+                    window_id=kwargs['open_windows']['Media Page']
+                )
+
+                soup = BeautifulSoup(driver_var.page_source, "html.parser")
+                images_list = soup.find_all("div", {"class": "imageReportContainer"})
+
+                try:
+                    raw_property_address = (soup.find("div", {"class": "imagesReportTitle"})
+                                            .get_text(strip=True).split("•")[1].strip())
+                    clean_address = GSMLS.clean_address(raw_property_address)
+                    self.scrape_property_documents(driver_var, soup, clean_address,
+                                                   kwargs['listing_id'], dict_var, **kwargs)
+
+                except AttributeError:
+                    # Cause by a blank image media page. raw_property_address will be NoneType and non-subscriptable
+                    pass
+
+                if len(images_list) > 0:
+
+                    for image_num, image in enumerate(images_list):
+                        # The high res image is in the value attribute of the first input tag
+                        image_dictionary[
+                            f"{clean_address} - {image.get_text(strip=True)} - {image_num}"
+                        ] = image.input["value"]
+
+                    dict_var["IMAGES"].append(image_dictionary)
+                elif len(images_list) == 0:
+                    dict_var["IMAGES"].append("None")
+            except (TimeoutException, WebDriverException):
+                dict_var["IMAGES"].append("None")
+        else:
+            dict_var["IMAGES"].append("None")
+
+    def scrape_all_data(self, dict_var, driver_var, link_var, prop_id, **kwargs):
+
+        kwargs['open_windows']["Client Full"] = client_full_window = GSMLS.locate_image_client_full_window(driver_var, link_var)
+        GSMLS.explicit_page_load(
+            "Client Full", driver_var, prop_id=prop_id, window_id=client_full_window
+        )
+
 
         # Step 1: Scrape the listing IDs
         soup = BeautifulSoup(driver_var.page_source, "html.parser")
@@ -1895,36 +2046,12 @@ class GSMLS:
         # Step 2: Scrape the webpage and all associated high res image links starting from the first image link
         for listing_id in sys_ids[link_var - 1:]:
 
-            image_dictionary = {}
+            kwargs['listing_id'] = listing_id
+            media_xpath, history_xpath = GSMLS.scrape_sidebar_xpaths(driver_var, listing_id, **kwargs)
 
-            GSMLS.explicit_page_load(
-                "Media Page", driver_var, prop_id=listing_id, window_id=media_window
-            )
-
-            soup = BeautifulSoup(driver_var.page_source, "html.parser")
-            images_list = soup.find_all("div", {"class": "imageReportContainer"})
-
-            try:
-                raw_property_address = (soup.find("div", {"class": "imagesReportTitle"})
-                                        .get_text(strip=True).split("•")[1].strip())
-                clean_address = GSMLS.clean_address(raw_property_address)
-                self.scrape_property_documents(driver_var, soup, clean_address, listing_id, dict_var, **kwargs)
-
-            except AttributeError:
-                # Cause by a blank image media page. raw_property_address will be NoneType and non-subscriptable
-                pass
-
-            if len(images_list) > 0:
-
-                for image_num, image in enumerate(images_list):
-                    # The high res image is in the value attribute of the first input tag
-                    image_dictionary[
-                        f"{clean_address} - {image.get_text(strip=True)} - {image_num}"
-                    ] = image.input["value"]
-
-                dict_var["IMAGES"].append(image_dictionary)
-            elif len(images_list) == 0:
-                dict_var["IMAGES"].append("None")
+            self.scrape_image_links_and_documents(dict_var, driver_var, media_xpath, **kwargs)  # change this name
+            GSMLS.scrape_property_metadata(dict_var, driver_var, history_xpath, **kwargs)
+            driver_var.switch_to.window(kwargs['open_windows']['Client Full'])
 
             if listing_id != sys_ids[-1]:
                 try:
@@ -1936,6 +2063,9 @@ class GSMLS:
                         )
                     )
                     next_button.click()
+                    GSMLS.explicit_page_load(
+                        "Client Full", driver_var, prop_id=prop_id, window_id=client_full_window
+                    )
                 except UnexpectedAlertPresentException:
                     # This alert is raised when the 'Next' button is clicked
                     # and there are no more properties left in the list
@@ -1943,7 +2073,10 @@ class GSMLS:
                     alert.accept()
                     driver_var.close()
             else:
-                driver_var.close()
+                for pages in ["Property Archive", "Media Page", "Client Full"]:
+                    if kwargs['open_windows'][pages] is not None:
+                        driver_var.switch_to.window(kwargs['open_windows'][pages])
+                        driver_var.close()
 
     def scrape_municipalities(self, county_id, driver_var):
 
@@ -2549,6 +2682,11 @@ class GSMLS:
         kwargs["logger"].info(f"There is no GSMLS sales data available for {kwargs['Municipality']}")
         self.click_target_tab("Town", driver_var)
         GSMLS.set_city(2, kwargs["Municipality_ID"], driver_var)
+
+
+    """
+                                        ======= MAIN FUNCTIONS ======
+    """
 
     @logger_decorator
     def main(self, driver_var, **kwargs):
