@@ -18,7 +18,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 9, 27,
+    "start_date": datetime(2026, 11, 15,
                            hour=3, minute=15, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -151,7 +151,7 @@ def gsmls_cleaning_pipeline():
     # This job needs to be created
     # clean_duplicates = DockerOperator(
     #     task_id="data_cleaning",
-    #     image="gsmls-jobs:0.9.6",
+    #     image="gsmls-jobs:0.10.0",
     #     command=f"{get_filepath('jobs_major')}/remove_duplicate_data.py",
     #     api_version="auto",
     #     auto_remove='force,
@@ -164,7 +164,7 @@ def gsmls_cleaning_pipeline():
 
     data_cleaning = DockerOperator(
         task_id="data_cleaning",
-        image="gsmls-jobs:0.9.6",
+        image="gsmls-jobs:0.10.0",
         # entrypoint="bash",
         command=f"{get_filepath('jobs_major')}/phased_cleaning.py --table_name res_properties",
         # command="-c 'ls -R /app'",

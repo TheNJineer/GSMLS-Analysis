@@ -17,7 +17,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 9, 28,
+    "start_date": datetime(2026, 11, 15,
                            hour=4, minute=38, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -135,7 +135,7 @@ def download_images():
 
     downloads = DockerOperator(
         task_id="image_downloading",
-        image="gsmls-jobs:0.9.6",
+        image="gsmls-jobs:0.10.0",
         command=f"{get_filepath('jobs_major')}/download_images.py --local true --order_num '79065846, 64872924'",
         api_version="auto",
         auto_remove='force',

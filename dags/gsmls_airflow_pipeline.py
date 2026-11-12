@@ -27,7 +27,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 8, 18,
+    "start_date": datetime(2026, 11, 16,
                            hour=9, minute=30, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -355,7 +355,7 @@ def gsmls_pipeline():
             # Task 1: Check the health of Apache Kafka Connection
             kafka_conn = DockerOperator(
                 task_id=f"check_kafka_connection",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/kafka_connection.py --prop_type {prop_type}",
                 api_version="auto",
                 auto_remove='force',
@@ -368,7 +368,7 @@ def gsmls_pipeline():
             # Task 2: Create and check the health of MongoDB Connection and if database exists
             mongo_start_results = DockerOperator(
                 task_id=f"check_mongodb_connection",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/check_mongodb.py "
                         f"--db_name realEstate --table_name propertyImages --key mongodb_start --prop_type {prop_type}",
                 api_version="auto",
@@ -382,7 +382,7 @@ def gsmls_pipeline():
 
             starting_point = DockerOperator(
                 task_id=f"starting_point",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/starting_point.py --prop_type {prop_type} "
                         f"--table_name backfill_event_log",
                 api_version="auto",
@@ -426,7 +426,7 @@ def gsmls_pipeline():
 
             kafka_topics = DockerOperator(
                 task_id="check_kafka_topics",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/kafka_topics.py --topic {topic} "
                         f"--kafka_conn {{{{ ti.xcom_pull(task_ids='start_pipeline_{prop_type.lower()}.kafka_conn_status') }}}}",
                 api_version="auto",
@@ -441,7 +441,7 @@ def gsmls_pipeline():
             # Task 4: Get row count of target table
             postgresql_start = DockerOperator(
                 task_id="postgresql_start_data",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/get_postgresql_rows.py --table_name {topic} "
                         f"--key postgresql_start --prop_type {prop_type}",
                 api_version="auto",
@@ -464,7 +464,7 @@ def gsmls_pipeline():
             # Task 6: Start the GSMLS message production
             data_producer = DockerOperator(
                 task_id="gsmls_producer",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_major')}/gsmls_producer.py --prop_type {prop_type}",
                 api_version="auto",
                 auto_remove='force',
@@ -489,7 +489,7 @@ def gsmls_pipeline():
 
             gsmls_consumer = DockerOperator(
                 task_id="gsmls_data_consumer",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_major')}/gsmls_consumer.py --prop_type {prop_type} "
                         f"--topic {topic}",
                 api_version="auto",
@@ -527,7 +527,7 @@ def gsmls_pipeline():
 
                 image_consumer = DockerOperator(
                     task_id="gsmls_image_consumer",
-                    image="gsmls-jobs:0.9.6",
+                    image="gsmls-jobs:0.10.0",
                     command=f"{get_filepath('jobs_major')}/gsmls_image_consumer.py --prop_type {prop_type} "
                             f"--order_num '79065846, 64872924'",
                     api_version="auto",
@@ -556,7 +556,7 @@ def gsmls_pipeline():
 
             mongo_final_results = DockerOperator(
                 task_id="check_mongodb_connection2",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/check_mongodb.py "
                         f"--db_name realEstate --table_name propertyImages --key mongodb_final --prop_type {prop_type}",
                 api_version="auto",
@@ -569,7 +569,7 @@ def gsmls_pipeline():
             )
             postgresql_final = DockerOperator(
                 task_id="postgresql_final_data",
-                image="gsmls-jobs:0.9.6",
+                image="gsmls-jobs:0.10.0",
                 command=f"{get_filepath('jobs_minor')}/get_postgresql_rows.py --table_name {topic} "
                         f"--key postgresql_final --prop_type {prop_type}",
                 api_version="auto",

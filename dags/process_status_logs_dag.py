@@ -19,8 +19,8 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 9, 25,
-                           hour=9, minute=30, tzinfo=timezone("America/New_York")),
+    "start_date": datetime(2026, 11, 16,
+                           hour=10, minute=00, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     }
@@ -155,7 +155,7 @@ def parse_log_statuses():
 
     progress = DockerOperator(
         task_id="parse_log_status",
-        image="gsmls-jobs:0.8.9",  # Update this image
+        image="gsmls-jobs:0.10.0",  # Update this image
         command=f"{get_filepath('jobs_major')}/process_property_status_logs.py",
         api_version="auto",
         auto_remove='force',

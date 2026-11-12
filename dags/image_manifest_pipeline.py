@@ -15,7 +15,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 9, 28,
+    "start_date": datetime(2026, 11, 16,
                            hour=23, minute=00, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -99,7 +99,7 @@ def update_image_manifest():
 
     progress = DockerOperator(
         task_id="update_image_manifest",
-        image="gsmls-jobs:0.9.7",  # Update this image
+        image="gsmls-jobs:0.10.0",  # Update this image
         command=f"{get_filepath('jobs_major')}/update_image_manifest.py "
                 f"--date_str {{ ti.xcom_pull(task_ids='get_manifest_date') }}T01-00Z, "
                 f"'--save_type', 'manifest'",

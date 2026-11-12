@@ -17,7 +17,7 @@ default_args = {
     "email": ['nj.realestate.pybot@gmail.com'],
     "email_on_failure": True,
     "email_on_retry": True,
-    "start_date": datetime(2026, 8, 16,
+    "start_date": datetime(2026, 11, 15,
                            hour=2, minute=43, tzinfo=timezone("America/New_York")),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -122,7 +122,7 @@ def cutoff_decision(tz: str):
 
 
 @dag(
-    "MongoDB_Database_Cleaning",
+    "MongoDB_GSMLS_Cleaning",
     description=description,
     default_args=default_args,
     schedule=timedelta(days=7),
@@ -137,7 +137,7 @@ def database_cleaning():
 
     cleaning = DockerOperator(
         task_id="data_cleaning",
-        image="gsmls-jobs:0.9.6",
+        image="gsmls-jobs:0.10.0",
         command=f"{get_filepath('jobs_major')}/clean_mongodb_data.py --local true --order_num '79065846, 64872924'",
         api_version="auto",
         auto_remove='force',
