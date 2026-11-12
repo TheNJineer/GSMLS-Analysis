@@ -3,6 +3,7 @@ import pendulum
 import pymongo
 import re
 import requests
+import traceback
 from copy import deepcopy
 from bs4 import BeautifulSoup
 from concurrent.futures import as_completed
@@ -64,6 +65,10 @@ class Salesweb:
         aliases = {
             'sale_date': 'sales_date',
             'property_address': 'address',
+            'priors': 'descriptions',
+            'descriptions': 'descriptions',
+            'property_details': 'descriptions',
+            'property_notes': 'descriptions',
             'approximate_judgment': 'judgment',
             'approx_judgment': 'judgment',
             'judgment': 'judgment',
@@ -88,12 +93,50 @@ class Salesweb:
             return value
 
     @staticmethod
+    def _normalize_status_date(value):
+        if isinstance(value, pendulum.DateTime):
+            return value.in_timezone('UTC')
+        if hasattr(value, 'tzinfo'):
+            try:
+                return pendulum.instance(value, tz='UTC').in_timezone('UTC')
+            except (TypeError, ValueError, OverflowError):
+                return None
+        if isinstance(value, str):
+            try:
+                parsed = pendulum.parse(value)
+                return parsed.in_timezone('UTC')
+            except (ValueError, TypeError, OverflowError):
+                return None
+        return None
+
+    @staticmethod
     def _parse_amount(value):
         cleaned = value.replace('$', '').replace(',', '').strip()
         try:
             return float(cleaned)
         except (ValueError, TypeError):
             return value
+
+    @staticmethod
+    def _extract_max_labeled_amount(description, label):
+        if not description:
+            return None
+
+        label_patterns = {
+            'judgment': r'(?:approx(?:imate)?\.?\s+)?judgment',
+            'upset_amount': r'(?:good\s+faith\s+)?upset|minimum\s+bid',
+        }
+        label_pattern = label_patterns.get(label, label)
+        amount_pattern = re.compile(
+            rf'(?i)\b(?:{label_pattern})\b\s*(?:amount)?\s*[:=-]?\s*'
+            r'\$?\s*([0-9][0-9,]*(?:\.\d{1,2})?)'
+        )
+        amounts = []
+        for match in amount_pattern.finditer(str(description)):
+            amount = Salesweb._parse_amount(match.group(1))
+            if isinstance(amount, (int, float)):
+                amounts.append(amount)
+        return max(amounts) if amounts else None
 
     @staticmethod
     def _detail_pairs(soup):
@@ -379,8 +422,11 @@ class Salesweb:
             else:
                 print(f' ==== PAGE CONTENTS NOT CAPTURED: {response.status_code} ==== ')
 
-        self.collection.insert_many(update_list)
-        # put a time buffer here
+        if len(update_list) > 0:
+            self.collection.insert_many(update_list)
+            # put a time buffer here
+        else:
+            print(f' ==== DATA BATCH NOT CAPTURED FOR {county} ==== ')
 
     def scrape_property_page(self, county: str, response):
         data = {}
@@ -400,12 +446,25 @@ class Salesweb:
                 value = (Salesweb._parse_date(value)
                          if label == 'sales_date' else Salesweb._parse_amount(value))
 
-            if label in data:
+            if label == 'descriptions':
+                description_values = data.setdefault(label, [])
+                if not isinstance(description_values, list):
+                    description_values = [description_values]
+                description_values.extend(value for value in [value] if value)
+                data[label] = '.'.join(description_values)
+            elif label in data:
                 if not isinstance(data[label], list):
                     data[label] = [data[label]]
                 data[label].append(value)
             else:
                 data[label] = value
+
+        description = data.get('descriptions', '')
+        for financial_label in ('judgment', 'upset_amount'):
+            if financial_label not in data:
+                fallback = Salesweb._extract_max_labeled_amount(description, financial_label)
+                if fallback is not None:
+                    data[financial_label] = fallback
 
         data['status_history'] = Salesweb._status_history(soup)
         data['created'] = [pendulum.now(tz='UTC')]
@@ -504,11 +563,50 @@ class Salesweb:
 
         try:
             results = self.scrape_all_foreclosures(state_loc)
-        except BaseException as e:
-            print(f' ==== {e} ==== ')
+        except BaseException:
+            error_trace = traceback.format_exc()
+            print(f' ==== ERROR ORIGINATED IN SALESWEB EXECUTION ==== \n{error_trace} ====')
             event_log = pd.DataFrame(self.event_log)
             event_log.to_sql("salesweb_event_log", con=self.engine, if_exists="append", index=False)
             self.event_log = Salesweb.create_event_log()
+            self.load_data()
             return False
 
         return results
+
+    def main_clean(self):
+        cutoff = pendulum.now(tz='UTC').subtract(years=1)
+        examined = 0
+        deleted = 0
+        skipped = 0
+
+        documents = self.collection.find({'status_history': {'$exists': True}})
+        for document in documents:
+            examined += 1
+            history = document.get('status_history')
+            if isinstance(history, dict):
+                history = [history]
+            if not isinstance(history, list):
+                skipped += 1
+                continue
+
+            valid_dates = []
+            for entry in history:
+                if not isinstance(entry, dict):
+                    continue
+                status_date = Salesweb._normalize_status_date(entry.get('date'))
+                if status_date is not None:
+                    valid_dates.append(status_date)
+
+            if not valid_dates or document.get('_id') is None:
+                skipped += 1
+                continue
+
+            if max(valid_dates) <= cutoff:
+                result = self.collection.delete_one({'_id': document['_id']})
+                if getattr(result, 'deleted_count', 0) == 1:
+                    deleted += 1
+                else:
+                    skipped += 1
+
+        return {'examined': examined, 'deleted': deleted, 'skipped': skipped}
