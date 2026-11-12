@@ -276,7 +276,7 @@ class KafkaGSMLSConsumer:
                                          'COOLSYSTEM_SHORT', 'FLOORS_SHORT', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
                                          'ROOF_SHORT', 'SEWER_SHORT', 'SIDING_SHORT', 'EXTERIOR_SHORT', 'BASEDESC_SHORT',
                                         'STYLE_SHORT', 'TAXRATE', 'TAXYEAR', 'WATER_SHORT', 'UTILITIES_SHORT',
-                                        'BASEMENT_SHORT', 'IMAGES', 'PROP_CLASS'])
+                                        'BASEMENT_SHORT', 'IMAGES', 'PROP_CLASS', 'HISTORY'])
 
         elif prop_type == 'MUL':
             update_bar.update(1)
@@ -284,7 +284,7 @@ class KafkaGSMLSConsumer:
                                         'COOLSYSTEM_SHORT', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
                                         'ROOF_SHORT', 'SEWER_SHORT', 'SIDING_SHORT', 'EXTERIOR_SHORT', 'BASEDESC_SHORT',
                                         'UNITSTYLE_SHORT', 'TAXRATE', 'TAXYEAR', 'WATER_SHORT', 'UTILITIES_SHORT',
-                                        'BASEMENT_SHORT', 'IMAGES', 'PROP_CLASS'])
+                                        'BASEMENT_SHORT', 'IMAGES', 'PROP_CLASS', 'HISTORY'])
 
         elif prop_type == 'LND':
             update_bar.update(1)
@@ -298,7 +298,8 @@ class KafkaGSMLSConsumer:
             return df_var.drop(columns=['REMARKSPUBLIC', 'REMARKSAGENT', 'SHOWSPECIAL', 'DRIVEWAYDESC_SHORT',
                                          'COOLSYSTEM_SHORT', 'FLOORS_SHORT', 'HEATSRC_SHORT', 'HEATSYSTEM_SHORT',
                                          'SEWER_SHORT', 'BASEDESC_SHORT', 'WATER_SHORT', 'UTILITIES_SHORT',
-                                        'BASEMENT_SHORT', 'TENANTPAYS_SHORT', 'RENTINCLUDES_SHORT', 'IMAGES', 'PROP_CLASS'])
+                                        'BASEMENT_SHORT', 'TENANTPAYS_SHORT', 'RENTINCLUDES_SHORT', 'IMAGES', 'PROP_CLASS',
+                                        'HISTORY'])
 
         if prop_type == 'TAX':
 
@@ -1114,19 +1115,19 @@ class KafkaGSMLSConsumer:
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                    'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'STYLEPRIMARY_SHORT',
                                    'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
-                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE', 'HISTORY']]
             elif prop_type == 'MUL':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                     'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'UNITSTYLE_SHORT',
                                     'CONDITION', 'LISTDATE', 'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
-                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE']]
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'SALESPRICE', 'HISTORY']]
 
             elif prop_type == 'RNT':
                 image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
                                     'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
                                     'RENTEDDATE', 'PROPERTYTYPEPRIMARY_SHORT', 'PROPSUBTYPERN',
                                    'IMAGES', 'PROP_CLASS', 'LATITUDE', 'LONGITUDE',
-                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'RENTMONTHPERLSE']]
+                                   'LISTING_REMARKS', 'SCRAPED_DATE', 'RENTMONTHPERLSE', 'HISTORY']]
             # elif prop_type == 'LND':
             #     image_df = df_var[['MLSNUM', 'STREETNUMDISPLAY', 'STREETNAME', 'TOWN', 'COUNTY', 'ZIPCODE',
             #                         'TOWNCODE', 'COUNTYCODE', 'BLOCKID', 'LOTID', 'TAXID', 'CONDITION',
