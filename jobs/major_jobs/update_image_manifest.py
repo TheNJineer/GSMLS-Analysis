@@ -8,7 +8,7 @@ import psycopg2
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from math import floor
-from gsmls.utility_func import get_filepath, create_sql_engine, create_postgres_connection
+from gsmls.utility_func import get_filepath, create_sql_engine, create_postgres_connection, attach_pycharm_debugger
 from random import shuffle
 from sqlalchemy.exc import ProgrammingError
 
@@ -283,6 +283,7 @@ def save_data(df: pd.DataFrame, existing_data, sql_engine):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     arg = parse_args()
     s3_client = create_s3_client()
     engine = create_sql_engine('gsmls', remote=True)

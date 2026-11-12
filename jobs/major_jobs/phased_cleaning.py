@@ -8,7 +8,7 @@ from pyspark.sql.functions import col, substring, upper
 from pyspark.sql import functions as F
 from pyspark.sql.types import TimestampType, IntegerType, FloatType
 from gsmls.utility_func import create_postgres_connection, get_filepath
-from gsmls.utility_func import check_pipeline_metadata, create_sql_engine
+from gsmls.utility_func import check_pipeline_metadata, create_sql_engine, attach_pycharm_debugger
 from gsmls.GSMLS_Cleaning import GSMLSCleaning
 from py4j.protocol import Py4JJavaError
 
@@ -417,6 +417,7 @@ def stage_three(obj: GSMLSCleaning, mlsnum_list: list, path: str):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     print(' ==== STAGE ONE CLEANING INITIATED ==== ')
     filepath = get_filepath('refined_data')
     check_pipeline_metadata("gsmls_cleaning_pipeline", prop_type_=None, key_="cleaning_completed", status_=False)

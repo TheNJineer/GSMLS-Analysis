@@ -1,6 +1,6 @@
 import argparse
 from gsmls.RealEstateImages import RealEstateImages
-from gsmls.utility_func import cutoff_time, check_pipeline_metadata
+from gsmls.utility_func import cutoff_time, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def parse_args():
@@ -23,6 +23,7 @@ def parse_order_nums(num_str: str):
 
 if __name__ == "__main__":
 
+    attach_pycharm_debugger()
     args = parse_args()
     program_cutoff = cutoff_time(hours=4, minutes=35, tz="America/New_York")
     # program_cutoff = cutoff_time(days=1, hours=4, minutes=35, tz="America/New_York")

@@ -2,7 +2,7 @@ import argparse
 import sys
 import pandas as pd
 from datetime import datetime
-from gsmls.utility_func import create_sql_engine, check_pipeline_metadata
+from gsmls.utility_func import create_sql_engine, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def parse_args():
@@ -63,6 +63,7 @@ def starting_point(prop_type, table_name):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     args = parse_args()
     # Creates the meta-dictionary for this prop type if there isn't one already
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_="start_point")

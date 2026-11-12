@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from gsmls.Kafka_GSMLSConsumer import KafkaGSMLSConsumer
-from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_status
+from gsmls.utility_func import get_filepath, check_pipeline_metadata, current_status, attach_pycharm_debugger
 
 
 def parse_args():
@@ -25,6 +25,7 @@ def parse_order_nums(num_str: str):
 
 if __name__ == "__main__":
 
+    attach_pycharm_debugger()
     args = parse_args()
     order_nums = parse_order_nums(args.order_num)
     base_path = get_filepath('backups')

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 import json
 from collections import defaultdict
-from gsmls.utility_func import create_kafka_consumer, create_mongodb_conn
+from gsmls.utility_func import create_kafka_consumer, create_mongodb_conn, attach_pycharm_debugger
 from pprint import pprint
 from tqdm import tqdm
 
@@ -115,6 +115,7 @@ def extract_messages(new_messages):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     db_name = 'realEstate'
     collection_name = 'property_status_logs'
     consumer = create_kafka_consumer("log_consumer", "log_consumer")
