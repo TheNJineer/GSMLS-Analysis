@@ -1,7 +1,7 @@
 import argparse
 import sys
 import pandas as pd
-from gsmls.utility_func import create_sql_engine, check_pipeline_metadata
+from gsmls.utility_func import create_sql_engine, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def parse_args():
@@ -32,6 +32,7 @@ def get_postgresql_rows(table_name_, remote=True):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     args = parse_args()
     status = get_postgresql_rows(args.table_name)
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_=args.key, status_=status)

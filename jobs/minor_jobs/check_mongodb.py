@@ -1,8 +1,9 @@
 import sys
+import pydevd_pycharm
 import argparse
 import time
 from pymongo.errors import ConnectionFailure
-from gsmls.utility_func import create_mongodb_conn, check_pipeline_metadata
+from gsmls.utility_func import create_mongodb_conn, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def parse_args():
@@ -50,11 +51,16 @@ def check_mongodb(db_name, table_name):
             'mongo_col': table_result, 'num_of_docs': num_of_docs_}
 
 
+
 if __name__ == '__main__':
+
+    # Used for remote debugging
+    attach_pycharm_debugger()
+
 
     args = parse_args()
     status = check_mongodb(args.db_name, args.table_name)
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_=args.key, status_=status)
-    # print(status)
+    print(status)
     sys.exit(0)
 

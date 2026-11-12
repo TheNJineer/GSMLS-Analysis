@@ -1,7 +1,7 @@
 import argparse
 import sys
 from kafka.structs import TopicPartition
-from gsmls.utility_func import create_kafka_consumer, check_pipeline_metadata
+from gsmls.utility_func import create_kafka_consumer, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def parse_args():
@@ -66,7 +66,7 @@ def new_msgs_available(topic):
 
 
 if __name__ == '__main__':
-
+    attach_pycharm_debugger()
     args = parse_args()
     status = new_msgs_available(args.topic)
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type, key_="new_msgs", status_=status)

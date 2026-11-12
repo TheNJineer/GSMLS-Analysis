@@ -1,6 +1,6 @@
 import sys
 import argparse
-from gsmls.utility_func import create_kafka_producer, check_pipeline_metadata
+from gsmls.utility_func import create_kafka_producer, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def check_kafka_connection():
@@ -26,6 +26,7 @@ def parse_args():
 
 
 if __name__ == '__main__':
+    attach_pycharm_debugger()
     args = parse_args()
     status = check_kafka_connection()
     check_pipeline_metadata("gsmls_airflow_pipeline", prop_type_=args.prop_type,

@@ -1,6 +1,7 @@
 import sys
 import argparse
 import kafka.errors
+from gsmls.utility_func import attach_pycharm_debugger
 from kafka.admin import NewTopic
 from kafka.admin.client import KafkaAdminClient
 
@@ -52,7 +53,7 @@ def create_kafka_topics(topic: str = 'res_properties', status: bool = True):
 
 
 if __name__ == '__main__':
-
+    attach_pycharm_debugger()
     args = parse_args()
     create_kafka_topics(args.topic, bool(args.kafka_conn))
     sys.exit(0)

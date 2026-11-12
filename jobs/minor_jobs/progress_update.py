@@ -5,7 +5,7 @@ import shelve
 import sys
 from pprint import pprint
 from gsmls.utility_func import create_sql_engine, create_mongodb_conn
-from gsmls.utility_func import get_filepath, check_pipeline_metadata
+from gsmls.utility_func import get_filepath, check_pipeline_metadata, attach_pycharm_debugger
 
 
 def create_message(prop_type: str, tracker: dict):
@@ -141,6 +141,7 @@ def update_tracker(data: pd.DataFrame, tracker: dict):
 
 if __name__ == '__main__':
 
+    attach_pycharm_debugger()
     args = parse_args()
     progress_update(args.prop_type, args.pipeline)
     sys.exit(0)
