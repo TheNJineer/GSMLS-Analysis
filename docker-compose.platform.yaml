@@ -1,3 +1,4 @@
+
 # yamllint disable rule:line-length
 # Consolidated GSMLS platform with optional CVAT Community services.
 #
@@ -61,7 +62,38 @@ x-airflow-common: &airflow-common
     postgres_airflow: {condition: service_healthy}
     mongodb: {condition: service_healthy}
 
+# ------------------------- Kafka KRaft Configuration -------------------------
+# Three dedicated controllers (node IDs 1-3) and three brokers (node IDs 4-6).
+#
+# IMPORTANT:
+# - Generate KAFKA_CLUSTER_ID once and store it in .env.
+# - All six Kafka nodes must use the same cluster ID.
+# - Each controller and broker has its own persistent named volume.
+# - Controller metadata is stored at /var/lib/kafka/data, not /tmp/kafka-logs.
+# - Do not regenerate the cluster ID for ordinary restarts or redeployments.
+# - Kafka 4.3.2 is pinned to prevent unexpected upgrades from the latest tag.
+#
+# Controller environment is a separate anchor to ensure that every controller
+# inherits the same heap, listener security, quorum, and storage settings.
+x-kafka-controller-env: &kafka-controller-env
+  CLUSTER_ID: ${KAFKA_CLUSTER_ID:?Set KAFKA_CLUSTER_ID in .env}
+  KAFKA_PROCESS_ROLES: controller
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
+  KAFKA_LOG4J_ROOT_LOGLEVEL: INFO
+
+# Kafka broker environment.
+# Preserve existing replication, retention, timeout, and large-message
+# configurations from the original Compose file.
+#
+# Network and I/O worker thread counts are reduced because the entire
+# platform runs on a four-vCPU DigitalOcean droplet.
 x-kafka-env: &kafka-env
+  CLUSTER_ID: ${KAFKA_CLUSTER_ID:?Set KAFKA_CLUSTER_ID in .env}
   KAFKA_PROCESS_ROLES: broker
   KAFKA_LISTENERS: PLAINTEXT://:9092
   KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -70,12 +102,14 @@ x-kafka-env: &kafka-env
   KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
   KAFKA_DEFAULT_REPLICATION_FACTOR: 3
   KAFKA_NUM_PARTITIONS: 3
-  KAFKA_MIN_IN_SYNC_REPLICAS: 2
+  KAFKA_MIN_INSYNC_REPLICAS: 2
   KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
   KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
   KAFKA_OFFSETS_TOPIC_MIN_ISR: 2
   KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
   KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 2
   KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
   KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS: 6000
   KAFKA_GROUP_MAX_SESSION_TIMEOUT_MS: 300000
@@ -87,33 +121,57 @@ x-kafka-env: &kafka-env
   KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT_MAX_MS: 30000
   KAFKA_REPLICA_SOCKET_TIMEOUT_MS: 30000
   KAFKA_CONTROLLER_SOCKET_TIMEOUT_MS: 30000
-  KAFKA_NUM_NETWORK_THREADS: 8
-  KAFKA_NUM_IO_THREADS: 16
+  KAFKA_NUM_NETWORK_THREADS: 3
+  KAFKA_NUM_IO_THREADS: 4
   KAFKA_LOG_RETENTION_HOURS: 72
   KAFKA_LOG_SEGMENT_BYTES: 1073741824
   KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
   KAFKA_LOG_DIRS: /var/lib/kafka/data
   KAFKA_MAX_PARTITION_FETCH_BYTES: 20971520
   KAFKA_FETCH_MAX_BYTES: 52428800
+  KAFKA_LOG4J_ROOT_LOGLEVEL: INFO
+  KAFKA_HEAP_OPTS: "-Xms768m -Xmx768m"
+
+# Lightweight Kafka healthchecks.
+# TCP checks avoid spawning repeated Kafka Java CLI processes.
+# These checks verify listener accessibility, not complete quorum health.
+x-kafka-controller-healthcheck: &kafka-controller-healthcheck
+  test: [CMD-SHELL, "bash -c 'echo > /dev/tcp/127.0.0.1/9093'"]
+  interval: 30s
+  timeout: 5s
+  retries: 5
+  start_period: 120s
 
 x-kafka-broker-healthcheck: &kafka-broker-healthcheck
-  test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+  test: [CMD-SHELL, "bash -c 'echo > /dev/tcp/127.0.0.1/9092'"]
   interval: 30s
-  timeout: 10s
+  timeout: 5s
   retries: 5
-  start_period: 60s
+  start_period: 120s
 
+# Shared broker settings.
+# Memory limit leaves JVM headroom beyond the configured 768 MiB heap.
 x-kafka-broker: &kafka-broker
-  image: apache/kafka:latest
+  image: apache/kafka:4.3.2
   networks: [airflow_network]
-  environment:
-    <<: *kafka-env
-  depends_on: [controller-1, controller-2, controller-3]
+  depends_on:
+    controller-1: {condition: service_healthy}
+    controller-2: {condition: service_healthy}
+    controller-3: {condition: service_healthy}
   restart: unless-stopped
-  cpus: "0.50"
-  mem_limit: 1g
+  init: true
+  cpus: "1.00"
+  mem_limit: 1536m
   healthcheck:
     <<: *kafka-broker-healthcheck
+
+# Preserve the original Kafka logging rotation settings.
+x-kafka-logging: &kafka-logging
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "25m"
+      max-file: "3"
 
 x-cvat-common: &cvat-common
   image: cvat/server:${CVAT_VERSION}
@@ -177,8 +235,8 @@ services:
     healthcheck:
       <<: *healthcheck-default
       test: [CMD-SHELL, "curl -fsS http://localhost:4444/status | grep -q 'ready' || exit 1"]
-    cpus: "0.75"
-    mem_limit: 2g
+    cpus: "1.5"
+    mem_limit: 4g
     restart: unless-stopped
 
   spark:
@@ -235,44 +293,60 @@ services:
     mem_limit: 3g
     restart: unless-stopped
 
+  # ------------------------- Kafka Controllers -------------------------
+  # Dedicated KRaft controllers with persistent metadata volumes.
+  # Each controller has a unique node ID, listener port, and data volume.
+  # All controllers share the same quorum and cluster ID.
   controller-1: &controller-1
-    image: apache/kafka:latest
+    <<: *kafka-logging
+    image: apache/kafka:4.3.2
+    hostname: controller-1
     environment:
+      <<: *kafka-controller-env
       KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: controller
       KAFKA_LISTENERS: CONTROLLER://:9093
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     networks: [airflow_network]
+    volumes: [controller1-data:/var/lib/kafka/data]
     restart: unless-stopped
-    cpus: "0.15"
-    mem_limit: 384m
+    init: true
+    cpus: "0.50"
+    mem_limit: 768m
+    healthcheck:
+      <<: *kafka-controller-healthcheck
 
   controller-2:
     <<: *controller-1
+    hostname: controller-2
     environment:
+      <<: *kafka-controller-env
       KAFKA_NODE_ID: 2
-      KAFKA_PROCESS_ROLES: controller
       KAFKA_LISTENERS: CONTROLLER://:9094
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+    volumes: [controller2-data:/var/lib/kafka/data]
+    healthcheck:
+      <<: *kafka-controller-healthcheck
+      test: [CMD-SHELL, "bash -c 'echo > /dev/tcp/127.0.0.1/9094'"]
 
   controller-3:
     <<: *controller-1
+    hostname: controller-3
     environment:
+      <<: *kafka-controller-env
       KAFKA_NODE_ID: 3
-      KAFKA_PROCESS_ROLES: controller
       KAFKA_LISTENERS: CONTROLLER://:9095
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller-1:9093,2@controller-2:9094,3@controller-3:9095
+    volumes: [controller3-data:/var/lib/kafka/data]
+    healthcheck:
+      <<: *kafka-controller-healthcheck
+      test: [CMD-SHELL, "bash -c 'echo > /dev/tcp/127.0.0.1/9095'"]
 
+  # ------------------------- Kafka Brokers -------------------------
+  # Broker IDs 4, 5, and 6 preserve the existing numbering convention.
+  # Internal clients use broker-1:9092, broker-2:9092, broker-3:9092.
+  # Published host ports require separate external advertised listeners if
+  # clients outside Docker need to connect.
   broker-1:
-    <<: *kafka-broker
+    <<: [*kafka-broker, *kafka-logging]
     container_name: gsmls-broker-1
+    hostname: broker-1
     ports: ["29092:9092"]
     environment:
       <<: *kafka-env
@@ -281,8 +355,9 @@ services:
     volumes: [broker1-data:/var/lib/kafka/data]
 
   broker-2:
-    <<: *kafka-broker
+    <<: [*kafka-broker, *kafka-logging]
     container_name: gsmls-broker-2
+    hostname: broker-2
     ports: ["39092:9092"]
     environment:
       <<: *kafka-env
@@ -291,8 +366,9 @@ services:
     volumes: [broker2-data:/var/lib/kafka/data]
 
   broker-3:
-    <<: *kafka-broker
+    <<: [*kafka-broker, *kafka-logging]
     container_name: gsmls-broker-3
+    hostname: broker-3
     ports: ["49092:9092"]
     environment:
       <<: *kafka-env
@@ -300,23 +376,30 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-3:9092
     volumes: [broker3-data:/var/lib/kafka/data]
 
+  # Kafka quorum monitor.
+  # Uses the Kafka CLI to validate quorum status every five minutes.
+  # Unlike the TCP healthchecks, this verifies Kafka protocol responses.
   kafka-quorum-monitor:
-    image: apache/kafka:latest
+    <<: *kafka-logging
+    image: apache/kafka:4.3.2
     networks: [airflow_network]
     command: ["/bin/sh", "-c", "while :; do sleep 3600; done"]
     depends_on:
-      broker-1: {condition: service_started}
-      broker-2: {condition: service_started}
-      broker-3: {condition: service_started}
+      broker-1: {condition: service_healthy}
+      broker-2: {condition: service_healthy}
+      broker-3: {condition: service_healthy}
     healthcheck:
-      test: [CMD-SHELL, "/opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server broker-1:9092 describe --status >/dev/null 2>&1 || exit 1"]
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server broker-1:9092 describe --status >/dev/null 2>&1"]
       interval: 5m
-      timeout: 30s
+      timeout: 45s
       retries: 3
-      start_period: 90s
+      start_period: 120s
     restart: unless-stopped
-    cpus: "0.10"
-    mem_limit: 256m
+    init: true
+    cpus: "0.25"
+    mem_limit: 512m
+    environment:
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx128m"
 
   postgres_airflow:
     image: postgres:13
@@ -474,7 +557,8 @@ services:
     environment:
       PYTHONNOUSERSITE: "1"
       PYTHONPATH: /workspace/gsmls_core:/workspace
-    volumes: [.:/workspace]
+    volumes:
+      - ${DEV_PROJECT_ROOT:-.}:/workspace
     env_file: [.env]
     working_dir: /workspace
     command: [bash, -c, "pip install -e /workspace/gsmls_core && tail -f /dev/null"]
@@ -618,6 +702,60 @@ services:
     cpus: "0.25"
     mem_limit: 768m
 
+  streamlit-backend:
+    build:
+      context: ./gsmls_dashboard/backend
+      dockerfile: Dockerfile
+    container_name: streamlit-backend
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    environment:
+      - API_KEY=${API_KEY:-gsmls-secret-key-2026}
+      - SECRET_KEY=${SECRET_KEY:-gsmls-dashboard-secret-key-2026}
+      - RDS_NJTAX_URI=${RDS_NJTAX_URI}
+      - RDS_NJREALTOR_URI=${RDS_NJREALTOR_URI}
+      - FRED_API_KEY=${FRED_API_KEY}
+      - GEOCODE_API_KEY=${GEOCODE_API_KEY}
+      - CORS_ORIGINS=*
+    env_file:
+      - ${AIRFLOW_PROJ_DIR:-.}/.env
+    networks:
+      - airflow_network
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS http://localhost:5000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    cpus: "1.0"
+    mem_limit: 2g
+
+  streamlit-frontend:
+    build:
+      context: ./gsmls_dashboard/frontend
+      dockerfile: Dockerfile
+    container_name: streamlit-frontend
+    ports:
+      - "${FRONTEND_PORT:-8501}:8501"
+    environment:
+      - API_BASE_URL=http://streamlit-backend:5000/api/v1
+      - API_KEY=${API_KEY:-gsmls-secret-key-2026}
+    depends_on:
+      streamlit-backend:
+        condition: service_healthy
+    networks:
+      - airflow_network
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS http://localhost:8501/_stcore/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 1g
+
 networks:
   airflow_network:
     name: airflow_network
@@ -625,10 +763,14 @@ networks:
   cvat_internal:
     name: gsmls_cvat_internal
     driver: bridge
+
 # yamllint enable rules:line-length
 volumes:
   postgres-airflow-volume:
   pgadmin-user-data:
+  controller1-data:
+  controller2-data:
+  controller3-data:
   broker1-data:
   broker2-data:
   broker3-data:
