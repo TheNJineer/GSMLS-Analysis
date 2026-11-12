@@ -33,6 +33,24 @@ class TqdmLoggingHandler(logging.Handler):
         tqdm.write(msg)
 
 
+def attach_pycharm_debugger():
+    if os.getenv("PYCHARM_DEBUG") != "1":
+        return
+
+    import pydevd_pycharm
+
+    host = os.getenv("PYCHARM_DEBUG_HOST", "172.18.0.1")
+    port = int(os.getenv("PYCHARM_DEBUG_PORT", "5678"))
+
+    pydevd_pycharm.settrace(
+        host,
+        port=port,
+        stdout_to_server=True,
+        stderr_to_server=True,
+        suspend=True,
+    )
+
+
 def check_pipeline_metadata(pipeline_, prop_type_: str | None, key_=None, status_=None):
 
     def create_pipeline_key(**kwargs):
@@ -415,11 +433,12 @@ def get_filepath(usecase: str):
                     '/workspace/consumer_backup_data', '/app/consumer_backup_data'],
         'base': ['/root/home/projects/GSMLS-Analysis', '/workspace', '/app'],
         'downloads': ['/root/home/projects/GSMLS-Analysis/data/stage_one/downloads',
+                      '/root/home/projects/GSMLS-Analysis-Dev/data/stage_one/downloads',
                       '/workspace/data/stage_one/downloads', '/app/downloads'],
         'env': ['/root/home/projects/GSMLS-Analysis/.env', '/workspace/.env', '/app/.env', '/opt/airflow/.env'],
         'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
         'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
-        'logger': ['/workspace/data/stage_one/logs', '/app/logs'],
+        'logger': ['/workspace/data/stage_one/logs', '/workspace/logs/logger_decorator', '/app/logs'],
         'pyspark_logs': ['/workspace/logs/pyspark_logs', '/app/logs/pyspark_logs'],
         'metadata': ['/root/home/projects/GSMLS-Analysis/pipeline_metadata',
                      '/workspace/pipeline_metadata', '/app/pipeline_metadata'],
