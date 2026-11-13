@@ -434,7 +434,7 @@ def get_filepath(usecase: str):
         'base': ['/root/home/projects/GSMLS-Analysis', '/workspace', '/app'],
         'downloads': ['/root/home/projects/GSMLS-Analysis/data/stage_one/downloads',
                       '/root/home/projects/GSMLS-Analysis-Dev/data/stage_one/downloads',
-                      '/workspace/data/stage_one/downloads', '/app/data/stage_one_downloads', '/app/downloads'],
+                      '/workspace/data/stage_one/downloads', '/app/data/stage_one/downloads', '/app/downloads'],
         'env': ['/root/home/projects/GSMLS-Analysis/.env', '/workspace/.env', '/app/.env', '/opt/airflow/.env'],
         'jobs_major': ['/workspace/jobs/major_jobs', '/app/major_jobs'],
         'jobs_minor': ['/workspace/jobs/minor_jobs', '/app/minor_jobs'],
