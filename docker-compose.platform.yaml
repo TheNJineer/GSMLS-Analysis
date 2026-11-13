@@ -477,8 +477,8 @@ services:
       <<: *airflow-depends-on
       airflow-init: {condition: service_completed_successfully}
     restart: unless-stopped
-    cpus: "0.50"
-    mem_limit: 1g
+    cpus: "0.75"
+    mem_limit: 2g
 
   airflow-scheduler:
     <<: *airflow-common
@@ -497,8 +497,8 @@ services:
       <<: *airflow-depends-on
       airflow-init: {condition: service_completed_successfully}
     restart: unless-stopped
-    cpus: "0.35"
-    mem_limit: 768m
+    cpus: "0.50"
+    mem_limit: 1g
 
   airflow-worker:
     <<: *airflow-common
@@ -514,7 +514,7 @@ services:
       <<: *healthcheck-default
       test: [CMD-SHELL, 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
     restart: unless-stopped
-    cpus: "1.00"
+    cpus: "1.25"
     mem_limit: 3g
 
   airflow-triggerer:
