@@ -412,6 +412,74 @@ clean_ide_and_tool_caches() {
     PROCESSED_CATEGORIES=$((PROCESSED_CATEGORIES + 1))
 }
 
+# Remove only dangling Docker images that no container references.
+clean_dangling_docker_images() {
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "--- [Docker Images] Skipped: Docker CLI is unavailable ---"
+        return 0
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        echo "--- [Docker Images] Skipped: Docker daemon is unavailable ---"
+        return 0
+    fi
+
+    local image_rows
+    if ! image_rows=$(docker image ls --filter dangling=true --format '{{.Repository}}\t{{.Tag}}\t{{.ID}}' 2>/dev/null); then
+        echo "--- [Docker Images] Skipped: unable to enumerate dangling images ---"
+        return 0
+    fi
+    if [[ -z "${image_rows}" ]]; then
+        echo "--- [Docker Images] No dangling images found ---"
+        return 0
+    fi
+
+    local container_ids
+    if ! container_ids=$(docker ps -aq 2>/dev/null); then
+        echo "--- [Docker Images] Skipped: unable to inspect container references ---"
+        return 0
+    fi
+
+    local referenced_images=""
+    local container_id referenced_image
+    for container_id in ${container_ids}; do
+        if ! referenced_image=$(docker inspect --format '{{.Image}}' "${container_id}" 2>/dev/null); then
+            echo "--- [Docker Images] Skipped: failed to inspect container ${container_id} ---"
+            return 0
+        fi
+        referenced_images+="${referenced_image}"$'\n'
+    done
+
+    echo "--- [Docker Images] Scanning dangling, unreferenced images ---"
+    local repo tag image_id image_size_kb
+    while IFS=$'\t' read -r repo tag image_id; do
+        [[ "${repo}" == "<none>" && "${tag}" == "<none>" && -n "${image_id}" ]] || continue
+        if grep -Fq "${image_id}" <<<"${referenced_images}"; then
+            echo "    Protected referenced image: ${image_id}"
+            continue
+        fi
+
+        if ! image_size_bytes=$(docker image inspect --format '{{.Size}}' "${image_id}" 2>/dev/null); then
+            echo "    [WARNING] Failed to inspect dangling image ${image_id}; leaving it untouched."
+            continue
+        fi
+        if ! [[ "${image_size_bytes}" =~ ^[0-9]+$ ]]; then
+            echo "    [WARNING] Invalid size for dangling image ${image_id}; leaving it untouched."
+            continue
+        fi
+        image_size_kb=$((image_size_bytes / 1024))
+        if [ "${DRY_RUN}" = true ]; then
+            echo "    [DRY-RUN] Unreferenced dangling image ${image_id}: $(format_kb "${image_size_kb}")"
+            TOTAL_RECLAIMED_KB=$((TOTAL_RECLAIMED_KB + image_size_kb))
+        elif docker image rm "${image_id}" >/dev/null 2>&1; then
+            echo "    Removed unreferenced dangling image ${image_id}: $(format_kb "${image_size_kb}")"
+            TOTAL_RECLAIMED_KB=$((TOTAL_RECLAIMED_KB + image_size_kb))
+        else
+            echo "    [WARNING] Failed to remove dangling image ${image_id}; leaving it untouched."
+        fi
+    done <<<"${image_rows}"
+    PROCESSED_CATEGORIES=$((PROCESSED_CATEGORIES + 1))
+}
+
 # Clean OS Package Manager Caches & Autoremove
 clean_package_manager() {
     if command -v apt-get &>/dev/null && [ "$(id -u)" -eq 0 ]; then
@@ -551,6 +619,9 @@ clean_system_temp
 
 # 4. IDE & Python Tool Caches
 clean_ide_and_tool_caches
+
+# 4b. Conservative Docker image cleanup
+clean_dangling_docker_images
 
 # 5. Application & Spark Logs
 LOG_RETENTION_DAYS=7
