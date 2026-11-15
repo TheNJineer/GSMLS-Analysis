@@ -1905,32 +1905,35 @@ class GSMLS:
                         kwargs['open_windows']['Property Archive'] = current_window
                     driver_var.switch_to.window(kwargs['open_windows']['Property Archive'])
 
+            try:
+                GSMLS.explicit_page_load(
+                    "Property Archive Summary", driver_var, prop_id=kwargs['listing_id'],
+                    window_id=kwargs['open_windows']['Property Archive']
+                )
 
-            GSMLS.explicit_page_load(
-                "Property Archive Summary", driver_var, prop_id=kwargs['listing_id'],
-                window_id=kwargs['open_windows']['Property Archive']
-            )
+                soup = BeautifulSoup(driver_var.page_source, "html.parser")
+                archive_report = soup.find("div", {"id": "shortrpt"})
+                main_table = archive_report.tbody.tbody
 
-            soup = BeautifulSoup(driver_var.page_source, "html.parser")
-            archive_report = soup.find("div", {"id": "shortrpt"})
-            main_table = archive_report.tbody.tbody
+                for row in main_table.find_all("tr"):
 
-            for row in main_table.find_all("tr"):
+                    temp_history = deepcopy(standard_archive)
+                    cells = row.find_all("td")
+                    old_mlsnum = cells[0].get_text(strip=True)
+                    property_history.setdefault(old_mlsnum, temp_history)
+                    property_history[old_mlsnum]['Status'] = cells[2].get_text(strip=True)
+                    property_history[old_mlsnum]['List_Date'] = cells[6].get_text(strip=True)
+                    property_history[old_mlsnum]['Original_listing_Price'] = cells[7].get_text(strip=True)
+                    property_history[old_mlsnum]['List_Price'] = cells[8].get_text(strip=True)
+                    property_history[old_mlsnum]['Under_Contract_Date'] = cells[10].get_text(strip=True)
+                    property_history[old_mlsnum]['Sold_OM_Date'] = cells[11].get_text(strip=True)
+                    property_history[old_mlsnum]['Sales_Price'] = cells[12].get_text(strip=True)
+                    property_history[old_mlsnum]['DOM'] = cells[13].get_text(strip=True)
 
-                temp_history = deepcopy(standard_archive)
-                cells = row.find_all("td")
-                old_mlsnum = cells[0].get_text(strip=True)
-                property_history.setdefault(old_mlsnum, temp_history)
-                property_history[old_mlsnum]['Status'] = cells[2].get_text(strip=True)
-                property_history[old_mlsnum]['List_Date'] = cells[6].get_text(strip=True)
-                property_history[old_mlsnum]['Original_listing_Price'] = cells[7].get_text(strip=True)
-                property_history[old_mlsnum]['List_Price'] = cells[8].get_text(strip=True)
-                property_history[old_mlsnum]['Under_Contract_Date'] = cells[10].get_text(strip=True)
-                property_history[old_mlsnum]['Sold_OM_Date'] = cells[11].get_text(strip=True)
-                property_history[old_mlsnum]['Sales_Price'] = cells[12].get_text(strip=True)
-                property_history[old_mlsnum]['DOM'] = cells[13].get_text(strip=True)
+                dict_var["HISTORY"].append(property_history)
 
-            dict_var["HISTORY"].append(property_history)
+            except TimeoutException:
+                dict_var["HISTORY"].append("None")
 
         else:
             dict_var["HISTORY"].append("None")
