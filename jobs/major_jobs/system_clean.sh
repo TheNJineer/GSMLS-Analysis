@@ -103,6 +103,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Collect existing project roots once, preserving the selected primary root and
+# avoiding duplicate scans when the development repository is selected directly.
+PROJECT_ROOTS=()
+declare -A PROJECT_ROOT_SEEN=()
+add_project_root() {
+    local candidate="$1"
+    local canonical
+
+    [ -d "${candidate}" ] || return 0
+    canonical="$(cd "${candidate}" && pwd)"
+    if [ -z "${PROJECT_ROOT_SEEN[${canonical}]+x}" ]; then
+        PROJECT_ROOTS+=("${canonical}")
+        PROJECT_ROOT_SEEN["${canonical}"]=1
+    fi
+}
+
+add_project_root "${PROJECT_ROOT}"
+if [ -d "/root/home/projects/GSMLS-Analysis-Dev" ]; then
+    add_project_root "/root/home/projects/GSMLS-Analysis-Dev"
+fi
+
 # ------------------------------------------------------------------------------
 # Helper Utilities & Metrics
 # ------------------------------------------------------------------------------
@@ -532,34 +553,33 @@ clean_system_temp
 clean_ide_and_tool_caches
 
 # 5. Application & Spark Logs
-LOG_RETENTION_DAYS=14
+LOG_RETENTION_DAYS=7
 SCHEDULER_LOG_RETENTION_DAYS=7
+DOWNLOAD_RETENTION_DAYS=2
 if [ "${IS_EMERGENCY}" = true ]; then
     LOG_RETENTION_DAYS=3
     SCHEDULER_LOG_RETENTION_DAYS=3
-fi
-
-# PySpark execution logs
-prune_files_by_pattern "PySpark Logs" "${PROJECT_ROOT}/logs/pyspark_logs" "${LOG_RETENTION_DAYS}"
-prune_files_by_pattern "Root PySpark Logs" "${PROJECT_ROOT}/pyspark_logs" "${LOG_RETENTION_DAYS}"
-
-# Airflow Scheduler / DAG processor logs
-prune_files_by_pattern "Airflow Scheduler Logs" "${PROJECT_ROOT}/logs/scheduler" "${SCHEDULER_LOG_RETENTION_DAYS}"
-prune_files_by_pattern "Airflow DAG Processor Logs" "${PROJECT_ROOT}/logs/dag_processor" "${SCHEDULER_LOG_RETENTION_DAYS}"
-
-# General application logs older than retention period
-prune_files_by_pattern "General App Logs" "${PROJECT_ROOT}/logs" "${LOG_RETENTION_DAYS}" \( -name "*.log" -o -name "*.log.*" -o -name "*.out" \)
-
-# 6. Ephemeral Selenium / Scraper Downloads
-DOWNLOAD_RETENTION_DAYS=2
-if [ "${IS_EMERGENCY}" = true ]; then
     DOWNLOAD_RETENTION_DAYS=1
 fi
 
-prune_files_by_pattern "Scraper Downloads" "${PROJECT_ROOT}/downloads" "${DOWNLOAD_RETENTION_DAYS}" \( -name "*.tmp" -o -name "*.crdownload" -o -name "*.xls" -o -name "*.tsv" -o -name "*.csv" \)
+for project_root in "${PROJECT_ROOTS[@]}"; do
+    # PySpark execution logs
+    prune_files_by_pattern "PySpark Logs" "${project_root}/logs/pyspark_logs" "${LOG_RETENTION_DAYS}"
+    prune_files_by_pattern "Root PySpark Logs" "${project_root}/pyspark_logs" "${LOG_RETENTION_DAYS}"
 
-# 7. Python Bytecode & Linting Caches across project
-clean_python_bytecode "${PROJECT_ROOT}"
+    # Airflow Scheduler / DAG processor logs
+    prune_files_by_pattern "Airflow Scheduler Logs" "${project_root}/logs/scheduler" "${SCHEDULER_LOG_RETENTION_DAYS}"
+    prune_files_by_pattern "Airflow DAG Processor Logs" "${project_root}/logs/dag_processor" "${SCHEDULER_LOG_RETENTION_DAYS}"
+
+    # General application logs older than retention period
+    prune_files_by_pattern "General App Logs" "${project_root}/logs" "${LOG_RETENTION_DAYS}" \( -name "*.log" -o -name "*.log.*" -o -name "*.out" \)
+
+    # Ephemeral Selenium / Scraper Downloads
+    prune_files_by_pattern "Scraper Downloads" "${project_root}/downloads" "${DOWNLOAD_RETENTION_DAYS}" \( -name "*.tmp" -o -name "*.crdownload" -o -name "*.xls" -o -name "*.tsv" -o -name "*.csv" \)
+
+    # Python Bytecode & Linting Caches across project
+    clean_python_bytecode "${project_root}"
+done
 
 # ------------------------------------------------------------------------------
 # Final Metrics & Structured Summary
@@ -573,6 +593,7 @@ read -r FINAL_TOTAL_KB FINAL_USED_KB FINAL_AVAIL_KB FINAL_USED_PCT < <(get_disk_
 if [ "${DRY_RUN}" = true ]; then
     ACTUAL_FREED_KB="${TOTAL_RECLAIMED_KB}"
     NET_CHANGE_KB="${TOTAL_RECLAIMED_KB}"
+    SUMMARY_RECLAIMED_KB="${TOTAL_RECLAIMED_KB}"
 else
     NET_CHANGE_KB=$((FINAL_AVAIL_KB - INITIAL_AVAIL_KB))
     if [ "${NET_CHANGE_KB}" -lt 0 ]; then
@@ -580,6 +601,7 @@ else
     else
         ACTUAL_FREED_KB="${NET_CHANGE_KB}"
     fi
+    SUMMARY_RECLAIMED_KB="${ACTUAL_FREED_KB}"
 fi
 
 echo "=============================================================================="
@@ -591,12 +613,16 @@ echo "Mode:                ${CLEANUP_MODE}"
 echo "Dry-Run:             ${DRY_RUN}"
 echo "Pre-Cleanup Space:   $(format_kb "${INITIAL_AVAIL_KB}") available (${INITIAL_USED_PCT}% used)"
 echo "Post-Cleanup Space:  $(format_kb "${FINAL_AVAIL_KB}") available (${FINAL_USED_PCT}% used)"
-echo "Estimated Reclaimed: $(format_kb "${TOTAL_RECLAIMED_KB}")"
+if [ "${DRY_RUN}" = true ]; then
+    echo "Estimated Reclaimed: $(format_kb "${SUMMARY_RECLAIMED_KB}")"
+else
+    echo "Actual Reclaimed:    $(format_kb "${SUMMARY_RECLAIMED_KB}")"
+fi
 echo "=============================================================================="
 
 # Machine-readable JSON summary for Airflow XCom capture and monitoring
 cat <<EOF
-{"timestamp":"${END_TIMESTAMP}","status":"SUCCESS","duration_sec":${DURATION_SEC},"dry_run":${DRY_RUN},"is_emergency":${IS_EMERGENCY},"initial_available_kb":${INITIAL_AVAIL_KB},"initial_used_pct":${INITIAL_USED_PCT},"final_available_kb":${FINAL_AVAIL_KB},"final_used_pct":${FINAL_USED_PCT},"reclaimed_kb":${TOTAL_RECLAIMED_KB},"categories_scanned":${PROCESSED_CATEGORIES}}
+{"timestamp":"${END_TIMESTAMP}","status":"SUCCESS","duration_sec":${DURATION_SEC},"dry_run":${DRY_RUN},"is_emergency":${IS_EMERGENCY},"initial_available_kb":${INITIAL_AVAIL_KB},"initial_used_pct":${INITIAL_USED_PCT},"final_available_kb":${FINAL_AVAIL_KB},"final_used_pct":${FINAL_USED_PCT},"reclaimed_kb":${SUMMARY_RECLAIMED_KB},"categories_scanned":${PROCESSED_CATEGORIES}}
 EOF
 
 exit 0
